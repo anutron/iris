@@ -34,6 +34,11 @@ The plugin SHALL expose `iris:gh_pr_create` as an MCP tool accepting `task_id` (
 - **WHEN** the verb is invoked with a `task_id` that argus does not recognize
 - **THEN** iris returns a structured error naming the task ID and performs no gh invocation
 
+#### Scenario: Refuses a source repo outside the project allowlist
+
+- **WHEN** the resolved source-repo path does not match any allowlisted argus project
+- **THEN** iris returns a structured error naming the rejected path and performs no gh invocation
+
 #### Scenario: Title is required
 
 - **WHEN** the verb is invoked with an empty `title`

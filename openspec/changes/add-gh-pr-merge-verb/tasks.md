@@ -20,8 +20,8 @@
 - [x] 3.1 `internal/mcp/handler_gh_pr_merge.go` — `NewGHPRMergeHandler(client)` with `iris:gh_pr_merge:` error prefix; defaults `strategy` to `"squash"` when empty
 - [x] 3.2 `cmd/iris/gh_pr_merge.go` — `newGHPRMergeCmd()` with `--pr` (required int) and `--strategy` (default "squash") flags
 - [x] 3.3 Register `iris_gh_pr_merge` in `internal/daemon/run.go` (handler + toolDefinitions with `enum` constraint)
-- [ ] 3.4 Add subcommand to `cmd/iris/main.go` (orchestrator owns this file)
-- [ ] 3.5 Add CLI command to `README.md` (orchestrator owns this file)
+- [x] 3.4 Add subcommand to `cmd/iris/main.go` (orchestrator owns this file)
+- [x] 3.5 Add CLI command to `README.md` (orchestrator owns this file)
 
 ## 4. Validation
 

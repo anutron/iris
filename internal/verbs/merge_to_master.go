@@ -53,6 +53,15 @@ func MergeToMaster(ctx context.Context, client *argus.Client, taskID string, opt
 	mu := lockSourceRepo(resolved.SourceRepo)
 	defer mu.Unlock()
 
+	return mergeToMasterLocked(ctx, resolved, defaultBranch, opts)
+}
+
+// mergeToMasterLocked performs the merge sequence assuming the caller
+// already holds lockSourceRepo(resolved.SourceRepo). It exists so composite
+// verbs (e.g. CompleteTask) can hold a single lock across merge -> push
+// default -> delete remote branch without the sub-step releasing between
+// each git op.
+func mergeToMasterLocked(ctx context.Context, resolved *ResolvedRepo, defaultBranch string, opts MergeOptions) (*MergeResult, error) {
 	// Deferred cleanup: if the caller's context is cancelled mid-merge,
 	// the git process gets killed and MERGE_HEAD may persist. Best-effort
 	// abort with a fresh short context so the source repo lands clean

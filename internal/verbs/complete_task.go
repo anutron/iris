@@ -2,7 +2,6 @@ package verbs
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 
@@ -12,11 +11,11 @@ import (
 // Checkpoint names for the CompleteTask flow. Returned in CompleteTaskResult
 // so a partial failure tells the caller where to resume.
 const (
-	CheckpointMerged                = "merged"
-	CheckpointDefaultBranchPushed   = "default_branch_pushed"
+	CheckpointMerged                  = "merged"
+	CheckpointDefaultBranchPushed     = "default_branch_pushed"
 	CheckpointRemoteTaskBranchDeleted = "remote_task_branch_deleted"
-	CheckpointTaskMarkedComplete    = "task_marked_complete"
-	CheckpointTaskArchived          = "task_archived"
+	CheckpointTaskMarkedComplete      = "task_marked_complete"
+	CheckpointTaskArchived            = "task_archived"
 )
 
 // CompleteTaskOptions captures the merge strategy for the embedded
@@ -69,25 +68,52 @@ func CompleteTask(ctx context.Context, client *argus.Client, taskID string, opts
 
 	result := &CompleteTaskResult{}
 
-	mergeOpts := MergeOptions{NoFF: strategy == "no_ff"}
-	mergeResult, err := MergeToMaster(ctx, client, taskID, mergeOpts)
+	// Resolve and validate outside the lock so the cheap setup work
+	// (argus HTTP, branch read, allowlist) doesn't extend the lock window.
+	resolved, err := Resolve(ctx, client, taskID)
 	if err != nil {
+		return result, fmt.Errorf("resolve: %w", err)
+	}
+	defaultBranch, err := DefaultBranch(ctx, resolved.SourceRepo)
+	if err != nil {
+		return result, fmt.Errorf("determine default branch: %w", err)
+	}
+	if err := guardBranch(resolved.Branch, defaultBranch); err != nil {
+		return result, err
+	}
+
+	// Single lock acquisition covers all three git-mutating sub-steps:
+	// merge, push default branch, delete remote task branch. This
+	// guarantees no other iris verb mutates the source repo between our
+	// sub-steps.
+	mu := lockSourceRepo(resolved.SourceRepo)
+	mergeResult, err := mergeToMasterLocked(ctx, resolved, defaultBranch, MergeOptions{NoFF: strategy == "no_ff"})
+	if err != nil {
+		mu.Unlock()
 		return result, fmt.Errorf("merge_to_master: %w", err)
 	}
 	result.Checkpoints = append(result.Checkpoints, CheckpointMerged)
 
-	// Push the default branch (mergeResult.DefaultBranch). The Push verb
-	// refuses default-branch pushes for safety, so we call git directly
-	// here under the same per-source-repo mutex.
-	if err := pushDefaultBranch(ctx, mergeResult.SourceRepo, mergeResult.DefaultBranch); err != nil {
+	// Default-branch push uses mergeResult.DefaultBranch (already resolved).
+	// The standalone iris:push verb refuses default-branch pushes for safety;
+	// complete_task's whole purpose is to land them after merging, so we
+	// bypass the standalone verb and call git directly under the held lock.
+	if err := pushDefaultBranchLocked(ctx, mergeResult.SourceRepo, mergeResult.DefaultBranch); err != nil {
+		mu.Unlock()
 		return result, fmt.Errorf("push default branch %s: %w", mergeResult.DefaultBranch, err)
 	}
 	result.Checkpoints = append(result.Checkpoints, CheckpointDefaultBranchPushed)
 
-	if err := deleteRemoteBranch(ctx, mergeResult.SourceRepo, mergeResult.TaskBranch); err != nil {
+	if err := deleteRemoteBranchLocked(ctx, mergeResult.SourceRepo, mergeResult.TaskBranch); err != nil {
+		mu.Unlock()
 		return result, fmt.Errorf("delete remote branch %s: %w", mergeResult.TaskBranch, err)
 	}
 	result.Checkpoints = append(result.Checkpoints, CheckpointRemoteTaskBranchDeleted)
+
+	// Release the source-repo lock before argus API calls: the argus state
+	// transitions don't touch the source repo and could block on network
+	// latency we don't want to hold the lock during.
+	mu.Unlock()
 
 	if err := client.SetTaskStatus(ctx, taskID, "complete"); err != nil {
 		return result, fmt.Errorf("mark task complete: %w", err)
@@ -107,25 +133,23 @@ func CompleteTask(ctx context.Context, client *argus.Client, taskID string, opts
 	return result, nil
 }
 
-// pushDefaultBranch pushes the source repo's currently-checked-out default
-// branch to origin. MergeToMaster left the source repo checked out on the
-// default branch with the new merge commit, so this is just `git push origin
-// <default>`.
-func pushDefaultBranch(ctx context.Context, sourceRepo, defaultBranch string) error {
-	mu := lockSourceRepo(sourceRepo)
-	defer mu.Unlock()
+// pushDefaultBranchLocked pushes the source repo's currently-checked-out
+// default branch to origin. Assumes the caller holds
+// lockSourceRepo(sourceRepo). mergeToMasterLocked left the source repo
+// checked out on the default branch with the new merge commit, so this is
+// just `git push origin <default>`.
+func pushDefaultBranchLocked(ctx context.Context, sourceRepo, defaultBranch string) error {
 	if out, err := runGit(ctx, sourceRepo, "push", "origin", defaultBranch); err != nil {
 		return fmt.Errorf("git push origin %s: %w; log:\n%s", defaultBranch, err, out)
 	}
 	return nil
 }
 
-// deleteRemoteBranch issues `git push origin --delete <branch>`. A
-// "branch not found" response from origin is treated as success — the goal
-// is that the remote branch is absent, not that we performed the deletion.
-func deleteRemoteBranch(ctx context.Context, sourceRepo, branch string) error {
-	mu := lockSourceRepo(sourceRepo)
-	defer mu.Unlock()
+// deleteRemoteBranchLocked issues `git push origin --delete <branch>` and
+// treats "branch not found" as success (goal: remote ref absent, not that
+// we performed the deletion). Assumes the caller holds
+// lockSourceRepo(sourceRepo).
+func deleteRemoteBranchLocked(ctx context.Context, sourceRepo, branch string) error {
 	out, err := runGit(ctx, sourceRepo, "push", "origin", "--delete", branch)
 	if err == nil {
 		return nil
@@ -133,7 +157,7 @@ func deleteRemoteBranch(ctx context.Context, sourceRepo, branch string) error {
 	if branchAlreadyDeleted(out) {
 		return nil
 	}
-	return errors.New(strings.TrimSpace(out))
+	return fmt.Errorf("git push origin --delete %s: %w; output:\n%s", branch, err, strings.TrimSpace(out))
 }
 
 // branchAlreadyDeleted recognises git's "remote ref does not exist" output
@@ -141,5 +165,5 @@ func deleteRemoteBranch(ctx context.Context, sourceRepo, branch string) error {
 func branchAlreadyDeleted(gitOutput string) bool {
 	out := strings.ToLower(gitOutput)
 	return strings.Contains(out, "remote ref does not exist") ||
-		strings.Contains(out, "unable to delete") && strings.Contains(out, "not found")
+		(strings.Contains(out, "unable to delete") && strings.Contains(out, "not found"))
 }

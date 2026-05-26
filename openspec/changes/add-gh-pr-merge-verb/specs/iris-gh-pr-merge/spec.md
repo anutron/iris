@@ -39,6 +39,11 @@ The plugin SHALL expose `iris:gh_pr_merge` as an MCP tool accepting `task_id` (s
 - **WHEN** the verb is invoked with a `task_id` that argus does not recognize
 - **THEN** iris returns a structured error naming the task ID and performs no gh invocation
 
+#### Scenario: Refuses a source repo outside the project allowlist
+
+- **WHEN** the resolved source-repo path does not match any allowlisted argus project
+- **THEN** iris returns a structured error naming the rejected path and performs no gh invocation
+
 #### Scenario: Direct CLI invocation runs the same verb
 
 - **WHEN** the user runs `iris gh-pr-merge <task-id> --pr <N> [--strategy squash|merge|rebase]` from any shell on the host

@@ -44,6 +44,11 @@ The plugin SHALL expose `iris:run_build` as an MCP tool accepting `task_id` (str
 - **WHEN** two `iris:run_build` calls fire concurrently for two different argus tasks whose worktrees are distinct (even if they share a source repo)
 - **THEN** the builds run in parallel (the per-worktree mutex is keyed on worktree path, not source repo)
 
+#### Scenario: Concurrent builds in the same worktree serialize
+
+- **WHEN** two `iris:run_build` calls fire concurrently for the same argus task (or two tasks pointing at the same worktree)
+- **THEN** the second call blocks until the first completes (the per-worktree mutex serializes writes to the same build directory)
+
 #### Scenario: Direct CLI invocation runs the same verb
 
 - **WHEN** the user runs `iris run-build <task-id> [target]` from any shell on the host

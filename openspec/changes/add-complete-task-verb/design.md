@@ -41,7 +41,13 @@ Each completed step appends a checkpoint constant (`merged`, `default_branch_pus
 
 ### Default-branch push runs inline (not via `iris:push`)
 
-`iris:push` refuses to push the default branch. That's the right rule for the standalone verb. `complete_task`'s job is specifically to push the default branch after merging into it, so the default-branch-push step runs inline with its own `git push origin <default>` call under the same per-source-repo mutex.
+`iris:push` refuses to push the default branch. That's the right rule for the standalone verb. `complete_task`'s job is specifically to push the default branch after merging into it, so the default-branch-push step runs inline with its own `git push origin <default>` call under the held mutex.
+
+### Single lock acquisition across all three git sub-steps
+
+The verb acquires `lockSourceRepo(resolved.SourceRepo)` once, then runs `mergeToMasterLocked` → `pushDefaultBranchLocked` → `deleteRemoteBranchLocked` without releasing. The lock is released before the argus status/archive calls because those don't touch the source repo and would unnecessarily extend the lock window across network round-trips.
+
+`mergeToMasterLocked` exists specifically so `complete_task` can hold the lock continuously — the standalone `MergeToMaster` acquires and releases its own lock, then delegates to `mergeToMasterLocked` to do the actual work. This avoids the recursive-lock problem that `sync.Mutex` doesn't support.
 
 ### Remote branch delete: "already gone" is success
 
@@ -64,4 +70,4 @@ Once argus has the task marked complete, the verb's contract is satisfied. Archi
 
 ## Open Questions
 
-- **Merge-step idempotency on retry.** Current behavior: a second merge call after the first succeeded will error because the task branch is already merged. This is acceptable for v1 — operators see "merge failed: already up to date" in the checkpoint output and recognize the partial-success state. A future enhancement would detect "merge would be a no-op" upfront and skip to the next checkpoint.
+- **Merge-step idempotency on retry.** A retry after the first attempt's merge already landed is effectively a no-op: `git merge --no-ff <branch>` resolves to "Already up to date." and exits zero, so the verb completes all five checkpoints on the second call. This works because the task branch is unchanged between attempts. If the operator manually rewinds the default branch between attempts, the retry would re-merge — also fine. No additional skip-merge-when-no-op logic is required.

@@ -193,34 +193,24 @@ func TestCompleteTask_ResumeAfterPartialSucceeds(t *testing.T) {
 	src, wt, _ := setupRepoWithBareAndWorktree(t, "complete-resume")
 	stub := newCompleteTaskStub(t, src)
 	stub.registerTask("task-resume", wt)
-	// First attempt: status fails once.
+	// First attempt: status update fails once. Merge, push default, and
+	// remote-branch delete all succeed before the failure.
 	stub.statusFailures["task-resume"] = 1
 	client := stub.client()
 
 	if _, err := CompleteTask(context.Background(), client, "task-resume", CompleteTaskOptions{}); err == nil {
 		t.Fatal("expected first invocation to fail at status step")
 	}
-	// Second attempt: status now succeeds. Merge has already happened —
-	// MergeToMaster will refuse "argus/... into main" because the
-	// worktree's branch already matches main (the merge moved master
-	// forward; the task branch is unchanged). Re-invocation will fail at
-	// the merge step.
-	//
-	// Idempotency at the merge boundary is a follow-up. For now assert the
-	// shape of the partial result: the test documents the current contract.
+	// Second attempt: the task branch is already merged into default, so
+	// MergeToMaster's `git merge --no-ff <branch>` is a no-op ("Already up
+	// to date."). All five checkpoints should appear and the verb returns
+	// success.
 	result, err := CompleteTask(context.Background(), client, "task-resume", CompleteTaskOptions{})
-	if err == nil {
-		// If merge succeeded (e.g., because the second merge is a no-op
-		// fast-forward), the full path should complete.
-		if len(result.Checkpoints) != 5 {
-			t.Fatalf("expected 5 checkpoints on second attempt, got %v", result.Checkpoints)
-		}
-		return
+	if err != nil {
+		t.Fatalf("expected resume to succeed, got: %v", err)
 	}
-	// Expected current behaviour: second merge errors, but the test asserts
-	// the caller sees a checkpoint list (possibly empty if merge fails first).
-	if result == nil {
-		t.Fatal("expected non-nil result even on re-invocation failure")
+	if len(result.Checkpoints) != 5 {
+		t.Fatalf("expected 5 checkpoints on resume, got %v", result.Checkpoints)
 	}
 }
 

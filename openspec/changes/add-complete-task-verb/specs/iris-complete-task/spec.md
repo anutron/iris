@@ -2,7 +2,7 @@
 
 ### Requirement: `iris:complete_task` verb
 
-The plugin SHALL expose `iris:complete_task` as an MCP tool accepting `task_id` (string, required) and `merge_strategy` (enum "no_ff"|"ff_only", default "no_ff"). The verb SHALL run a fixed five-step ship-it sequence under per-source-repo serialization and SHALL return the checkpoints reached so partial failures are diagnosable.
+The plugin SHALL expose `iris:complete_task` as an MCP tool accepting `task_id` (string, required) and `merge_strategy` (enum "no_ff"|"ff_only", default "no_ff"). The verb SHALL run a fixed five-step ship-it sequence and SHALL return the checkpoints reached so partial failures are diagnosable. The three git-mutating sub-steps (merge, default-branch push, remote-task-branch delete) SHALL be performed under a single per-source-repo mutex acquisition so no other iris verb can mutate the source repo between sub-steps. The argus state transitions (status update, archive) SHALL run after the mutex is released, because they do not touch the source repo.
 
 #### Scenario: Happy full path completes all five checkpoints
 
@@ -40,6 +40,11 @@ The plugin SHALL expose `iris:complete_task` as an MCP tool accepting `task_id` 
 - **GIVEN** `iris:push` refuses to push the default branch as a safety guard
 - **WHEN** `iris:complete_task` reaches the default-branch-push sub-step
 - **THEN** iris runs `git push origin <default>` directly under the same per-source-repo mutex, bypassing the `iris:push` guard because this verb's contract is specifically to ship the default branch after merging into it
+
+#### Scenario: Three git sub-steps share one lock acquisition
+
+- **WHEN** `iris:complete_task` runs the merge, default-branch push, and remote-branch delete
+- **THEN** all three sub-steps execute under a single `lockSourceRepo` acquisition; no other iris verb against the same source repo can interleave between them
 
 #### Scenario: Direct CLI invocation runs the same verb
 

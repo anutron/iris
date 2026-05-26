@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/anutron/iris/internal/argus"
 	"github.com/anutron/iris/internal/verbs"
@@ -29,7 +30,7 @@ func NewGHPRCreateHandler(client *argus.Client) Handler {
 		if in.TaskID == "" {
 			return ErrorResponse("iris:gh_pr_create: task_id is required")
 		}
-		if in.Title == "" {
+		if strings.TrimSpace(in.Title) == "" {
 			return ErrorResponse("iris:gh_pr_create: title is required")
 		}
 

@@ -20,8 +20,8 @@
 - [x] 3.1 `internal/mcp/handler_gh_pr_create.go` — `NewGHPRCreateHandler(client)` with `iris:gh_pr_create:` error prefix
 - [x] 3.2 `cmd/iris/gh_pr_create.go` — `newGHPRCreateCmd()` with `--title` (required), `--body`, `--draft` flags
 - [x] 3.3 Register `iris_gh_pr_create` in `internal/daemon/run.go` (handler + toolDefinitions)
-- [ ] 3.4 Add subcommand to `cmd/iris/main.go` (orchestrator owns this file)
-- [ ] 3.5 Add CLI command to `README.md` (orchestrator owns this file)
+- [x] 3.4 Add subcommand to `cmd/iris/main.go` (orchestrator owns this file)
+- [x] 3.5 Add CLI command to `README.md` (orchestrator owns this file)
 
 ## 4. Test helpers
 

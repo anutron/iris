@@ -32,11 +32,14 @@ func NewCompleteTaskHandler(client *argus.Client) Handler {
 
 		result, err := verbs.CompleteTask(ctx, client, in.TaskID, verbs.CompleteTaskOptions{MergeStrategy: in.MergeStrategy})
 		if err != nil {
-			payload := map[string]any{"error": err.Error()}
+			// Leading line is the human-readable summary; JSON payload
+			// gives the agent structured checkpoint data without
+			// duplicating the error text.
+			var checkpoints []string
 			if result != nil {
-				payload["checkpoints"] = result.Checkpoints
+				checkpoints = result.Checkpoints
 			}
-			body, _ := json.MarshalIndent(payload, "", "  ")
+			body, _ := json.MarshalIndent(map[string]any{"checkpoints": checkpoints}, "", "  ")
 			return ErrorResponse(fmt.Sprintf("iris:complete_task: %v\n%s", err, body))
 		}
 

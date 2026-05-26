@@ -50,9 +50,14 @@ func Resolve(ctx context.Context, client *argus.Client, taskID string) (*Resolve
 		return nil, fmt.Errorf("read current branch of %s: %w", task.WorktreePath, err)
 	}
 
+	// Canonicalize WorktreePath so callers that key locks or compare paths
+	// see the same form (matters on macOS where /var vs /private/var both
+	// reach the same inode).
+	worktreePath := canonicalize(task.WorktreePath)
+
 	return &ResolvedRepo{
 		Task:         task,
-		WorktreePath: task.WorktreePath,
+		WorktreePath: worktreePath,
 		SourceRepo:   srcRepo,
 		Branch:       branch,
 	}, nil
