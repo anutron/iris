@@ -73,6 +73,10 @@ func Start(ctx context.Context, cfg *config.Config, log *slog.Logger) (*Daemon, 
 	mcpSrv.RegisterHandler("iris_push", mcp.NewPushHandler(client))
 	mcpSrv.RegisterHandler("iris_gh_pr_create", mcp.NewGHPRCreateHandler(client))
 	mcpSrv.RegisterHandler("iris_gh_pr_merge", mcp.NewGHPRMergeHandler(client))
+	mcpSrv.RegisterHandler("iris_gh_pr_view", mcp.NewGHPRViewHandler(client))
+	mcpSrv.RegisterHandler("iris_gh_pr_ready", mcp.NewGHPRReadyHandler(client))
+	mcpSrv.RegisterHandler("iris_gh_pr_comment", mcp.NewGHPRCommentHandler(client))
+	mcpSrv.RegisterHandler("iris_gh_pr_close", mcp.NewGHPRCloseHandler(client))
 	mcpSrv.RegisterHandler("iris_run_build", mcp.NewRunBuildHandler(client))
 	mcpSrv.RegisterHandler("iris_complete_task", mcp.NewCompleteTaskHandler(client))
 
@@ -218,6 +222,56 @@ func toolDefinitions() []mcp.ToolDefinition {
 					"task_id":   map[string]any{"type": "string", "description": "Argus task ID. Iris resolves the source repo from this."},
 					"pr_number": map[string]any{"type": "integer", "minimum": 1, "description": "GitHub PR number to merge."},
 					"strategy":  map[string]any{"type": "string", "enum": []string{"squash", "merge", "rebase"}, "default": "squash", "description": "Merge strategy."},
+				},
+				"required": []string{"task_id", "pr_number"},
+			},
+		},
+		{
+			Name:        "iris_gh_pr_view",
+			Description: "Read a GitHub PR's state via the host's gh CLI. Shells out to `gh pr view <pr> --json state,checks,reviews,mergeable,headRefName,baseRefName,isDraft,statusCheckRollup` in the resolved source repo and returns the parsed JSON unchanged. For \"is this PR ready to merge\" agent loops.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"task_id":   map[string]any{"type": "string", "description": "Argus task ID. Iris resolves the source repo from this."},
+					"pr_number": map[string]any{"type": "integer", "minimum": 1, "description": "GitHub PR number to view."},
+				},
+				"required": []string{"task_id", "pr_number"},
+			},
+		},
+		{
+			Name:        "iris_gh_pr_ready",
+			Description: "Take a draft GitHub PR out of draft via the host's gh CLI. Pre-fetches isDraft so the result reports whether the call moved state; idempotent if the PR is already ready.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"task_id":   map[string]any{"type": "string", "description": "Argus task ID. Iris resolves the source repo from this."},
+					"pr_number": map[string]any{"type": "integer", "minimum": 1, "description": "GitHub PR number to mark ready."},
+				},
+				"required": []string{"task_id", "pr_number"},
+			},
+		},
+		{
+			Name:        "iris_gh_pr_comment",
+			Description: "Post a comment to a GitHub PR via the host's gh CLI. Returns the parsed comment URL; if gh's output cannot be parsed, returns a parse_warning with the raw stdout.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"task_id":   map[string]any{"type": "string", "description": "Argus task ID. Iris resolves the source repo from this."},
+					"pr_number": map[string]any{"type": "integer", "minimum": 1, "description": "GitHub PR number to comment on."},
+					"body":      map[string]any{"type": "string", "minLength": 1, "description": "Comment body. Required and must be non-empty."},
+				},
+				"required": []string{"task_id", "pr_number", "body"},
+			},
+		},
+		{
+			Name:        "iris_gh_pr_close",
+			Description: "Close a GitHub PR without merging via the host's gh CLI. Optional delete_branch flag passes --delete-branch to gh.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"task_id":       map[string]any{"type": "string", "description": "Argus task ID. Iris resolves the source repo from this."},
+					"pr_number":     map[string]any{"type": "integer", "minimum": 1, "description": "GitHub PR number to close."},
+					"delete_branch": map[string]any{"type": "boolean", "default": false, "description": "Pass --delete-branch to gh; deletes the source branch after closing."},
 				},
 				"required": []string{"task_id", "pr_number"},
 			},

@@ -43,6 +43,10 @@ iris merge-to-master <task-id>     Merge an argus task's branch into the source 
 iris push <task-id>                Push the task's branch to origin (host-side; --force-with-lease).
 iris gh-pr-create <task-id> -t T   Create a GitHub PR via gh CLI (--title required; --body, --draft).
 iris gh-pr-merge <task-id> -p N    Merge a GitHub PR via gh CLI (--strategy squash|merge|rebase).
+iris gh-pr-view <task-id> -p N     Read a GitHub PR's state via gh CLI (--json state/checks/reviews/...).
+iris gh-pr-ready <task-id> -p N    Mark a draft PR as ready for review via gh CLI (idempotent).
+iris gh-pr-comment <task-id> -p N --body B   Post a comment to a GitHub PR via gh CLI.
+iris gh-pr-close <task-id> -p N    Close a GitHub PR without merging (--delete-branch optional).
 iris run-build <task-id>           Run the worktree's build (script/iris-build or make build [target]).
 iris complete-task <task-id>       Composite ship-it: merge + push default + delete remote branch + mark complete + archive.
 ```
