@@ -45,6 +45,11 @@ iris gh-pr-create <task-id> -t T   Create a GitHub PR via gh CLI (--title requir
 iris gh-pr-merge <task-id> -p N    Merge a GitHub PR via gh CLI (--strategy squash|merge|rebase).
 iris run-build <task-id>           Run the worktree's build (script/iris-build or make build [target]).
 iris complete-task <task-id>       Composite ship-it: merge + push default + delete remote branch + mark complete + archive.
+iris fetch <task-id>               Run `git fetch origin` in the source repo; returns refs whose tracking SHAs changed.
+iris branch-delete-remote <task-id> --branch <name>
+                                   Delete a remote branch on origin (refuses the default branch).
+iris tag <task-id> --tag <name> [--message "..."]
+                                   Create an annotated tag at origin/<default-branch> and push it to origin.
 ```
 
 Direct invocation bypasses argus + MCP and calls the same Go function the MCP handler does — useful when debugging.

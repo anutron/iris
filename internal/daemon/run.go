@@ -75,6 +75,9 @@ func Start(ctx context.Context, cfg *config.Config, log *slog.Logger) (*Daemon, 
 	mcpSrv.RegisterHandler("iris_gh_pr_merge", mcp.NewGHPRMergeHandler(client))
 	mcpSrv.RegisterHandler("iris_run_build", mcp.NewRunBuildHandler(client))
 	mcpSrv.RegisterHandler("iris_complete_task", mcp.NewCompleteTaskHandler(client))
+	mcpSrv.RegisterHandler("iris_fetch", mcp.NewFetchHandler(client))
+	mcpSrv.RegisterHandler("iris_branch_delete_remote", mcp.NewBranchDeleteRemoteHandler(client))
+	mcpSrv.RegisterHandler("iris_tag", mcp.NewTagHandler(client))
 
 	registrar := mcp.NewRegistrar(client, mcpSrv.CallbackBaseURL(), auth, log)
 	registrar.SetHeartbeat(cfg.MCPHeartbeat)
@@ -244,6 +247,42 @@ func toolDefinitions() []mcp.ToolDefinition {
 					"merge_strategy": map[string]any{"type": "string", "enum": []string{"no_ff", "ff_only"}, "default": "no_ff", "description": "Merge strategy used by the embedded merge_to_master step."},
 				},
 				"required": []string{"task_id"},
+			},
+		},
+		{
+			Name:        "iris_fetch",
+			Description: "Run `git fetch origin` in the argus task's source repo under the per-source-repo lock. Returns the list of refs whose tracking SHAs changed.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"task_id": map[string]any{"type": "string", "description": "Argus task ID. Iris resolves the source repo from this."},
+				},
+				"required": []string{"task_id"},
+			},
+		},
+		{
+			Name:        "iris_branch_delete_remote",
+			Description: "Delete a remote branch on origin via `git push origin :<branch>`. Refuses the default branch and any branch absent from origin. Returns the branch's prior remote SHA.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"task_id": map[string]any{"type": "string", "description": "Argus task ID. Iris resolves the source repo from this."},
+					"branch":  map[string]any{"type": "string", "description": "Remote branch name to delete (required, non-empty, MUST NOT be the default branch)."},
+				},
+				"required": []string{"task_id", "branch"},
+			},
+		},
+		{
+			Name:        "iris_tag",
+			Description: "Create an annotated git tag at the SHA of origin/<default-branch> and push it to origin. Refuses if the tag already exists locally or on origin. Returns the tag SHA.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"task_id": map[string]any{"type": "string", "description": "Argus task ID. Iris resolves the source repo from this."},
+					"tag":     map[string]any{"type": "string", "description": "Tag name to create (required, non-empty)."},
+					"message": map[string]any{"type": "string", "description": "(optional) Annotation message. Defaults to \"Released by iris\" when empty."},
+				},
+				"required": []string{"task_id", "tag"},
 			},
 		},
 	}
