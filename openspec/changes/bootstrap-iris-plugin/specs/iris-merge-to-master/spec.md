@@ -38,3 +38,8 @@ The plugin SHALL expose `iris:merge_to_master` as an MCP tool accepting `task_id
 
 - **WHEN** the user runs `iris merge-to-master <task-id> [--no-ff] [-m MESSAGE]` from any shell on the host
 - **THEN** the same `verbs.MergeToMaster` Go function executes (bypassing the daemon process) and prints the structured result
+
+#### Scenario: Refuses to merge when origin/HEAD is not set
+
+- **WHEN** the verb is invoked and the source repo's `git symbolic-ref refs/remotes/origin/HEAD` is unset
+- **THEN** iris returns a structured error naming the source repo and the `git remote set-head origin --auto` command the operator must run, and performs no git mutation

@@ -368,6 +368,58 @@ func TestMergeToMaster_RefusesNonAllowlistedRepo(t *testing.T) {
 	}
 }
 
+// Host-bridge scenario (canonicalization invariant): argus may store a
+// project path that disagrees with what `git rev-parse` returns (macOS
+// /var vs /private/var). The allowlist comparison MUST canonicalize
+// BOTH sides; this test verifies the positive case where argus's stored
+// path is the symlinked form and the worktree resolves to the real form.
+func TestMergeToMaster_AllowlistMatchesNonCanonicalArgusPath(t *testing.T) {
+	src, wt := setupRepoWithWorktree(t, "canon-slug")
+
+	// Build a non-canonical path: prefix /var to the stripped /private/var.
+	// On macOS, `t.TempDir()` returns a path under /var/folders/... whose
+	// EvalSymlinks resolves to /private/var/folders/... — the helper
+	// pre-canonicalizes via EvalSymlinks for stub argus; here we want the
+	// opposite asymmetry.
+	canonical, err := filepath.EvalSymlinks(src)
+	if err != nil {
+		t.Fatalf("EvalSymlinks: %v", err)
+	}
+	var nonCanonical string
+	switch {
+	case strings.HasPrefix(canonical, "/private/var/"):
+		nonCanonical = strings.TrimPrefix(canonical, "/private")
+	case strings.HasPrefix(canonical, "/private/tmp/"):
+		nonCanonical = strings.TrimPrefix(canonical, "/private")
+	default:
+		t.Skipf("no /private prefix to strip on %s; can't construct asymmetric path", canonical)
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/api/tasks/"):
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id": "task-canon", "worktree_path": wt,
+			})
+		case r.URL.Path == "/api/projects/full":
+			// Argus reports the NON-canonical path; iris must canonicalize
+			// to match the canonical path that `git rev-parse` produces.
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"projects": []map[string]any{{"name": "iris-test", "path": nonCanonical}},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	client := argus.New(srv.URL, "stub-token")
+
+	if _, err := MergeToMaster(context.Background(), client, "task-canon", MergeOptions{NoFF: true}); err != nil {
+		t.Fatalf("expected canonicalization to bridge %q ↔ %q: %v", nonCanonical, canonical, err)
+	}
+}
+
 // Host-bridge scenario: "Two concurrent merge_to_master calls serialize."
 func TestMergeToMaster_ConcurrentCallsSerialize(t *testing.T) {
 	// Two argus tasks pointing at the SAME source repo, with two

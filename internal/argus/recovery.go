@@ -4,7 +4,16 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sync"
 )
+
+// recoverMu serializes Recover() calls across all entry points (watcher
+// pid-mtime, watcher ping-failure, registrar heartbeat-404). The spec
+// scenario "Recovery is single-flight" promises at most one recovery
+// runs concurrently, but iris has multiple independent invokers; the
+// watcher's own atomic.Bool gate only covers its own goroutine. This
+// mutex provides the cross-invoker guarantee.
+var recoverMu sync.Mutex
 
 // Reregistrar is the minimum surface Recover needs from a registrar.
 // *mcp.Registrar satisfies this via its ForceReregister method.
@@ -43,6 +52,12 @@ func Recover(ctx context.Context, ports *PortsClient, client *Client, mcpReg Rer
 	if log == nil {
 		log = slog.Default()
 	}
+
+	// Serialize across all entry points so the spec's "single-flight"
+	// guarantee actually holds — even when the watcher AND a heartbeat-404
+	// callback fire near-simultaneously.
+	recoverMu.Lock()
+	defer recoverMu.Unlock()
 
 	SetLinkState(LinkRecovering)
 	SetLinkError(nil)

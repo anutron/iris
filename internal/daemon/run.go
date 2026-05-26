@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/anutron/iris/internal/argus"
@@ -107,24 +108,36 @@ func Start(ctx context.Context, cfg *config.Config, log *slog.Logger) (*Daemon, 
 	}, nil
 }
 
-// Stop gracefully shuts every subsystem down. Bounded by a 10s deadline
-// on the unregister loop so a stuck argus doesn't block shutdown.
+// Stop gracefully shuts every subsystem down. Watcher and Registrar
+// teardown run in parallel under a shared 10s budget so worst-case
+// shutdown stays well under launchd's 20s KillTimeout. The MCP server
+// shuts down last (sequentially) because there's no good way to abort
+// in-flight handlers; that's bounded by the server's own 5s deadline.
 func (d *Daemon) Stop(ctx context.Context) {
 	if d == nil {
 		return
 	}
-	// Stop the watcher first: once it can no longer fire OnRestart, no
-	// further ForceReregister calls race with the registrar's own Stop.
+
+	shutdownCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	var wg sync.WaitGroup
 	if d.Watcher != nil {
-		stopCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		d.Watcher.Stop(stopCtx)
-		cancel()
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			d.Watcher.Stop(shutdownCtx)
+		}()
 	}
 	if d.Registrar != nil {
-		unregCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-		_ = d.Registrar.Stop(unregCtx)
-		cancel()
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_ = d.Registrar.Stop(shutdownCtx)
+		}()
 	}
+	wg.Wait()
+
 	if d.MCPServer != nil {
 		_ = d.MCPServer.Stop()
 	}

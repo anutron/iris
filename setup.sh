@@ -174,12 +174,16 @@ if ! command -v go >/dev/null 2>&1; then
 fi
 
 GO_VERSION="$(go version | awk '{print $3}' | sed 's/^go//')"
-GO_MAJOR="$(echo "${GO_VERSION}" | cut -d. -f1)"
-GO_MINOR="$(echo "${GO_VERSION}" | cut -d. -f2)"
-if (( GO_MAJOR < 1 )) || (( GO_MAJOR == 1 && GO_MINOR < 25 )); then
-  red "go ${GO_VERSION} found, but iris requires Go 1.25+."
-  red "Install Go 1.25+ (https://go.dev/dl/), then re-run."
-  exit 1
+if [[ "${GO_VERSION}" == "devel" ]]; then
+  warn "Go devel/tip build detected; skipping version gate (build will fail if too old)."
+else
+  GO_MAJOR="$(echo "${GO_VERSION}" | cut -d. -f1)"
+  GO_MINOR="$(echo "${GO_VERSION}" | cut -d. -f2)"
+  if (( GO_MAJOR < 1 )) || (( GO_MAJOR == 1 && GO_MINOR < 25 )); then
+    red "go ${GO_VERSION} found, but iris requires Go 1.25+."
+    red "Install Go 1.25+ (https://go.dev/dl/), then re-run."
+    exit 1
+  fi
 fi
 
 # --- 1. build iris -----------------------------------------------------------

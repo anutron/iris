@@ -27,14 +27,15 @@ type Watcher struct {
 	wg       sync.WaitGroup
 	inflight atomic.Bool
 
-	once sync.Once
+	startOnce sync.Once
+	stopOnce  sync.Once
 }
 
 // Start launches the polling goroutine. Idempotent past the first call.
 // ctx bounds the lifetime of the polling loop AND every restart callback
 // it spawns.
 func (w *Watcher) Start(ctx context.Context) {
-	w.once.Do(func() {
+	w.startOnce.Do(func() {
 		w.stop = make(chan struct{})
 		interval := w.Interval
 		if interval <= 0 {
@@ -47,16 +48,14 @@ func (w *Watcher) Start(ctx context.Context) {
 }
 
 // Stop signals the polling loop to exit and waits for it (and any
-// in-flight callback) to finish, bounded by ctx.
+// in-flight callback) to finish, bounded by ctx. Safe to call from
+// multiple goroutines and to call more than once; subsequent calls are
+// no-ops thanks to the sync.Once on the channel close.
 func (w *Watcher) Stop(ctx context.Context) {
 	if w.stop == nil {
 		return
 	}
-	select {
-	case <-w.stop:
-	default:
-		close(w.stop)
-	}
+	w.stopOnce.Do(func() { close(w.stop) })
 
 	done := make(chan struct{})
 	go func() {

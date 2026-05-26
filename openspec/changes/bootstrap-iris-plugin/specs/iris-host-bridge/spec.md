@@ -42,7 +42,7 @@ The MCP callback handler SHALL bound the inbound request body so a confused or b
 #### Scenario: Oversized callback body is rejected
 
 - **WHEN** a POST to `/mcp/<tool-name>` arrives with a body larger than 1 MiB
-- **THEN** the handler returns an HTTP error and does NOT invoke the tool handler
+- **THEN** the handler returns HTTP 400 or 413 and does NOT invoke the tool handler
 
 ### Requirement: Source-repo path resolution from `task_id`
 

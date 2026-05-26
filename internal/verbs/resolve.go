@@ -67,6 +67,9 @@ func assertAllowlisted(ctx context.Context, client *argus.Client, srcRepo string
 	if err != nil {
 		return fmt.Errorf("list argus projects: %w", err)
 	}
+	if len(projects) == 0 {
+		return fmt.Errorf("argus has no projects registered. Add the source repo first: argus project add <name> %s", srcRepo)
+	}
 	canonical := canonicalize(srcRepo)
 	for _, p := range projects {
 		if canonicalize(p.Path) == canonical {
@@ -134,8 +137,8 @@ func DefaultBranch(ctx context.Context, sourceRepo string) (string, error) {
 	out, err := runGit(ctx, sourceRepo, "symbolic-ref", "--short", "refs/remotes/origin/HEAD")
 	if err != nil {
 		return "", fmt.Errorf(
-			"%s: origin/HEAD is not set; run `git -C %s remote set-head origin --auto` to detect the default branch (iris refuses to guess)",
-			sourceRepo, sourceRepo,
+			"origin/HEAD is not set. Run `git -C %s remote set-head origin --auto` to detect the default branch (iris refuses to guess).",
+			sourceRepo,
 		)
 	}
 	ref := strings.TrimSpace(out)

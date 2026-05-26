@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -62,7 +63,15 @@ func MergeToMaster(ctx context.Context, client *argus.Client, taskID string, opt
 			return
 		}
 		cleanup, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		_, _ = runGit(cleanup, resolved.SourceRepo, "merge", "--abort")
+		if out, err := runGit(cleanup, resolved.SourceRepo, "merge", "--abort"); err != nil {
+			// Cleanup is best-effort; log at Warn so a broken cleanup is
+			// visible rather than silently leaving MERGE_HEAD behind.
+			slog.Warn("deferred merge --abort failed after ctx cancel",
+				"source_repo", resolved.SourceRepo,
+				"err", err,
+				"output", strings.TrimSpace(out),
+			)
+		}
 		cancel()
 	}()
 

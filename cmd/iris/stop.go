@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 	"syscall"
@@ -34,11 +35,17 @@ func newStopCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("iris: find process %d: %w", pid, err)
 			}
-			// Liveness probe: on Unix, signal 0 reports reachability without
-			// delivering anything. Refuses to SIGTERM a recycled PID that
-			// no longer belongs to iris.
+			// Liveness probe: signal 0 reports reachability without
+			// delivering anything. Refuses to SIGTERM a dead PID.
 			if err := proc.Signal(syscall.Signal(0)); err != nil {
 				return fmt.Errorf("iris: pidfile %s names pid %d, but no such process is reachable (stale pidfile; iris likely crashed without cleanup)", cfg.PIDPath(), pid)
+			}
+			// Defense in depth: confirm the live process is actually iris,
+			// not a recycled PID that some other process now owns.
+			if comm, err := processName(pid); err != nil {
+				return fmt.Errorf("iris: cannot verify pid %d belongs to iris: %w", pid, err)
+			} else if comm != "iris" {
+				return fmt.Errorf("iris: pid %d is %q, not iris (recycled PID; pidfile %s is stale)", pid, comm, cfg.PIDPath())
 			}
 			if err := proc.Signal(syscall.SIGTERM); err != nil {
 				return fmt.Errorf("iris: SIGTERM %d: %w", pid, err)
@@ -47,4 +54,19 @@ func newStopCmd() *cobra.Command {
 			return nil
 		},
 	}
+}
+
+// processName returns the process name (argv[0] basename) for pid on
+// macOS/Linux via `ps -o comm= -p <pid>`. Returns the trimmed value.
+func processName(pid int) (string, error) {
+	out, err := exec.Command("ps", "-o", "comm=", "-p", strconv.Itoa(pid)).Output()
+	if err != nil {
+		return "", fmt.Errorf("ps: %w", err)
+	}
+	// `ps -o comm=` returns the full path on macOS; take the basename.
+	raw := strings.TrimSpace(string(out))
+	if i := strings.LastIndex(raw, "/"); i >= 0 {
+		raw = raw[i+1:]
+	}
+	return raw, nil
 }
