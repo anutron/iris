@@ -46,7 +46,7 @@ The MCP callback handler SHALL bound the inbound request body so a confused or b
 
 ### Requirement: Source-repo path resolution from `task_id`
 
-Every verb SHALL resolve the canonical source repo by calling argus's `GET /api/tasks/:id` to read the worktree path and then deriving the source repo via `git -C <worktree> rev-parse --git-common-dir`. Verbs SHALL NOT accept agent-supplied filesystem paths. The resolved path SHALL be canonicalized (symlinks resolved, absolute) before any comparison.
+Every verb SHALL resolve the canonical source repo by calling argus's `GET /api/tasks/:id` to read the worktree path and then deriving the source repo via `git -C <worktree> rev-parse --git-common-dir`. Verbs SHALL NOT accept agent-supplied filesystem paths. Both the resolved source-repo path AND the worktree path SHALL be canonicalized (symlinks resolved, absolute) before any comparison or use as a lock key.
 
 #### Scenario: Verb refuses an unknown task ID
 
@@ -58,6 +58,12 @@ Every verb SHALL resolve the canonical source repo by calling argus's `GET /api/
 - **GIVEN** argus exposes `GET /api/projects/full` returning the operator-curated project list
 - **WHEN** the resolved source-repo path does not match any project's canonicalized `path`
 - **THEN** the verb returns a structured error naming the rejected path and performs no filesystem mutation
+
+#### Scenario: Resolved paths are canonical on both sides
+
+- **GIVEN** macOS resolves `/var` to `/private/var` via a system symlink
+- **WHEN** argus stores the task's `worktree_path` as `/var/folders/.../wt` (non-canonical) and the source repo's working tree resolves to `/private/var/folders/.../src`
+- **THEN** `verbs.Resolve` returns both `WorktreePath` and `SourceRepo` in their canonical (symlink-resolved, absolute) form so per-worktree and per-source-repo lock keys collide reliably for the same physical path
 
 ### Requirement: Per-source-repo mutex on git operations
 
