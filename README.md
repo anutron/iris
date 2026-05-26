@@ -8,7 +8,7 @@ Greek-pantheon naming continues from [argus](https://github.com/drn/argus) and [
 
 ## Status
 
-v0.1 vertical slice — `iris:merge_to_master` only. Other v1 verbs (`push`, `gh_pr_create`, `gh_pr_merge`, `run_build`, `complete_task`) land as their own OpenSpec changes.
+v1 verb set in progress: `merge_to_master`, `push`, `gh_pr_create`, `gh_pr_merge`, `run_build` are landed; `complete_task` is the composite verb still in flight. Each verb lands as its own OpenSpec change folder under `openspec/changes/`.
 
 Read [`SKETCH.md`](./SKETCH.md) for the full design context. Read [`openspec/changes/bootstrap-iris-plugin/`](./openspec/changes/bootstrap-iris-plugin/) for the active change folder.
 
@@ -39,8 +39,11 @@ Uninstall the LaunchAgent only:
 iris start --foreground            Run the daemon (called by the LaunchAgent).
 iris stop                          SIGTERM to the running daemon.
 iris status                        Daemon health, token validity, registered tools.
-iris merge-to-master <task-id>     Direct verb invocation against the host shell.
+iris merge-to-master <task-id>     Merge an argus task's branch into the source repo's default branch.
 iris push <task-id>                Push the task's branch to origin (host-side; --force-with-lease).
+iris gh-pr-create <task-id> -t T   Create a GitHub PR via gh CLI (--title required; --body, --draft).
+iris gh-pr-merge <task-id> -p N    Merge a GitHub PR via gh CLI (--strategy squash|merge|rebase).
+iris run-build <task-id>           Run the worktree's build (script/iris-build or make build [target]).
 ```
 
 Direct invocation bypasses argus + MCP and calls the same Go function the MCP handler does — useful when debugging.

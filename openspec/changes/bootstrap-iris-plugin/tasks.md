@@ -62,7 +62,7 @@
 These verbs are intentionally out of scope for the bootstrap. Each lands as its own OpenSpec change folder when implemented; they are listed here so a reader landing on this change folder sees the roadmap without scrolling design.md.
 
 - ~~`iris-push`~~ (added in `add-push-verb` change)
-- `iris-gh-pr-create`
-- `iris-gh-pr-merge`
-- `iris-run-build`
+- ~~`iris-gh-pr-create`~~ (added in `add-gh-pr-create-verb` change)
+- ~~`iris-gh-pr-merge`~~ (added in `add-gh-pr-merge-verb` change)
+- ~~`iris-run-build`~~ (added in `add-run-build-verb` change)
 - `iris-complete-task`
