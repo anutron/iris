@@ -72,6 +72,7 @@ func Start(ctx context.Context, cfg *config.Config, log *slog.Logger) (*Daemon, 
 	mcpSrv.RegisterHandler("iris_merge_to_master", mcp.NewMergeToMasterHandler(client))
 	mcpSrv.RegisterHandler("iris_push", mcp.NewPushHandler(client))
 	mcpSrv.RegisterHandler("iris_gh_pr_create", mcp.NewGHPRCreateHandler(client))
+	mcpSrv.RegisterHandler("iris_gh_pr_merge", mcp.NewGHPRMergeHandler(client))
 	mcpSrv.RegisterHandler("iris_run_build", mcp.NewRunBuildHandler(client))
 
 	registrar := mcp.NewRegistrar(client, mcpSrv.CallbackBaseURL(), auth, log)
@@ -205,6 +206,19 @@ func toolDefinitions() []mcp.ToolDefinition {
 					"draft":   map[string]any{"type": "boolean", "description": "Open the PR as a draft (default false)."},
 				},
 				"required": []string{"task_id", "title"},
+			},
+		},
+		{
+			Name:        "iris_gh_pr_merge",
+			Description: "Merge a GitHub pull request via the host's gh CLI. Caller passes pr_number and strategy (squash|merge|rebase). v1 does not pre-check CI; gh's own merge command surfaces a failure when required checks are red.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"task_id":   map[string]any{"type": "string", "description": "Argus task ID. Iris resolves the source repo from this."},
+					"pr_number": map[string]any{"type": "integer", "minimum": 1, "description": "GitHub PR number to merge."},
+					"strategy":  map[string]any{"type": "string", "enum": []string{"squash", "merge", "rebase"}, "default": "squash", "description": "Merge strategy."},
+				},
+				"required": []string{"task_id", "pr_number"},
 			},
 		},
 		{
