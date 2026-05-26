@@ -65,4 +65,4 @@ These verbs are intentionally out of scope for the bootstrap. Each lands as its 
 - ~~`iris-gh-pr-create`~~ (added in `add-gh-pr-create-verb` change)
 - ~~`iris-gh-pr-merge`~~ (added in `add-gh-pr-merge-verb` change)
 - ~~`iris-run-build`~~ (added in `add-run-build-verb` change)
-- `iris-complete-task`
+- ~~`iris-complete-task`~~ (added in `add-complete-task-verb` change)

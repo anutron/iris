@@ -74,6 +74,7 @@ func Start(ctx context.Context, cfg *config.Config, log *slog.Logger) (*Daemon, 
 	mcpSrv.RegisterHandler("iris_gh_pr_create", mcp.NewGHPRCreateHandler(client))
 	mcpSrv.RegisterHandler("iris_gh_pr_merge", mcp.NewGHPRMergeHandler(client))
 	mcpSrv.RegisterHandler("iris_run_build", mcp.NewRunBuildHandler(client))
+	mcpSrv.RegisterHandler("iris_complete_task", mcp.NewCompleteTaskHandler(client))
 
 	registrar := mcp.NewRegistrar(client, mcpSrv.CallbackBaseURL(), auth, log)
 	registrar.SetHeartbeat(cfg.MCPHeartbeat)
@@ -229,6 +230,18 @@ func toolDefinitions() []mcp.ToolDefinition {
 				"properties": map[string]any{
 					"task_id": map[string]any{"type": "string", "description": "Argus task ID. Iris resolves the worktree from this."},
 					"target":  map[string]any{"type": "string", "description": "(optional) Build target/argument passed verbatim to the script or as `make build <target>`."},
+				},
+				"required": []string{"task_id"},
+			},
+		},
+		{
+			Name:        "iris_complete_task",
+			Description: "Composite ship-it sequence: merge task branch into default branch, push default branch to origin, delete remote task branch, mark argus task complete, archive. Each sub-step is a checkpoint; partial failures return the checkpoints reached so a retry can resume.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"task_id":        map[string]any{"type": "string", "description": "Argus task ID."},
+					"merge_strategy": map[string]any{"type": "string", "enum": []string{"no_ff", "ff_only"}, "default": "no_ff", "description": "Merge strategy used by the embedded merge_to_master step."},
 				},
 				"required": []string{"task_id"},
 			},

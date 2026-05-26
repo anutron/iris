@@ -8,7 +8,7 @@ Greek-pantheon naming continues from [argus](https://github.com/drn/argus) and [
 
 ## Status
 
-v1 verb set in progress: `merge_to_master`, `push`, `gh_pr_create`, `gh_pr_merge`, `run_build` are landed; `complete_task` is the composite verb still in flight. Each verb lands as its own OpenSpec change folder under `openspec/changes/`.
+v1 verb set landed: `merge_to_master`, `push`, `gh_pr_create`, `gh_pr_merge`, `run_build`, `complete_task`. Each verb lives in its own OpenSpec change folder under `openspec/changes/` until they archive together.
 
 Read [`SKETCH.md`](./SKETCH.md) for the full design context. Read [`openspec/changes/bootstrap-iris-plugin/`](./openspec/changes/bootstrap-iris-plugin/) for the active change folder.
 
@@ -44,6 +44,7 @@ iris push <task-id>                Push the task's branch to origin (host-side; 
 iris gh-pr-create <task-id> -t T   Create a GitHub PR via gh CLI (--title required; --body, --draft).
 iris gh-pr-merge <task-id> -p N    Merge a GitHub PR via gh CLI (--strategy squash|merge|rebase).
 iris run-build <task-id>           Run the worktree's build (script/iris-build or make build [target]).
+iris complete-task <task-id>       Composite ship-it: merge + push default + delete remote branch + mark complete + archive.
 ```
 
 Direct invocation bypasses argus + MCP and calls the same Go function the MCP handler does — useful when debugging.
