@@ -35,6 +35,12 @@ func Tag(ctx context.Context, in TagInput) (*TagResult, error) {
 	if in.Tag == "" {
 		return nil, fmt.Errorf("tag is required")
 	}
+	// argv flag-smuggling guard: refuse tag names that start with `-` so
+	// they can't be interpreted as a git option (e.g. `--exec=evil`).
+	// Real tag names never begin with `-`.
+	if strings.HasPrefix(in.Tag, "-") {
+		return nil, fmt.Errorf("invalid tag name %q (must not begin with '-')", in.Tag)
+	}
 	message := in.Message
 	if message == "" {
 		message = DefaultTagMessage

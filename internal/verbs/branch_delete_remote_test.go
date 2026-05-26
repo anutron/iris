@@ -81,6 +81,25 @@ func TestBranchDeleteRemote_RefusesEmptyBranch(t *testing.T) {
 	}
 }
 
+func TestBranchDeleteRemote_RefusesArgvFlagSmuggling(t *testing.T) {
+	src, wt, bare := setupRepoWithBareAndWorktree(t, "bdr-flagsmuggle")
+	client := stubArgus(t, src, wt)
+
+	mainBefore := remoteRef(t, bare, "refs/heads/main")
+	_, err := BranchDeleteRemote(context.Background(), BranchDeleteRemoteInput{
+		Client: client, TaskID: "task-flag", Branch: "--upload-pack=evil",
+	})
+	if err == nil {
+		t.Fatal("expected error refusing leading-dash branch, got nil")
+	}
+	if !strings.Contains(err.Error(), "invalid branch") {
+		t.Fatalf("expected 'invalid branch' error, got: %v", err)
+	}
+	if after := remoteRef(t, bare, "refs/heads/main"); after != mainBefore {
+		t.Fatalf("expected origin/main untouched after refusal: before=%s after=%s", mainBefore, after)
+	}
+}
+
 func TestBranchDeleteRemote_RefusesNonExistentBranch(t *testing.T) {
 	src, wt, _ := setupRepoWithBareAndWorktree(t, "bdr-missing")
 	client := stubArgus(t, src, wt)

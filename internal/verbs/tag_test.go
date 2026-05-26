@@ -134,6 +134,21 @@ func TestTag_RefusesExistingRemoteTag(t *testing.T) {
 	}
 }
 
+func TestTag_RefusesArgvFlagSmuggling(t *testing.T) {
+	src, wt, _ := setupRepoWithBareAndWorktree(t, "tag-flagsmuggle")
+	client := stubArgus(t, src, wt)
+
+	_, err := Tag(context.Background(), TagInput{
+		Client: client, TaskID: "task-tag-flag", Tag: "--exec=evil", Message: "x",
+	})
+	if err == nil {
+		t.Fatal("expected error refusing leading-dash tag, got nil")
+	}
+	if !strings.Contains(err.Error(), "invalid tag") {
+		t.Fatalf("expected 'invalid tag' error, got: %v", err)
+	}
+}
+
 func TestTag_RefusesEmptyTag(t *testing.T) {
 	src, wt, _ := setupRepoWithBareAndWorktree(t, "tag-empty")
 	client := stubArgus(t, src, wt)

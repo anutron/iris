@@ -30,6 +30,12 @@ func BranchDeleteRemote(ctx context.Context, in BranchDeleteRemoteInput) (*Branc
 	if in.Branch == "" {
 		return nil, fmt.Errorf("branch is required")
 	}
+	// argv flag-smuggling guard: refuse refnames that start with `-` so
+	// they can't be interpreted as a git option (e.g.
+	// `--upload-pack=evil`). Real branch names never begin with `-`.
+	if strings.HasPrefix(in.Branch, "-") {
+		return nil, fmt.Errorf("invalid branch name %q (must not begin with '-')", in.Branch)
+	}
 
 	resolved, err := Resolve(ctx, in.Client, in.TaskID)
 	if err != nil {
