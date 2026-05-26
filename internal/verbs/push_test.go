@@ -1,0 +1,223 @@
+package verbs
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/anutron/iris/internal/argus"
+)
+
+// remoteRef returns `git rev-parse <ref>` on bare. Used to assert that
+// negative-path tests left origin's refs untouched.
+func remoteRef(t *testing.T, bare, ref string) string {
+	t.Helper()
+	out, err := exec.Command("git", "-C", bare, "rev-parse", ref).CombinedOutput()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// setupRepoWithBareAndWorktree extends setupRepoWithWorktree by returning
+// the bare origin path so tests can inspect/poke origin directly.
+func setupRepoWithBareAndWorktree(t *testing.T, slug string) (sourceRepo, worktreePath, bare string) {
+	t.Helper()
+	tmp := t.TempDir()
+	bare = filepath.Join(tmp, "origin.git")
+	src := filepath.Join(tmp, "src")
+	wt := filepath.Join(tmp, "wt")
+	g := gitRunner(t)
+
+	g("", "init", "--bare", "-b", "main", bare)
+	g("", "clone", bare, src)
+	g(src, "config", "user.email", "iris-test@example.com")
+	g(src, "config", "user.name", "iris-test")
+	g(src, "commit", "--allow-empty", "-m", "initial")
+	g(src, "push", "-u", "origin", "main")
+	g(src, "remote", "set-head", "origin", "main")
+	branch := "argus/" + slug
+	g(src, "branch", branch)
+	g(src, "worktree", "add", wt, branch)
+	g(wt, "config", "user.email", "iris-test@example.com")
+	g(wt, "config", "user.name", "iris-test")
+	g(wt, "commit", "--allow-empty", "-m", "work on "+branch)
+	return src, wt, bare
+}
+
+func TestPush_HappyPath(t *testing.T) {
+	src, wt, bare := setupRepoWithBareAndWorktree(t, "push-happy")
+	client := stubArgus(t, src, wt)
+
+	result, err := Push(context.Background(), client, "task-push", PushOptions{})
+	if err != nil {
+		t.Fatalf("push: %v", err)
+	}
+	if !result.Pushed {
+		t.Fatal("expected Pushed=true")
+	}
+	if result.Branch != "argus/push-happy" {
+		t.Fatalf("unexpected branch: %q", result.Branch)
+	}
+	localSHA := headSHA(t, wt)
+	if result.RemoteSHA != localSHA {
+		t.Fatalf("remote sha mismatch: got %q, want %q", result.RemoteSHA, localSHA)
+	}
+	remote := remoteRef(t, bare, "argus/push-happy")
+	if remote != localSHA {
+		t.Fatalf("bare origin ref mismatch: got %q, want %q", remote, localSHA)
+	}
+}
+
+func TestPush_RefusesDefaultBranch(t *testing.T) {
+	tmp := t.TempDir()
+	bare := filepath.Join(tmp, "origin.git")
+	src := filepath.Join(tmp, "src")
+	wt := filepath.Join(tmp, "wt")
+	g := gitRunner(t)
+
+	g("", "init", "--bare", "-b", "main", bare)
+	g("", "clone", bare, src)
+	g(src, "config", "user.email", "x@y.z")
+	g(src, "config", "user.name", "x")
+	g(src, "commit", "--allow-empty", "-m", "initial")
+	g(src, "push", "-u", "origin", "main")
+	g(src, "remote", "set-head", "origin", "main")
+	// Move src off main so we can worktree main.
+	g(src, "switch", "-c", "iris-test-host")
+	g(src, "worktree", "add", wt, "main")
+
+	client := stubArgus(t, src, wt)
+	beforeRemote := remoteRef(t, bare, "main")
+	_, err := Push(context.Background(), client, "task-default", PushOptions{})
+	if err == nil {
+		t.Fatal("expected error refusing default branch, got nil")
+	}
+	if !strings.Contains(err.Error(), "default branch") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if afterRemote := remoteRef(t, bare, "main"); afterRemote != beforeRemote {
+		t.Fatalf("expected origin/main unchanged: before=%s after=%s", beforeRemote, afterRemote)
+	}
+}
+
+func TestPush_RefusesUnknownTaskID(t *testing.T) {
+	client := stubArgusTaskNotFound(t)
+	_, err := Push(context.Background(), client, "ghost-task", PushOptions{})
+	if err == nil {
+		t.Fatal("expected error for unknown task, got nil")
+	}
+	if !strings.Contains(err.Error(), "ghost-task") {
+		t.Fatalf("expected error to name task id, got: %v", err)
+	}
+}
+
+func TestPush_ForceWithLeaseSucceeds(t *testing.T) {
+	src, wt, bare := setupRepoWithBareAndWorktree(t, "push-lease")
+	client := stubArgus(t, src, wt)
+
+	// Initial push so the remote tracks the branch.
+	if _, err := Push(context.Background(), client, "task-lease", PushOptions{}); err != nil {
+		t.Fatalf("initial push: %v", err)
+	}
+
+	// Amend on the worktree to rewrite history; --force-with-lease should
+	// succeed because the upstream is exactly what we expect.
+	g := gitRunner(t)
+	g(wt, "commit", "--allow-empty", "--amend", "-m", "amended")
+
+	result, err := Push(context.Background(), client, "task-lease", PushOptions{ForceWithLease: true})
+	if err != nil {
+		t.Fatalf("force-with-lease push: %v", err)
+	}
+	if !result.Pushed {
+		t.Fatal("expected Pushed=true")
+	}
+	if result.RemoteSHA != headSHA(t, wt) {
+		t.Fatalf("remote SHA after amend mismatch: got %q, want %q", result.RemoteSHA, headSHA(t, wt))
+	}
+	if remoteRef(t, bare, "argus/push-lease") != result.RemoteSHA {
+		t.Fatal("bare origin did not receive the amended ref")
+	}
+}
+
+func TestPush_NonFastForwardErrorsWithoutForce(t *testing.T) {
+	src, wt, bare := setupRepoWithBareAndWorktree(t, "push-nonff")
+	client := stubArgus(t, src, wt)
+
+	// First push so origin tracks the branch.
+	if _, err := Push(context.Background(), client, "task-nonff", PushOptions{}); err != nil {
+		t.Fatalf("initial push: %v", err)
+	}
+
+	// Race a competing commit onto origin via a sidecar clone. After this,
+	// the worktree's branch is behind origin.
+	tmp := t.TempDir()
+	side := filepath.Join(tmp, "side")
+	g := gitRunner(t)
+	g("", "clone", bare, side)
+	g(side, "config", "user.email", "x@y.z")
+	g(side, "config", "user.name", "x")
+	g(side, "checkout", "argus/push-nonff")
+	if err := os.WriteFile(filepath.Join(side, "side.txt"), []byte("competing\n"), 0o644); err != nil {
+		t.Fatalf("write side: %v", err)
+	}
+	g(side, "add", "side.txt")
+	g(side, "commit", "-m", "competing commit")
+	g(side, "push", "origin", "argus/push-nonff")
+
+	// Make a divergent commit on the worktree.
+	g(wt, "commit", "--allow-empty", "-m", "wt divergent")
+
+	_, err := Push(context.Background(), client, "task-nonff", PushOptions{})
+	if err == nil {
+		t.Fatal("expected non-fast-forward error, got nil")
+	}
+	if !strings.Contains(err.Error(), "push") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// Sanity: origin should still hold the competing commit, not the worktree's divergent one.
+	remote := remoteRef(t, bare, "argus/push-nonff")
+	if remote == headSHA(t, wt) {
+		t.Fatal("expected origin ref to remain at the competing commit after the rejected push")
+	}
+	_ = src // keep src in scope to silence vet (its presence makes the setup readable)
+}
+
+// Concurrency invariant: Push shares repoLocks with MergeToMaster. We don't
+// need a second test for this — the merge_to_master serialize test already
+// validates the lock map; this is a coverage check that Push compiles
+// against it.
+func TestPush_AllowlistRejection(t *testing.T) {
+	src, wt, _ := setupRepoWithBareAndWorktree(t, "push-denied")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/api/tasks/"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": "x", "worktree_path": wt})
+		case r.URL.Path == "/api/projects/full":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"projects": []map[string]any{{"name": "other", "path": "/some/other/repo"}},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	client := argus.New(srv.URL, "stub-token")
+
+	_, err := Push(context.Background(), client, "task-denied", PushOptions{})
+	if err == nil {
+		t.Fatal("expected allowlist refusal, got nil")
+	}
+	if !strings.Contains(err.Error(), "allowlist") {
+		t.Fatalf("expected allowlist error, got: %v", err)
+	}
+	_ = src
+}
