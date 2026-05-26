@@ -39,6 +39,9 @@ func newRootCmd() *cobra.Command {
 	root.AddCommand(newFetchCmd())
 	root.AddCommand(newBranchDeleteRemoteCmd())
 	root.AddCommand(newTagCmd())
+	root.AddCommand(newReloadCmd())
+	root.AddCommand(newValidateConfigCmd())
+	root.AddCommand(newLsCmd())
 	return root
 }
 

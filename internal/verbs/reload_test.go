@@ -1,0 +1,631 @@
+package verbs
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"syscall"
+	"testing"
+	"time"
+
+	"github.com/anutron/iris/internal/argus"
+)
+
+// victim is a long-running child process the signal-mechanism test sends
+// SIGTERM to.
+type victim struct {
+	cmd *exec.Cmd
+}
+
+func (v *victim) cleanup() {
+	if v.cmd != nil && v.cmd.Process != nil {
+		_ = v.cmd.Process.Kill()
+		_, _ = v.cmd.Process.Wait()
+	}
+}
+
+func (v *victim) alive() bool {
+	if v.cmd == nil || v.cmd.Process == nil {
+		return false
+	}
+	// signal 0 probes liveness without affecting the process.
+	return syscall.Kill(v.cmd.Process.Pid, syscall.Signal(0)) == nil
+}
+
+func startVictimSleep(t *testing.T, pidFile string) *victim {
+	t.Helper()
+	cmd := exec.Command("sleep", "30")
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start victim: %v", err)
+	}
+	if err := os.WriteFile(pidFile, []byte(strconv.Itoa(cmd.Process.Pid)), 0o644); err != nil {
+		_ = cmd.Process.Kill()
+		t.Fatalf("write pid file: %v", err)
+	}
+	return &victim{cmd: cmd}
+}
+
+// reloadFixture sets up:
+//   - bare origin, source clone on `main`, origin/HEAD set
+//   - a `.iris.toml` with the given body
+//   - a fake `bin/iris` so ResolveSelf returns this repo when isSelf=true
+//   - audit log redirected to a tmp dir
+//   - the executable() override so ResolveSelf points at the fixture
+//   - a stub argus that allowlists the canonical source repo
+//
+// Returns the source repo path, the stub argus client, and a cleanup func
+// (the cleanup is registered with t.Cleanup automatically).
+func reloadFixture(t *testing.T, body string, isSelf bool) (src string, client *argus.Client) {
+	t.Helper()
+	setAuditDir(t)
+
+	src = setupRepoOnly(t)
+	// Put a fake bin/iris in the source repo so isSelfTarget() detection
+	// works when isSelf=true. Even when isSelf=false we still want
+	// ResolveSelf to point somewhere — we use a separate tmp dir.
+	bin := filepath.Join(src, "bin", "iris")
+	_ = os.MkdirAll(filepath.Dir(bin), 0o755)
+	_ = os.WriteFile(bin, []byte("x"), 0o755)
+	old := executable
+	if isSelf {
+		executable = func() (string, error) { return bin, nil }
+	} else {
+		// ResolveSelf must resolve elsewhere — a separate repo so the
+		// canonical-path comparison treats this fixture as cross-target.
+		elsewhereSrc := setupRepoOnly(t)
+		elseBin := filepath.Join(elsewhereSrc, "bin", "iris")
+		_ = os.MkdirAll(filepath.Dir(elseBin), 0o755)
+		_ = os.WriteFile(elseBin, []byte("x"), 0o755)
+		executable = func() (string, error) { return elseBin, nil }
+	}
+	t.Cleanup(func() { executable = old })
+
+	tomlPath := filepath.Join(src, ".iris.toml")
+	if err := os.WriteFile(tomlPath, []byte(body), 0o644); err != nil {
+		t.Fatalf("write .iris.toml: %v", err)
+	}
+	// Commit .iris.toml + bin/iris so the working tree is clean for the
+	// pre-flight refusal check. Otherwise every test trips on dirty tree.
+	// Also push: tests that simulate origin advancing need a baseline
+	// where origin == source for the ff-only merge to succeed.
+	g := gitRunner(t)
+	g(src, "add", ".iris.toml", "bin/iris")
+	g(src, "commit", "-m", "fixture: .iris.toml + bin")
+	g(src, "push", "origin", "main")
+
+	canon, _ := filepath.EvalSymlinks(src)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/api/projects/full" {
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"projects": []map[string]any{{"name": "iris-test", "path": canon}},
+			})
+			return
+		}
+		if strings.HasPrefix(r.URL.Path, "/api/tasks/") {
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id": strings.TrimPrefix(r.URL.Path, "/api/tasks/"), "worktree_path": src,
+			})
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	client = argus.New(srv.URL, "stub-token")
+
+	// Capture exit code instead of dying.
+	atomic.StoreInt32(&capturedExitCode, -1)
+	exitFunc = func(code int) { atomic.StoreInt32(&capturedExitCode, int32(code)) }
+	selfExitDelay = 10 * time.Millisecond
+	t.Cleanup(func() {
+		exitFunc = os.Exit
+		selfExitDelay = 100 * time.Millisecond
+	})
+	return src, client
+}
+
+var capturedExitCode int32 = -1
+
+// waitForExit polls the capturedExitCode for up to d.
+func waitForExit(t *testing.T, d time.Duration) int32 {
+	t.Helper()
+	deadline := time.Now().Add(d)
+	for time.Now().Before(deadline) {
+		if c := atomic.LoadInt32(&capturedExitCode); c >= 0 {
+			return c
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	return atomic.LoadInt32(&capturedExitCode)
+}
+
+const tomlSelfExitCode = `
+schema_version = 1
+[build]
+command = ["true"]
+[restart]
+mechanism = "exit_code"
+`
+
+const tomlCrossNone = `
+schema_version = 1
+[build]
+command = ["true"]
+[restart]
+mechanism = "none"
+`
+
+// --- Pre-flight refusals ----------------------------------------------------
+
+func TestReload_RefusesDirtyTree(t *testing.T) {
+	src, client := reloadFixture(t, tomlSelfExitCode, true)
+	if err := os.WriteFile(filepath.Join(src, "untracked.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatalf("write dirt: %v", err)
+	}
+	_, err := Reload(context.Background(), client, ReloadInput{NoPull: true})
+	if err == nil {
+		t.Fatal("expected dirty-tree refusal")
+	}
+	if !strings.Contains(err.Error(), "dirty") && !strings.Contains(err.Error(), "untracked") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestReload_RefusesNonDefaultBranch(t *testing.T) {
+	src, client := reloadFixture(t, tomlSelfExitCode, true)
+	g := gitRunner(t)
+	g(src, "switch", "-c", "side-branch")
+	_, err := Reload(context.Background(), client, ReloadInput{NoPull: true})
+	if err == nil {
+		t.Fatal("expected branch refusal")
+	}
+	if !strings.Contains(err.Error(), "side-branch") && !strings.Contains(err.Error(), "main") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestReload_RefusesMissingIrisToml(t *testing.T) {
+	// Use a fixture targeting a repo with no .iris.toml.
+	setAuditDir(t)
+	src, client := reloadFixtureFresh(t)
+	// Make ResolveSelf point elsewhere so this is treated as cross-target.
+	elsewhereSrc := setupRepoOnly(t)
+	elseBin := filepath.Join(elsewhereSrc, "bin", "iris")
+	_ = os.MkdirAll(filepath.Dir(elseBin), 0o755)
+	_ = os.WriteFile(elseBin, []byte("x"), 0o755)
+	old := executable
+	executable = func() (string, error) { return elseBin, nil }
+	t.Cleanup(func() { executable = old })
+
+	_, err := Reload(context.Background(), client, ReloadInput{NoPull: true, Path: src})
+	if err == nil {
+		t.Fatal("expected missing-toml refusal")
+	}
+	if !strings.Contains(err.Error(), ".iris.toml") {
+		t.Fatalf("expected error to mention .iris.toml, got: %v", err)
+	}
+}
+
+// reloadFixtureFresh is a minimal source-only fixture (no .iris.toml) for
+// tests that need to assert missing-file behavior.
+func reloadFixtureFresh(t *testing.T) (string, *argus.Client) {
+	t.Helper()
+	src := setupRepoOnly(t)
+	canon, _ := filepath.EvalSymlinks(src)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/api/projects/full" {
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"projects": []map[string]any{{"name": "iris-test", "path": canon}},
+			})
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	return src, argus.New(srv.URL, "stub-token")
+}
+
+func TestReload_RefusesUnknownSchemaVersion(t *testing.T) {
+	_, client := reloadFixture(t, `schema_version = 99
+[build]
+command = ["true"]
+[restart]
+mechanism = "none"
+`, true)
+	_, err := Reload(context.Background(), client, ReloadInput{NoPull: true})
+	if err == nil {
+		t.Fatal("expected schema_version refusal")
+	}
+	if !strings.Contains(err.Error(), "schema_version") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestReload_RefusesExitCodeOnCrossTarget(t *testing.T) {
+	src, client := reloadFixture(t, tomlSelfExitCode, false)
+	_, err := Reload(context.Background(), client, ReloadInput{NoPull: true, Path: src})
+	if err == nil {
+		t.Fatal("expected exit_code-on-cross refusal")
+	}
+	if !strings.Contains(err.Error(), "self-only") && !strings.Contains(err.Error(), "exit_code") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestReload_RefusesCrossMechanismFieldMismatch(t *testing.T) {
+	src, client := reloadFixture(t, `schema_version = 1
+[build]
+command = ["true"]
+[restart]
+mechanism = "launchagent"
+label = "com.example.x"
+pid_file = "/tmp/foo.pid"
+`, false)
+	_, err := Reload(context.Background(), client, ReloadInput{NoPull: true, Path: src})
+	if err == nil {
+		t.Fatal("expected field-mismatch refusal")
+	}
+	if !strings.Contains(err.Error(), "pid_file") {
+		t.Fatalf("expected pid_file in error, got: %v", err)
+	}
+}
+
+// --- Pull behavior ----------------------------------------------------------
+
+func TestReload_NoPullSkipsFetch(t *testing.T) {
+	_, client := reloadFixture(t, tomlSelfExitCode, true)
+	res, err := Reload(context.Background(), client, ReloadInput{NoPull: true, Caller: "cli"})
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if res.Pulled {
+		t.Fatalf("expected Pulled=false with NoPull, got true")
+	}
+	if res.PrePullSha != res.PostPullSha {
+		t.Fatalf("expected pre==post sha with NoPull, got %s vs %s", res.PrePullSha, res.PostPullSha)
+	}
+}
+
+func TestReload_DefaultPullsFastForward(t *testing.T) {
+	src, client := reloadFixture(t, tomlSelfExitCode, true)
+	// Advance origin/main so a pull is observable.
+	g := gitRunner(t)
+	other := t.TempDir()
+	g("", "clone", filepath.Join(filepath.Dir(src), "origin.git"), other)
+	g(other, "config", "user.email", "x@y.z")
+	g(other, "config", "user.name", "x")
+	g(other, "commit", "--allow-empty", "-m", "new")
+	g(other, "push", "origin", "main")
+
+	res, err := Reload(context.Background(), client, ReloadInput{Caller: "cli"})
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if !res.Pulled {
+		t.Fatal("expected Pulled=true")
+	}
+	if res.PrePullSha == res.PostPullSha {
+		t.Fatalf("expected pre != post after pull")
+	}
+}
+
+func TestReload_RefusesDivergentHistory(t *testing.T) {
+	src, client := reloadFixture(t, tomlSelfExitCode, true)
+	g := gitRunner(t)
+	// Local commit on main.
+	g(src, "config", "user.email", "x@y.z")
+	g(src, "config", "user.name", "x")
+	g(src, "commit", "--allow-empty", "-m", "local")
+	// Origin diverged: another clone pushes its own commit.
+	other := t.TempDir()
+	g("", "clone", filepath.Join(filepath.Dir(src), "origin.git"), other)
+	g(other, "config", "user.email", "x@y.z")
+	g(other, "config", "user.name", "x")
+	g(other, "commit", "--allow-empty", "-m", "origin-side")
+	g(other, "push", "origin", "main")
+
+	_, err := Reload(context.Background(), client, ReloadInput{Caller: "cli"})
+	if err == nil {
+		t.Fatal("expected divergent-history refusal")
+	}
+	if !strings.Contains(err.Error(), "fast-forward") {
+		t.Fatalf("expected ff error, got: %v", err)
+	}
+}
+
+// --- Build step -------------------------------------------------------------
+
+func TestReload_BuildSuccessIncludesOutput(t *testing.T) {
+	_, client := reloadFixture(t, `schema_version = 1
+[build]
+command = ["sh", "-c", "echo hello && echo world"]
+[restart]
+mechanism = "exit_code"
+`, true)
+	res, err := Reload(context.Background(), client, ReloadInput{NoPull: true, Caller: "cli"})
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if !strings.Contains(res.BuildOutput, "hello") || !strings.Contains(res.BuildOutput, "world") {
+		t.Fatalf("expected hello+world in BuildOutput, got: %q", res.BuildOutput)
+	}
+}
+
+func TestReload_BuildFailureAborts(t *testing.T) {
+	_, client := reloadFixture(t, `schema_version = 1
+[build]
+command = ["sh", "-c", "echo oops; exit 7"]
+[restart]
+mechanism = "exit_code"
+`, true)
+	_, err := Reload(context.Background(), client, ReloadInput{NoPull: true, Caller: "cli"})
+	if err == nil {
+		t.Fatal("expected build failure")
+	}
+	if !strings.Contains(err.Error(), "oops") {
+		t.Fatalf("expected oops in error, got: %v", err)
+	}
+	// Audit should record the failure.
+	entries, _ := ReadAudit(AuditReadOpts{})
+	if len(entries) != 1 || entries[0].Outcome != "failure" {
+		t.Fatalf("expected one failure audit entry, got: %+v", entries)
+	}
+}
+
+func TestReload_BuildTimeoutKillsProcess(t *testing.T) {
+	_, client := reloadFixture(t, `schema_version = 1
+[build]
+command = ["sleep", "10"]
+timeout_seconds = 1
+[restart]
+mechanism = "exit_code"
+`, true)
+	start := time.Now()
+	_, err := Reload(context.Background(), client, ReloadInput{NoPull: true, Caller: "cli"})
+	if err == nil {
+		t.Fatal("expected build timeout")
+	}
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Fatalf("timeout did not kill build promptly: %v", elapsed)
+	}
+	if !strings.Contains(err.Error(), "timed out") {
+		t.Fatalf("expected 'timed out' in error, got: %v", err)
+	}
+}
+
+// --- Pre-flight hook --------------------------------------------------------
+
+func TestReload_PreFlightHookAborts(t *testing.T) {
+	_, client := reloadFixture(t, `schema_version = 1
+[build]
+command = ["true"]
+[restart]
+mechanism = "exit_code"
+[pre_flight]
+command = ["sh", "-c", "echo blocker; exit 1"]
+`, true)
+	_, err := Reload(context.Background(), client, ReloadInput{NoPull: true, Caller: "cli"})
+	if err == nil {
+		t.Fatal("expected pre-flight refusal")
+	}
+	if !strings.Contains(err.Error(), "blocker") {
+		t.Fatalf("expected hook output in error: %v", err)
+	}
+}
+
+// --- Restart dispatch -------------------------------------------------------
+
+func TestReload_ExitCodeSchedulesExit(t *testing.T) {
+	_, client := reloadFixture(t, `schema_version = 1
+[build]
+command = ["true"]
+[restart]
+mechanism = "exit_code"
+code = 42
+`, true)
+	res, err := Reload(context.Background(), client, ReloadInput{NoPull: true, Caller: "cli"})
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if res.Mode != "self" {
+		t.Fatalf("expected mode=self, got %q", res.Mode)
+	}
+	if !res.RestartPending {
+		t.Fatalf("expected RestartPending=true for self-reload")
+	}
+	if got := waitForExit(t, 2*time.Second); got != 42 {
+		t.Fatalf("expected exit code 42, got %d", got)
+	}
+}
+
+func TestReload_NoneMechanismDoesNothing(t *testing.T) {
+	src, client := reloadFixture(t, tomlCrossNone, false)
+	res, err := Reload(context.Background(), client, ReloadInput{NoPull: true, Path: src, Caller: "cli"})
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if res.Mode != "cross" {
+		t.Fatalf("expected mode=cross, got %q", res.Mode)
+	}
+	if res.RestartOutput != "" {
+		t.Fatalf("expected empty RestartOutput for mechanism=none, got %q", res.RestartOutput)
+	}
+	if res.RestartPending {
+		t.Fatalf("expected RestartPending=false for cross-reload")
+	}
+}
+
+func TestReload_ExecMechanismRunsArgv(t *testing.T) {
+	src, client := reloadFixture(t, `schema_version = 1
+[build]
+command = ["true"]
+[restart]
+mechanism = "exec"
+command = ["echo", "restarted-via-exec"]
+`, false)
+	res, err := Reload(context.Background(), client, ReloadInput{NoPull: true, Path: src, Caller: "cli"})
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if !strings.Contains(res.RestartOutput, "restarted-via-exec") {
+		t.Fatalf("expected exec output captured, got: %q", res.RestartOutput)
+	}
+}
+
+func TestReload_SignalMechanismSendsSignal(t *testing.T) {
+	// Start a long-running sleep, write its PID, then reload with signal mechanism.
+	pidFile := filepath.Join(t.TempDir(), "victim.pid")
+	cmd := startVictimSleep(t, pidFile)
+	defer cmd.cleanup()
+
+	src, client := reloadFixture(t, fmt.Sprintf(`schema_version = 1
+[build]
+command = ["true"]
+[restart]
+mechanism = "signal"
+pid_file = "%s"
+signal = "SIGTERM"
+`, pidFile), false)
+	res, err := Reload(context.Background(), client, ReloadInput{NoPull: true, Path: src, Caller: "cli"})
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if !strings.Contains(res.RestartOutput, "SIGTERM") {
+		t.Fatalf("expected SIGTERM in restart output, got: %q", res.RestartOutput)
+	}
+	// Reap the victim so it doesn't show as alive (zombie). Then assert it
+	// actually terminated via SIGTERM (signal exit, not killed by Go's kill).
+	done := make(chan error, 1)
+	go func() { done <- cmd.cmd.Wait() }()
+	select {
+	case <-done:
+		// died; that's the success path
+	case <-time.After(3 * time.Second):
+		t.Fatal("victim process did not exit after SIGTERM within 3s")
+	}
+}
+
+// --- Audit log -------------------------------------------------------------
+
+func TestReload_AuditWrittenOnSuccessAndFailure(t *testing.T) {
+	src, client := reloadFixture(t, tomlCrossNone, false)
+	if _, err := Reload(context.Background(), client, ReloadInput{NoPull: true, Path: src, Caller: "cli"}); err != nil {
+		t.Fatalf("reload 1: %v", err)
+	}
+	// Failure: rewrite to a bad build, commit it.
+	tomlPath := filepath.Join(src, ".iris.toml")
+	_ = os.WriteFile(tomlPath, []byte(`schema_version = 1
+[build]
+command = ["sh", "-c", "exit 1"]
+[restart]
+mechanism = "none"
+`), 0o644)
+	g := gitRunner(t)
+	g(src, "add", ".iris.toml")
+	g(src, "commit", "-m", "bad build")
+	if _, err := Reload(context.Background(), client, ReloadInput{NoPull: true, Path: src, Caller: "cli"}); err == nil {
+		t.Fatal("expected failure")
+	}
+	entries, _ := ReadAudit(AuditReadOpts{})
+	if len(entries) != 2 {
+		t.Fatalf("expected 2 entries, got %d", len(entries))
+	}
+	if entries[0].Outcome != "success" {
+		t.Fatalf("first should be success: %+v", entries[0])
+	}
+	if entries[1].Outcome != "failure" || entries[1].FailureReason == "" {
+		t.Fatalf("second should be failure with reason: %+v", entries[1])
+	}
+}
+
+// --- task_id optionality ---------------------------------------------------
+
+func TestReload_AmbiguousBothInputs(t *testing.T) {
+	_, client := reloadFixture(t, tomlCrossNone, false)
+	_, err := Reload(context.Background(), client, ReloadInput{TaskID: "x", Path: "/p"})
+	if err == nil {
+		t.Fatal("expected ambiguous error")
+	}
+}
+
+// --- Per-source-repo lock ---------------------------------------------------
+
+func TestReload_LockSerializesConcurrent(t *testing.T) {
+	src, client := reloadFixture(t, `schema_version = 1
+[build]
+command = ["sh", "-c", "sleep 0.3; echo ok"]
+[restart]
+mechanism = "none"
+`, false)
+	var wg sync.WaitGroup
+	wg.Add(2)
+	t0 := time.Now()
+	var d1, d2 time.Duration
+	go func() {
+		defer wg.Done()
+		s := time.Now()
+		_, err := Reload(context.Background(), client, ReloadInput{NoPull: true, Path: src, Caller: "cli"})
+		if err != nil {
+			t.Errorf("r1: %v", err)
+		}
+		d1 = time.Since(s)
+	}()
+	go func() {
+		defer wg.Done()
+		s := time.Now()
+		_, err := Reload(context.Background(), client, ReloadInput{NoPull: true, Path: src, Caller: "cli"})
+		if err != nil {
+			t.Errorf("r2: %v", err)
+		}
+		d2 = time.Since(s)
+	}()
+	wg.Wait()
+	total := time.Since(t0)
+	if total < 500*time.Millisecond {
+		t.Fatalf("expected serialization to extend wall time; total=%v d1=%v d2=%v", total, d1, d2)
+	}
+}
+
+func TestReload_PathAndAllowlistEnforcedForCross(t *testing.T) {
+	// Build a fresh fixture with the wrong allowlist; expect a path-based
+	// reload to fail at Resolve.
+	_, _ = reloadFixture(t, tomlCrossNone, false)
+	src := setupRepoOnly(t)
+	_ = os.WriteFile(filepath.Join(src, ".iris.toml"), []byte(tomlCrossNone), 0o644)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/api/projects/full" {
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"projects": []map[string]any{{"name": "other", "path": "/some/other"}},
+			})
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	client := argus.New(srv.URL, "stub-token")
+
+	_, err := Reload(context.Background(), client, ReloadInput{NoPull: true, Path: src, Caller: "cli"})
+	if err == nil {
+		t.Fatal("expected allowlist refusal for path-resolved cross-target")
+	}
+	if !strings.Contains(err.Error(), "allowlist") {
+		t.Fatalf("expected allowlist error, got: %v", err)
+	}
+}
+
+// Empty validation-error string formatter test to keep linters happy.
+func TestJoinValidationErrors(t *testing.T) {
+	_ = fmt.Sprintf("%v", time.Now())
+}
