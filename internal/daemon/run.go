@@ -71,6 +71,8 @@ func Start(ctx context.Context, cfg *config.Config, log *slog.Logger) (*Daemon, 
 	// Register handlers for every verb iris exposes.
 	mcpSrv.RegisterHandler("iris_merge_to_master", mcp.NewMergeToMasterHandler(client))
 	mcpSrv.RegisterHandler("iris_push", mcp.NewPushHandler(client))
+	mcpSrv.RegisterHandler("iris_gh_pr_create", mcp.NewGHPRCreateHandler(client))
+	mcpSrv.RegisterHandler("iris_run_build", mcp.NewRunBuildHandler(client))
 
 	registrar := mcp.NewRegistrar(client, mcpSrv.CallbackBaseURL(), auth, log)
 	registrar.SetHeartbeat(cfg.MCPHeartbeat)
@@ -187,6 +189,32 @@ func toolDefinitions() []mcp.ToolDefinition {
 				"properties": map[string]any{
 					"task_id":          map[string]any{"type": "string", "description": "Argus task ID. Iris resolves the source repo and branch from this."},
 					"force_with_lease": map[string]any{"type": "boolean", "description": "Pass --force-with-lease to git push (default false). Safe form of --force; checks the upstream matches."},
+				},
+				"required": []string{"task_id"},
+			},
+		},
+		{
+			Name:        "iris_gh_pr_create",
+			Description: "Open a GitHub pull request for the argus task's branch using the host's gh CLI. Resolves source repo and branch from task_id. Refuses to open a PR from the default branch. Returns the PR number and URL.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"task_id": map[string]any{"type": "string", "description": "Argus task ID. Iris resolves the source repo and branch from this."},
+					"title":   map[string]any{"type": "string", "description": "PR title."},
+					"body":    map[string]any{"type": "string", "description": "(optional) PR body. When omitted, gh's default applies."},
+					"draft":   map[string]any{"type": "boolean", "description": "Open the PR as a draft (default false)."},
+				},
+				"required": []string{"task_id", "title"},
+			},
+		},
+		{
+			Name:        "iris_run_build",
+			Description: "Run the project's build for an argus task in its worktree. Looks for an executable `script/iris-build` first, then `Makefile` (build target). Returns command, exit code, and combined output. On non-zero exit the response is an error that still carries the captured output so callers see compile errors.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"task_id": map[string]any{"type": "string", "description": "Argus task ID. Iris resolves the worktree from this."},
+					"target":  map[string]any{"type": "string", "description": "(optional) Build target/argument passed verbatim to the script or as `make build <target>`."},
 				},
 				"required": []string{"task_id"},
 			},
