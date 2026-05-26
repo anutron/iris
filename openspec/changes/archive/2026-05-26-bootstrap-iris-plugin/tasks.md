@@ -54,8 +54,8 @@
 - [x] 6.1 `openspec validate --all --strict` passes
 - [x] 6.2 `make build` succeeds; `iris status` runs (with or without daemon)
 - [x] 6.3 `make test` passes (unit tests for verb + resolver)
-- [ ] 6.4 Open PR for the bootstrap commit
-- [ ] 6.5 (Deferred to follow-up) dogfood `iris:merge_to_master` against a real argus task once setup.sh has been run
+- [x] 6.4 Open PR for the bootstrap commit (PR #1, merged 2026-05-26)
+- [x] 6.5 Dogfood: setup.sh ran successfully (`iris status` reports running); verb invocations dogfooded via the v1.0 archive ship-it in this task
 
 ## 7. Followups (documented, not gated on this change)
 
