@@ -47,15 +47,15 @@ type AuditEntry struct {
 // AggregateEntry collapses many audit entries for one source repo into a
 // single ls/status-friendly row.
 type AggregateEntry struct {
-	SourceRepo         string    `json:"source_repo"`
-	LastReloadAt       time.Time `json:"last_reload_at"`
-	LastOutcome        string    `json:"last_outcome"`
-	LastMode           string    `json:"last_mode"`
-	LastPrePullSha     string    `json:"last_pre_pull_sha"`
-	LastPostPullSha    string    `json:"last_post_pull_sha"`
-	LastFailureReason  string    `json:"last_failure_reason,omitempty"`
-	TotalReloadCount   int       `json:"total_reload_count"`
-	TotalFailureCount  int       `json:"total_failure_count"`
+	SourceRepo        string    `json:"source_repo"`
+	LastReloadAt      time.Time `json:"last_reload_at"`
+	LastOutcome       string    `json:"last_outcome"`
+	LastMode          string    `json:"last_mode"`
+	LastPrePullSha    string    `json:"last_pre_pull_sha"`
+	LastPostPullSha   string    `json:"last_post_pull_sha"`
+	LastFailureReason string    `json:"last_failure_reason,omitempty"`
+	TotalReloadCount  int       `json:"total_reload_count"`
+	TotalFailureCount int       `json:"total_failure_count"`
 }
 
 // AuditReadOpts filters the audit log at read time.

@@ -29,12 +29,14 @@ Target can be:
 				taskID, path = classifyTarget(args[0])
 			}
 			client, err := newCLIClient(cmd.Context())
-			// For pure-self reloads, the argus client may not even be needed,
-			// but we still build it so allowlist enforcement works when the
-			// caller passes a target.
+			// Pure self-reload (no target) never touches the argus allowlist,
+			// so a missing client is fine there. For any explicit target, the
+			// allowlist check needs a live client — fail clearly rather than
+			// NPE inside Resolve/ResolvePath.
 			if err != nil {
-				// Don't fail here if the call is self-target only; verbs.Reload
-				// will pass nil through safely.
+				if taskID != "" || path != "" {
+					return fmt.Errorf("argus client required for non-self reload: %w", err)
+				}
 				client = nil
 			}
 			result, err := verbs.Reload(cmd.Context(), client, verbs.ReloadInput{

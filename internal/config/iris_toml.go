@@ -51,20 +51,20 @@ const (
 
 // IrisToml is the parsed `.iris.toml` document.
 type IrisToml struct {
-	SchemaVersion int           `toml:"schema_version"`
-	DefaultBranch string        `toml:"default_branch"`
-	Build         BuildBlock    `toml:"build"`
-	Restart       RestartBlock  `toml:"restart"`
-	PreFlight    *HookBlock    `toml:"pre_flight"`
-	Verify       *HookBlock    `toml:"verify"`
+	SchemaVersion int          `toml:"schema_version" json:"schema_version"`
+	DefaultBranch string       `toml:"default_branch" json:"default_branch,omitempty"`
+	Build         BuildBlock   `toml:"build"          json:"build"`
+	Restart       RestartBlock `toml:"restart"        json:"restart"`
+	PreFlight     *HookBlock   `toml:"pre_flight"     json:"pre_flight,omitempty"`
+	Verify        *HookBlock   `toml:"verify"         json:"verify,omitempty"`
 }
 
 // BuildBlock declares the build step.
 type BuildBlock struct {
-	Command          []string          `toml:"command"`
-	TimeoutSeconds   int               `toml:"timeout_seconds"`
-	WorkingDirectory string            `toml:"working_directory"`
-	Env              map[string]string `toml:"env"`
+	Command          []string          `toml:"command"           json:"command"`
+	TimeoutSeconds   int               `toml:"timeout_seconds"   json:"timeout_seconds,omitempty"`
+	WorkingDirectory string            `toml:"working_directory" json:"working_directory,omitempty"`
+	Env              map[string]string `toml:"env"               json:"env,omitempty"`
 }
 
 // RestartBlock declares how to bring the new binary into service.
@@ -73,20 +73,20 @@ type BuildBlock struct {
 // cross-mechanism field mismatches: iris validates that only the fields
 // belonging to the declared mechanism are set.
 type RestartBlock struct {
-	Mechanism      RestartMechanism `toml:"mechanism"`
-	Code           *int             `toml:"code"`
-	Label          string           `toml:"label"`
-	PidFile        string           `toml:"pid_file"`
-	Signal         string           `toml:"signal"`
-	Command        []string         `toml:"command"`
-	TimeoutSeconds int              `toml:"timeout_seconds"`
+	Mechanism      RestartMechanism `toml:"mechanism"       json:"mechanism"`
+	Code           *int             `toml:"code"            json:"code,omitempty"`
+	Label          string           `toml:"label"           json:"label,omitempty"`
+	PidFile        string           `toml:"pid_file"        json:"pid_file,omitempty"`
+	Signal         string           `toml:"signal"          json:"signal,omitempty"`
+	Command        []string         `toml:"command"         json:"command,omitempty"`
+	TimeoutSeconds int              `toml:"timeout_seconds" json:"timeout_seconds,omitempty"`
 }
 
 // HookBlock is shared by `[pre_flight]` and `[verify]`.
 type HookBlock struct {
-	Command          []string `toml:"command"`
-	TimeoutSeconds   int      `toml:"timeout_seconds"`
-	WorkingDirectory string   `toml:"working_directory"`
+	Command          []string `toml:"command"           json:"command"`
+	TimeoutSeconds   int      `toml:"timeout_seconds"   json:"timeout_seconds,omitempty"`
+	WorkingDirectory string   `toml:"working_directory" json:"working_directory,omitempty"`
 }
 
 // ValidationError describes a single failure surfaced by parse or
@@ -270,7 +270,7 @@ func (r *RestartBlock) validate(isSelf bool) []ValidationError {
 
 	// Cross-mechanism field exclusivity. Each mechanism owns a set of
 	// fields; fields belonging to a different mechanism MUST NOT be set.
-	required, allowed_fields, hint := mechanismFields(r.Mechanism)
+	required, allowedFields, hint := mechanismFields(r.Mechanism)
 
 	type presence struct {
 		field string
@@ -288,7 +288,7 @@ func (r *RestartBlock) validate(isSelf bool) []ValidationError {
 		if !p.set {
 			continue
 		}
-		if _, ok := allowed_fields[p.field]; !ok {
+		if _, ok := allowedFields[p.field]; !ok {
 			errs = append(errs, ValidationError{
 				Field:   "restart." + p.field,
 				Message: fmt.Sprintf("field does not belong to mechanism %q", r.Mechanism),
@@ -329,6 +329,24 @@ func (r *RestartBlock) validate(isSelf bool) []ValidationError {
 				Hint:    "omit the field to use the default of 75 (EX_TEMPFAIL)",
 			})
 		}
+	default:
+		// Self-managed daemons (iris itself) MUST use exit_code. Any other
+		// mechanism would attempt to restart iris mid-handler (launchctl
+		// kickstart on iris's own label, kill -SIGTERM on iris's own pid,
+		// arbitrary exec spawning a launcher that may racefully replace iris).
+		// The response-flush + lock-release + delayed-exit choreography in
+		// reload.go's self path is only correct for exit_code. Reject anything
+		// else at parse time so the operator sees the error before the verb
+		// runs.
+		if isSelf {
+			errs = append(errs, ValidationError{
+				Field:   "restart.mechanism",
+				Message: fmt.Sprintf("self-managed daemons must use exit_code (got %q)", r.Mechanism),
+				Hint:    `set mechanism = "exit_code"; the LaunchAgent KeepAlive respawns iris from the new binary`,
+			})
+		}
+	}
+	switch r.Mechanism {
 	case MechanismSignal:
 		if r.Signal != "" {
 			if _, ok := SignalByName(r.Signal); !ok {
@@ -385,6 +403,22 @@ func (h *HookBlock) validate(blockName string) []ValidationError {
 			Field:   blockName + ".timeout_seconds",
 			Message: "must be non-negative",
 		})
+	}
+	if h.WorkingDirectory != "" && filepath.IsAbs(h.WorkingDirectory) {
+		errs = append(errs, ValidationError{
+			Field:   blockName + ".working_directory",
+			Message: "must be relative to the source repo root",
+			Hint:    "use a path like \".\" or \"subdir\", not an absolute path",
+		})
+	}
+	if h.WorkingDirectory != "" {
+		clean := filepath.Clean(h.WorkingDirectory)
+		if clean == ".." || strings.HasPrefix(clean, "../") {
+			errs = append(errs, ValidationError{
+				Field:   blockName + ".working_directory",
+				Message: "must not escape the source repo root",
+			})
+		}
 	}
 	return errs
 }

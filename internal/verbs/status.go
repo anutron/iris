@@ -51,10 +51,6 @@ func Status(ctx context.Context, client *argus.Client, in StatusInput) (*StatusR
 		for _, e := range verrs {
 			warnings = append(warnings, e.Error())
 		}
-		// On parse failure doc may be non-nil but unusable; null it out.
-		if doc == nil {
-			// already nil — fine
-		}
 	}
 	var cfg *config.IrisToml
 	if len(verrs) == 0 && doc != nil {

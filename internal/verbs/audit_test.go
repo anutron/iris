@@ -1,6 +1,8 @@
 package verbs
 
 import (
+	"log/slog"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -175,4 +177,35 @@ func TestLatestForRepo(t *testing.T) {
 	if got != nil {
 		t.Fatalf("expected nil for unseen repo, got %+v", got)
 	}
+}
+
+// TestAppendAuditBestEffort_SwallowsFailure verifies that audit-write
+// failures do not crash the caller — the spec scenario "Audit-write failure
+// does not crash the reload" requires best-effort semantics.
+func TestAppendAuditBestEffort_SwallowsFailure(t *testing.T) {
+	// Point IRIS_AUDIT_DIR at a path under a non-writable parent so the
+	// audit dir cannot be created. The function must log and return cleanly.
+	parent := t.TempDir()
+	readonly := filepath.Join(parent, "readonly")
+	if err := os.Mkdir(readonly, 0o500); err != nil {
+		t.Fatalf("mkdir readonly: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(readonly, 0o700) })
+	t.Setenv("IRIS_AUDIT_DIR", filepath.Join(readonly, "iris-audit"))
+
+	// Nil logger path: the helper should default to slog.Default() and not panic.
+	AppendAuditBestEffort(AuditEntry{
+		Timestamp:        time.Now(),
+		TargetSourceRepo: "/x",
+		Outcome:          "success",
+	}, nil)
+
+	// Non-nil logger path: also best-effort; capture nothing, just assert
+	// it doesn't panic.
+	AppendAuditBestEffort(AuditEntry{
+		Timestamp:        time.Now(),
+		TargetSourceRepo: "/x",
+		Outcome:          "failure",
+		FailureReason:    "test",
+	}, slog.Default())
 }

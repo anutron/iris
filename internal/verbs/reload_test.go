@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/anutron/iris/internal/argus"
+	"github.com/anutron/iris/internal/config"
 )
 
 // victim is a long-running child process the signal-mechanism test sends
@@ -625,7 +626,31 @@ func TestReload_PathAndAllowlistEnforcedForCross(t *testing.T) {
 	}
 }
 
-// Empty validation-error string formatter test to keep linters happy.
 func TestJoinValidationErrors(t *testing.T) {
-	_ = fmt.Sprintf("%v", time.Now())
+	t.Run("empty input", func(t *testing.T) {
+		if got := joinValidationErrors(nil); got != "" {
+			t.Fatalf("expected empty string for nil input, got %q", got)
+		}
+	})
+	t.Run("single error", func(t *testing.T) {
+		got := joinValidationErrors([]config.ValidationError{{Field: "build.command", Message: "missing"}})
+		if got != "build.command: missing" {
+			t.Fatalf("unexpected single-error format: %q", got)
+		}
+	})
+	t.Run("multiple errors joined with semicolons", func(t *testing.T) {
+		got := joinValidationErrors([]config.ValidationError{
+			{Field: "build.command", Message: "missing"},
+			{Field: "restart.mechanism", Message: "unknown"},
+		})
+		if !strings.Contains(got, "build.command: missing") {
+			t.Fatalf("missing first error: %q", got)
+		}
+		if !strings.Contains(got, "restart.mechanism: unknown") {
+			t.Fatalf("missing second error: %q", got)
+		}
+		if !strings.Contains(got, "; ") {
+			t.Fatalf("missing separator: %q", got)
+		}
+	})
 }

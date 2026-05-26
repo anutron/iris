@@ -535,8 +535,28 @@ func runArgv(ctx context.Context, timeout time.Duration, name string, args ...st
 		defer cancel()
 	}
 	cmd := exec.CommandContext(ctx, name, args...)
-	out, err := cmd.CombinedOutput()
-	return string(out), err
+	// Put the child in its own process group so a timeout-kill propagates to
+	// any grandchildren (e.g. a launchctl that forks, an exec script that
+	// spawns helpers). Mirrors runBuildBlock and runHook.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+
+	var buf bytes.Buffer
+	cmd.Stdout = &buf
+	cmd.Stderr = &buf
+
+	if err := cmd.Start(); err != nil {
+		return "", err
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	select {
+	case err := <-done:
+		return buf.String(), err
+	case <-ctx.Done():
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		<-done
+		return buf.String(), ctx.Err()
+	}
 }
 
 // scheduleSelfExit fires os.Exit(code) from a deferred goroutine so the

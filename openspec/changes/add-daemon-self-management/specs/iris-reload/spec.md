@@ -52,6 +52,11 @@ Before acquiring the lock or performing any mutation, `iris:reload` SHALL run pr
 - **WHEN** `.iris.toml` declares `[restart] mechanism = "exit_code"` but the resolved source repo is NOT iris's own deployed source repo
 - **THEN** iris returns a structured error stating that `exit_code` is a self-only mechanism
 
+#### Scenario: Refuses non-exit_code mechanism for self-reload
+
+- **WHEN** `.iris.toml` declares `[restart] mechanism` other than `exit_code` (e.g. `launchagent`, `signal`, `exec`, `none`) AND the resolved source repo IS iris's own deployed source repo
+- **THEN** iris returns a structured error stating that self-managed daemons must use `exit_code` (the response-flush + lock-release + delayed-exit choreography is only correct for exit_code)
+
 #### Scenario: Refuses zero exit_code
 
 - **WHEN** `.iris.toml` declares `[restart] mechanism = "exit_code"` with `code = 0`

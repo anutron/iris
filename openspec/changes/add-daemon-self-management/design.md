@@ -294,7 +294,7 @@ Reads `~/.iris/reload-history.jsonl` and projects the managed systems iris has t
 - **Input:** no arguments (just lists everything iris has seen).
 - **Behavior:** reads the audit log, dedupes by `target_source_repo`, returns a list of `{ source_repo, last_reload_at, last_outcome, last_mode, last_pre_pull_sha, last_post_pull_sha, total_reload_count, total_failure_count }`. Sorted by `last_reload_at` descending.
 - **MCP shape:** `iris_ls { limit?, since? }`. Optional limit (default 50) and since-timestamp filter.
-- **CLI shape:** `iris ls [--limit=N] [--since=DURATION]`.
+- **CLI shape:** `iris ls [--limit=N] [--since=RFC3339-TIMESTAMP]`.
 - **Empty case.** If `~/.iris/reload-history.jsonl` does not exist, returns an empty list with a structured warning ("no reloads recorded yet").
 
 ### `iris:status`
