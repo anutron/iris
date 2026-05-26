@@ -32,6 +32,9 @@ func newRootCmd() *cobra.Command {
 	root.AddCommand(newGHPRMergeCmd())
 	root.AddCommand(newRunBuildCmd())
 	root.AddCommand(newCompleteTaskCmd())
+	root.AddCommand(newReloadCmd())
+	root.AddCommand(newValidateConfigCmd())
+	root.AddCommand(newLsCmd())
 	return root
 }
 

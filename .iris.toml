@@ -1,0 +1,8 @@
+schema_version = 1
+default_branch = "main"
+
+[build]
+command = ["make", "build"]
+
+[restart]
+mechanism = "exit_code"

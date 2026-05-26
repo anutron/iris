@@ -75,6 +75,10 @@ func Start(ctx context.Context, cfg *config.Config, log *slog.Logger) (*Daemon, 
 	mcpSrv.RegisterHandler("iris_gh_pr_merge", mcp.NewGHPRMergeHandler(client))
 	mcpSrv.RegisterHandler("iris_run_build", mcp.NewRunBuildHandler(client))
 	mcpSrv.RegisterHandler("iris_complete_task", mcp.NewCompleteTaskHandler(client))
+	mcpSrv.RegisterHandler("iris_reload", mcp.NewReloadHandler(client))
+	mcpSrv.RegisterHandler("iris_validate_config", mcp.NewValidateConfigHandler(client))
+	mcpSrv.RegisterHandler("iris_ls", mcp.NewLsHandler())
+	mcpSrv.RegisterHandler("iris_status", mcp.NewStatusHandler(client))
 
 	registrar := mcp.NewRegistrar(client, mcpSrv.CallbackBaseURL(), auth, log)
 	registrar.SetHeartbeat(cfg.MCPHeartbeat)
@@ -244,6 +248,52 @@ func toolDefinitions() []mcp.ToolDefinition {
 					"merge_strategy": map[string]any{"type": "string", "enum": []string{"no_ff", "ff_only"}, "default": "no_ff", "description": "Merge strategy used by the embedded merge_to_master step."},
 				},
 				"required": []string{"task_id"},
+			},
+		},
+		{
+			Name:        "iris_reload",
+			Description: "Live-upgrade an iris-managed daemon. Pulls the default branch, runs the project-declared build, then dispatches to the project-declared restart mechanism in `.iris.toml`. Self-vs-cross detection is automatic. task_id and path are mutually exclusive; both omitted targets iris itself.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"task_id":         map[string]any{"type": "string", "description": "(optional) Argus task ID. Iris resolves the source repo from this. Omit for self-target."},
+					"path":            map[string]any{"type": "string", "description": "(optional) Absolute filesystem path to a source repo. Omit for self-target."},
+					"no_pull":         map[string]any{"type": "boolean", "description": "Skip the git fetch + ff-merge and build from current HEAD (default false)."},
+					"timeout_seconds": map[string]any{"type": "integer", "description": "(optional) Per-step timeout override in seconds."},
+				},
+			},
+		},
+		{
+			Name:        "iris_validate_config",
+			Description: "Parse and cross-validate a `.iris.toml` file at the resolved source repo. No side effects (no pull, build, restart, or audit write). Returns valid/invalid plus structured errors with line numbers and remediation hints.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"task_id": map[string]any{"type": "string", "description": "(optional) Argus task ID. Omit for self-target."},
+					"path":    map[string]any{"type": "string", "description": "(optional) Absolute filesystem path. Omit for self-target."},
+				},
+			},
+		},
+		{
+			Name:        "iris_ls",
+			Description: "List managed systems iris has reloaded recently. Reads `~/.iris/reload-history.jsonl` and projects per-system aggregates (last_reload_at, last_outcome, total_reload_count, total_failure_count). No registry; the audit log is the source of truth.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"limit": map[string]any{"type": "integer", "description": "(optional) Maximum number of entries (default 50)."},
+					"since": map[string]any{"type": "string", "description": "(optional) RFC3339 timestamp; exclude entries before this time."},
+				},
+			},
+		},
+		{
+			Name:        "iris_status",
+			Description: "For one managed system, report the parsed `.iris.toml`, current git state (HEAD, default branch, origin SHA, working-tree-clean), and the most recent reload outcome from the audit log. No side effects. task_id and path are mutually exclusive; both omitted targets iris itself.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"task_id": map[string]any{"type": "string", "description": "(optional) Argus task ID. Omit for self-target."},
+					"path":    map[string]any{"type": "string", "description": "(optional) Absolute filesystem path. Omit for self-target."},
+				},
 			},
 		},
 	}
