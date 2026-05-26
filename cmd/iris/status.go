@@ -32,19 +32,20 @@ func newStatusCmd() *cobra.Command {
 
 			fmt.Fprintf(cmd.OutOrStdout(), "state_dir:  %s\n", cfg.StateDir)
 			fmt.Fprintf(cmd.OutOrStdout(), "token_file: %s", cfg.TokenPath())
-			switch _, statErr := os.Stat(cfg.TokenPath()); {
-			case os.IsNotExist(statErr):
+			// Distinguish missing / unreadable (permission denied, directory,
+			// etc.) / empty-or-whitespace / present. Reading the file directly
+			// avoids LoadToken's wrapped-error path conflating unrelated I/O
+			// failures with "empty".
+			data, readErr := os.ReadFile(cfg.TokenPath())
+			switch {
+			case os.IsNotExist(readErr):
 				fmt.Fprintln(cmd.OutOrStdout(), "  (MISSING – run setup.sh)")
-			case statErr != nil:
-				fmt.Fprintf(cmd.OutOrStdout(), "  (stat error: %v)\n", statErr)
+			case readErr != nil:
+				fmt.Fprintf(cmd.OutOrStdout(), "  (read error: %v)\n", readErr)
+			case strings.TrimSpace(string(data)) == "":
+				fmt.Fprintln(cmd.OutOrStdout(), "  (EMPTY OR WHITESPACE – re-run setup.sh)")
 			default:
-				// File exists; LoadToken trims whitespace and rejects
-				// empties — surface that distinction to the operator.
-				if _, err := cfg.LoadToken(); err != nil {
-					fmt.Fprintln(cmd.OutOrStdout(), "  (EMPTY OR WHITESPACE – re-run setup.sh)")
-				} else {
-					fmt.Fprintln(cmd.OutOrStdout(), "  (present)")
-				}
+				fmt.Fprintln(cmd.OutOrStdout(), "  (present)")
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "argus_sock: %s\n", cfg.ArgusSocketPath)
 			return nil

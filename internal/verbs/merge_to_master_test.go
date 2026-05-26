@@ -86,6 +86,17 @@ func gitRunner(t *testing.T) func(dir string, args ...string) string {
 	}
 }
 
+// headSHA reads `git rev-parse HEAD` in dir. Used by negative-path tests
+// to assert the verb performed no git mutation.
+func headSHA(t *testing.T, dir string) string {
+	t.Helper()
+	out, err := exec.Command("git", "-C", dir, "rev-parse", "HEAD").Output()
+	if err != nil {
+		t.Fatalf("rev-parse HEAD in %s: %v", dir, err)
+	}
+	return strings.TrimSpace(string(out))
+}
+
 // setupRepoWithWorktree creates a bare origin, a clone, and an
 // argus/<slug> branch checked out as a linked worktree with its own commit.
 // Sets origin/HEAD on the source clone so verbs.DefaultBranch succeeds.
@@ -132,12 +143,16 @@ func TestMergeToMaster_RefusesNonArgusBranch(t *testing.T) {
 	g(src, "worktree", "add", wt, "feature/something")
 
 	client := stubArgus(t, src, wt)
+	before := headSHA(t, src)
 	_, err := MergeToMaster(context.Background(), client, "task-1", MergeOptions{NoFF: true})
 	if err == nil {
 		t.Fatal("expected error for non-argus branch, got nil")
 	}
 	if !strings.Contains(err.Error(), "non-argus branch") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+	if after := headSHA(t, src); after != before {
+		t.Fatalf("expected source repo HEAD unchanged on refusal: before=%s after=%s", before, after)
 	}
 }
 
@@ -241,12 +256,16 @@ func TestMergeToMaster_RefusesDefaultBranchIntoItself(t *testing.T) {
 	g(src, "worktree", "add", wt, "main")
 
 	client := stubArgus(t, src, wt)
+	before := headSHA(t, src)
 	_, err := MergeToMaster(context.Background(), client, "task-main", MergeOptions{NoFF: true})
 	if err == nil {
 		t.Fatal("expected error refusing main into main, got nil")
 	}
 	if !strings.Contains(err.Error(), "main") && !strings.Contains(err.Error(), "protected") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+	if after := headSHA(t, src); after != before {
+		t.Fatalf("expected source repo HEAD unchanged on refusal: before=%s after=%s", before, after)
 	}
 }
 
@@ -291,6 +310,9 @@ func TestMergeToMaster_CustomMessage(t *testing.T) {
 }
 
 // Host-bridge scenario: "Verb refuses an unknown task ID."
+// No git mutation happens because there's no resolved repo, but assert the
+// "no mutation" contract is preserved by checking the client never reaches
+// the git layer (a 404 from stubArgusTaskNotFound is enough).
 func TestMergeToMaster_RefusesUnknownTaskID(t *testing.T) {
 	client := stubArgusTaskNotFound(t)
 	_, err := MergeToMaster(context.Background(), client, "ghost-task", MergeOptions{NoFF: true})
@@ -327,6 +349,7 @@ func TestMergeToMaster_RefusesNonAllowlistedRepo(t *testing.T) {
 	t.Cleanup(srv.Close)
 	client := argus.New(srv.URL, "stub-token")
 
+	before := headSHA(t, src)
 	_, err := MergeToMaster(context.Background(), client, "task-denied", MergeOptions{NoFF: true})
 	if err == nil {
 		t.Fatal("expected allowlist refusal, got nil")
@@ -339,6 +362,9 @@ func TestMergeToMaster_RefusesNonAllowlistedRepo(t *testing.T) {
 	wantSrc, _ := filepath.EvalSymlinks(src)
 	if !strings.Contains(err.Error(), wantSrc) {
 		t.Fatalf("expected error to name rejected path %q, got: %v", wantSrc, err)
+	}
+	if after := headSHA(t, src); after != before {
+		t.Fatalf("expected source repo HEAD unchanged on refusal: before=%s after=%s", before, after)
 	}
 }
 

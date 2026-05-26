@@ -101,6 +101,12 @@ The daemon SHALL detect argus restarts (pid-file mtime change or socket-ping fai
 - **WHEN** two restart signals (pid-mtime AND ping-failure, or watcher AND heartbeat-404) fire concurrently
 - **THEN** at most one recovery routine runs at a time; subsequent triggers while a recovery is in flight are coalesced
 
+#### Scenario: Recovery sub-step failure surfaces as LinkDown
+
+- **WHEN** any sub-step of recovery fails (ports query over the unix socket, or ForceReregister against argus)
+- **THEN** the link transitions to `LinkDown`, the wrapped error is stored as `LinkLastError`, and the daemon logs the failing stage
+- **AND** subsequent watcher signals retry the recovery
+
 ### Requirement: Direct CLI invocation mirrors MCP behavior
 
 For every verb, the `iris` CLI SHALL expose a subcommand that calls the same underlying Go function as the MCP handler, against the live host shell, with the same argument contract.
