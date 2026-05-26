@@ -40,6 +40,7 @@ iris start --foreground            Run the daemon (called by the LaunchAgent).
 iris stop                          SIGTERM to the running daemon.
 iris status                        Daemon health, token validity, registered tools.
 iris merge-to-master <task-id>     Direct verb invocation against the host shell.
+iris push <task-id>                Push the task's branch to origin (host-side; --force-with-lease).
 ```
 
 Direct invocation bypasses argus + MCP and calls the same Go function the MCP handler does — useful when debugging.

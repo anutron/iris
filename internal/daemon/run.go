@@ -70,6 +70,7 @@ func Start(ctx context.Context, cfg *config.Config, log *slog.Logger) (*Daemon, 
 
 	// Register handlers for every verb iris exposes.
 	mcpSrv.RegisterHandler("iris_merge_to_master", mcp.NewMergeToMasterHandler(client))
+	mcpSrv.RegisterHandler("iris_push", mcp.NewPushHandler(client))
 
 	registrar := mcp.NewRegistrar(client, mcpSrv.CallbackBaseURL(), auth, log)
 	registrar.SetHeartbeat(cfg.MCPHeartbeat)
@@ -174,6 +175,18 @@ func toolDefinitions() []mcp.ToolDefinition {
 					"task_id": map[string]any{"type": "string", "description": "Argus task ID. Iris resolves the source repo and branch from this."},
 					"no_ff":   map[string]any{"type": "boolean", "description": "Pass --no-ff to git merge (default true). When false, requires fast-forward."},
 					"message": map[string]any{"type": "string", "description": "(optional) Merge commit message (-m <message>)."},
+				},
+				"required": []string{"task_id"},
+			},
+		},
+		{
+			Name:        "iris_push",
+			Description: "Push the argus task's branch to origin from the canonical source repo. Resolves source repo and branch from task_id. Refuses to push the default branch. Returns the remote SHA.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"task_id":          map[string]any{"type": "string", "description": "Argus task ID. Iris resolves the source repo and branch from this."},
+					"force_with_lease": map[string]any{"type": "boolean", "description": "Pass --force-with-lease to git push (default false). Safe form of --force; checks the upstream matches."},
 				},
 				"required": []string{"task_id"},
 			},
