@@ -34,6 +34,12 @@ func newStopCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("iris: find process %d: %w", pid, err)
 			}
+			// Liveness probe: on Unix, signal 0 reports reachability without
+			// delivering anything. Refuses to SIGTERM a recycled PID that
+			// no longer belongs to iris.
+			if err := proc.Signal(syscall.Signal(0)); err != nil {
+				return fmt.Errorf("iris: pidfile %s names pid %d, but no such process is reachable (stale pidfile; iris likely crashed without cleanup)", cfg.PIDPath(), pid)
+			}
 			if err := proc.Signal(syscall.SIGTERM); err != nil {
 				return fmt.Errorf("iris: SIGTERM %d: %w", pid, err)
 			}

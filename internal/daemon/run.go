@@ -24,6 +24,7 @@ type Daemon struct {
 	Ports     *argus.PortsClient
 	MCPServer *mcp.Server
 	Registrar *mcp.Registrar
+	Watcher   *argus.Watcher
 }
 
 // Start brings every subsystem up and returns the live Daemon.
@@ -79,6 +80,21 @@ func Start(ctx context.Context, cfg *config.Config, log *slog.Logger) (*Daemon, 
 		return nil, fmt.Errorf("iris: register tools: %w", err)
 	}
 
+	// Wire recovery: the watcher fires on pid-mtime change or socket-ping
+	// failure; the registrar heartbeat fires the same callback as a passive
+	// fallback on 404 responses.
+	recover := argus.RecoverFunc(ports, client, registrar, log)
+	registrar.SetOnHeartbeat404(recover)
+
+	watcher := &argus.Watcher{
+		PidPath:   cfg.ArgusPIDPath,
+		Ping:      ports.Ping,
+		Interval:  argus.DefaultWatcherInterval,
+		OnRestart: recover,
+		Log:       log,
+	}
+	watcher.Start(ctx)
+
 	log.Info("iris ready",
 		"argus_base_url", argusBaseURL,
 		"mcp_addr", mcpSrv.Addr(),
@@ -87,7 +103,7 @@ func Start(ctx context.Context, cfg *config.Config, log *slog.Logger) (*Daemon, 
 
 	return &Daemon{
 		Cfg: cfg, Log: log, Argus: client, Ports: ports,
-		MCPServer: mcpSrv, Registrar: registrar,
+		MCPServer: mcpSrv, Registrar: registrar, Watcher: watcher,
 	}, nil
 }
 
@@ -96,6 +112,13 @@ func Start(ctx context.Context, cfg *config.Config, log *slog.Logger) (*Daemon, 
 func (d *Daemon) Stop(ctx context.Context) {
 	if d == nil {
 		return
+	}
+	// Stop the watcher first: once it can no longer fire OnRestart, no
+	// further ForceReregister calls race with the registrar's own Stop.
+	if d.Watcher != nil {
+		stopCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		d.Watcher.Stop(stopCtx)
+		cancel()
 	}
 	if d.Registrar != nil {
 		unregCtx, cancel := context.WithTimeout(ctx, 10*time.Second)

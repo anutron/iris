@@ -40,7 +40,21 @@ func NewMergeToMasterHandler(client *argus.Client) Handler {
 			return ErrorResponse(fmt.Sprintf("iris:merge_to_master: %v", err))
 		}
 
-		body, err := json.MarshalIndent(result, "", "  ")
+		// Don't echo the source-repo absolute path back to the sandboxed
+		// agent. The agent supplied a task_id; iris resolved the path
+		// internally; the path leaves iris only via the daemon log file.
+		response := struct {
+			SHA           string `json:"sha"`
+			DefaultBranch string `json:"default_branch"`
+			TaskBranch    string `json:"task_branch"`
+			Log           string `json:"log"`
+		}{
+			SHA:           result.SHA,
+			DefaultBranch: result.DefaultBranch,
+			TaskBranch:    result.TaskBranch,
+			Log:           result.Log,
+		}
+		body, err := json.MarshalIndent(response, "", "  ")
 		if err != nil {
 			return ErrorResponse(fmt.Sprintf("iris:merge_to_master: encode result: %v", err))
 		}

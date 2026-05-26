@@ -55,7 +55,10 @@ func newMergeToMasterCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&noFF, "no-ff", true, "pass --no-ff to git merge")
-	cmd.Flags().BoolVar(&ffOnly, "ff-only", false, "require fast-forward (overrides --no-ff)")
+	cmd.Flags().BoolVar(&ffOnly, "ff-only", false, "require fast-forward (cannot be combined with --no-ff)")
 	cmd.Flags().StringVarP(&message, "message", "m", "", "merge commit message (-m)")
+	// --no-ff defaults to true; explicitly passing both is contradictory.
+	// Cobra surfaces the conflict at parse time instead of silently picking one.
+	cmd.MarkFlagsMutuallyExclusive("no-ff", "ff-only")
 	return cmd
 }

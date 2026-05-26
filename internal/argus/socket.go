@@ -28,6 +28,10 @@ type portsResp struct {
 	APIPort int
 }
 
+type pongResp struct {
+	OK bool
+}
+
 type emptyArgs struct{}
 
 // Ports calls Daemon.Ports over the socket and returns (apiPort, mcpPort).
@@ -37,6 +41,20 @@ func (c *PortsClient) Ports(ctx context.Context) (int, int, error) {
 		return 0, 0, fmt.Errorf("argus socket Ports: %w", err)
 	}
 	return resp.APIPort, resp.MCPPort, nil
+}
+
+// Ping calls Daemon.Ping over the socket. A nil return value means the
+// daemon answered the call within socketCallTimeout. The watcher treats
+// any non-nil error as a restart signal.
+func (c *PortsClient) Ping(ctx context.Context) error {
+	var resp pongResp
+	if err := c.call(ctx, "Daemon.Ping", &emptyArgs{}, &resp); err != nil {
+		return fmt.Errorf("argus socket Ping: %w", err)
+	}
+	if !resp.OK {
+		return fmt.Errorf("argus socket Ping: daemon returned OK=false")
+	}
+	return nil
 }
 
 func (c *PortsClient) call(ctx context.Context, method string, args, reply any) error {

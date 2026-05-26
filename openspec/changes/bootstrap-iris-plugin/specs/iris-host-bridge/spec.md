@@ -28,24 +28,36 @@ The daemon SHALL authenticate every outbound request to argus with the bearer to
 - **WHEN** an HTTP POST to `/mcp/<tool-name>` arrives with a missing or incorrect `Authorization` header
 - **THEN** the daemon returns HTTP 401 and does NOT invoke the tool handler
 
-#### Scenario: Token revocation disables all verbs
+#### Scenario: Token revocation removes verbs from agent reach
 
+- **GIVEN** argusd is the only authenticated caller of iris's MCP callbacks
 - **WHEN** argusd revokes the iris scope token
-- **THEN** every subsequent MCP callback from argus to iris fails authentication and every `iris:` tool call from a sandboxed agent fails
+- **THEN** argus garbage-collects iris's tool registrations and stops dispatching `iris:*` tool calls to iris from any sandboxed agent
+- **AND** iris's own outbound calls to argus (heartbeat, GetTask, ListProjects) return 401, surfacing the revocation to the daemon log so the operator can re-mint and restart
+
+### Requirement: Inbound callback body size limit
+
+The MCP callback handler SHALL bound the inbound request body so a confused or buggy caller cannot exhaust daemon memory.
+
+#### Scenario: Oversized callback body is rejected
+
+- **WHEN** a POST to `/mcp/<tool-name>` arrives with a body larger than 1 MiB
+- **THEN** the handler returns an HTTP error and does NOT invoke the tool handler
 
 ### Requirement: Source-repo path resolution from `task_id`
 
-Every verb SHALL resolve the canonical source repo by calling argus's `GET /api/tasks/:id` to read the worktree path and then deriving the source repo via `git -C <worktree> rev-parse --git-common-dir`. Verbs SHALL NOT accept agent-supplied filesystem paths.
+Every verb SHALL resolve the canonical source repo by calling argus's `GET /api/tasks/:id` to read the worktree path and then deriving the source repo via `git -C <worktree> rev-parse --git-common-dir`. Verbs SHALL NOT accept agent-supplied filesystem paths. The resolved path SHALL be canonicalized (symlinks resolved, absolute) before any comparison.
 
 #### Scenario: Verb refuses an unknown task ID
 
 - **WHEN** a verb is invoked with a `task_id` that argus does not recognize (404)
-- **THEN** the verb returns a structured error and performs no filesystem mutation
+- **THEN** the verb returns a structured error that names the task ID and performs no filesystem mutation
 
 #### Scenario: Verb refuses a source repo outside the project allowlist
 
-- **WHEN** the resolved source-repo path is not present in argus's project list
-- **THEN** the verb returns a structured error naming the rejected path
+- **GIVEN** argus exposes `GET /api/projects/full` returning the operator-curated project list
+- **WHEN** the resolved source-repo path does not match any project's canonicalized `path`
+- **THEN** the verb returns a structured error naming the rejected path and performs no filesystem mutation
 
 ### Requirement: Per-source-repo mutex on git operations
 
@@ -68,7 +80,26 @@ The daemon SHALL register each verb with argus via `POST /api/mcp/tools` on star
 #### Scenario: Tools unregister on shutdown
 
 - **WHEN** the daemon receives SIGTERM
-- **THEN** the daemon DELETEs every registered tool before exiting (bounded by a 10s deadline so a stuck argus does not block shutdown)
+- **THEN** the daemon DELETEs every registered tool before exiting (the unregister loop is bounded by a 10s deadline so a stuck argus does not block shutdown)
+
+### Requirement: Argus-restart recovery
+
+The daemon SHALL detect argus restarts (pid-file mtime change or socket-ping failure) and re-discover argus's dynamic REST port, then force-reregister every tool, without requiring an iris restart.
+
+#### Scenario: Watcher detects pid-mtime change
+
+- **WHEN** `~/.argus/daemon.pid` mtime changes
+- **THEN** the daemon enters `LinkRecovering`, re-queries `Daemon.Ports` over the unix socket, updates the argus client's base URL, force-reregisters every tool, and transitions back to `LinkHealthy`
+
+#### Scenario: Heartbeat 404 triggers recovery
+
+- **WHEN** a heartbeat re-POST returns HTTP 404 (argus garbage-collected the registration, e.g., because argus restarted without iris noticing)
+- **THEN** the registrar invokes the recovery callback as a passive fallback, restoring the link to `LinkHealthy` on success
+
+#### Scenario: Recovery is single-flight
+
+- **WHEN** two restart signals (pid-mtime AND ping-failure, or watcher AND heartbeat-404) fire concurrently
+- **THEN** at most one recovery routine runs at a time; subsequent triggers while a recovery is in flight are coalesced
 
 ### Requirement: Direct CLI invocation mirrors MCP behavior
 

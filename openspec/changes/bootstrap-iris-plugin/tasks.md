@@ -57,6 +57,12 @@
 - [ ] 6.4 Open PR for the bootstrap commit
 - [ ] 6.5 (Deferred to follow-up) dogfood `iris:merge_to_master` against a real argus task once setup.sh has been run
 
-## 7. Followup OpenSpec changes (NOT in this change)
+## 7. Followups (documented, not gated on this change)
 
-- [ ] 7.1 Land each remaining v1 verb as its own change folder: `iris-push`, `iris-gh-pr-create`, `iris-gh-pr-merge`, `iris-run-build`, `iris-complete-task`
+These verbs are intentionally out of scope for the bootstrap. Each lands as its own OpenSpec change folder when implemented; they are listed here so a reader landing on this change folder sees the roadmap without scrolling design.md.
+
+- `iris-push`
+- `iris-gh-pr-create`
+- `iris-gh-pr-merge`
+- `iris-run-build`
+- `iris-complete-task`

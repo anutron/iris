@@ -23,10 +23,10 @@ type ResolvedRepo struct {
 	Branch       string // current branch of the worktree (e.g., "argus/handoff-...")
 }
 
-// Resolve looks up the argus task by ID, then derives the canonical
-// source-repo path from the worktree via `git rev-parse --git-common-dir`.
-// Verbs MUST call this — they MUST NOT accept agent-supplied filesystem
-// paths.
+// Resolve looks up the argus task by ID, derives the canonical source-repo
+// path from the worktree, and verifies the source repo is on argus's
+// project allowlist. Verbs MUST call this — they MUST NOT accept
+// agent-supplied filesystem paths.
 func Resolve(ctx context.Context, client *argus.Client, taskID string) (*ResolvedRepo, error) {
 	task, err := client.GetTask(ctx, taskID)
 	if err != nil {
@@ -41,6 +41,10 @@ func Resolve(ctx context.Context, client *argus.Client, taskID string) (*Resolve
 		return nil, fmt.Errorf("derive source repo from %s: %w", task.WorktreePath, err)
 	}
 
+	if err := assertAllowlisted(ctx, client, srcRepo); err != nil {
+		return nil, err
+	}
+
 	branch, err := currentBranch(ctx, task.WorktreePath)
 	if err != nil {
 		return nil, fmt.Errorf("read current branch of %s: %w", task.WorktreePath, err)
@@ -52,6 +56,36 @@ func Resolve(ctx context.Context, client *argus.Client, taskID string) (*Resolve
 		SourceRepo:   srcRepo,
 		Branch:       branch,
 	}, nil
+}
+
+// assertAllowlisted checks that srcRepo matches an argus project's path.
+// The argus project list is the source of truth for what iris is allowed
+// to operate on; the comparison resolves symlinks on both sides so /var
+// and /private/var (macOS) compare equal.
+func assertAllowlisted(ctx context.Context, client *argus.Client, srcRepo string) error {
+	projects, err := client.ListProjects(ctx)
+	if err != nil {
+		return fmt.Errorf("list argus projects: %w", err)
+	}
+	canonical := canonicalize(srcRepo)
+	for _, p := range projects {
+		if canonicalize(p.Path) == canonical {
+			return nil
+		}
+	}
+	return fmt.Errorf("source repo %s is not in argus's project allowlist", srcRepo)
+}
+
+func canonicalize(path string) string {
+	resolved, err := filepath.EvalSymlinks(path)
+	if err == nil {
+		path = resolved
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return path
+	}
+	return abs
 }
 
 // sourceRepoFromWorktree runs `git -C <worktree> rev-parse --git-common-dir`
@@ -91,16 +125,20 @@ func currentBranch(ctx context.Context, worktreePath string) (string, error) {
 	return strings.TrimSpace(out), nil
 }
 
-// DefaultBranch returns "main" or "master" by reading
-// `git symbolic-ref refs/remotes/origin/HEAD` in the source repo.
-// Falls back to "main" if the symbolic ref is not set.
+// DefaultBranch returns the default branch by reading
+// `git symbolic-ref refs/remotes/origin/HEAD` in the source repo. Iris
+// refuses to guess: an unset origin/HEAD returns an actionable error so
+// the operator runs `git remote set-head origin --auto` rather than
+// silently merging into a branch literally named "main" on a master repo.
 func DefaultBranch(ctx context.Context, sourceRepo string) (string, error) {
 	out, err := runGit(ctx, sourceRepo, "symbolic-ref", "--short", "refs/remotes/origin/HEAD")
 	if err != nil {
-		// origin/HEAD isn't always set; default to "main".
-		return "main", nil
+		return "", fmt.Errorf(
+			"%s: origin/HEAD is not set; run `git -C %s remote set-head origin --auto` to detect the default branch (iris refuses to guess)",
+			sourceRepo, sourceRepo,
+		)
 	}
-	ref := strings.TrimSpace(out) // e.g., "origin/main"
+	ref := strings.TrimSpace(out)
 	if i := strings.IndexByte(ref, '/'); i >= 0 {
 		return ref[i+1:], nil
 	}

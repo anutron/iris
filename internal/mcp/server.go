@@ -121,6 +121,11 @@ func (s *Server) handleCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Bound the body so a confused argus cannot OOM the daemon.
+	// Verb inputs are tiny — task_id, a few flags, an optional commit
+	// message. 1 MiB is two orders of magnitude over what any verb needs.
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+
 	var env CallbackEnvelope
 	if err := json.NewDecoder(r.Body).Decode(&env); err != nil {
 		writeJSON(w, http.StatusBadRequest, ErrorResponse("iris: invalid envelope: "+err.Error()))

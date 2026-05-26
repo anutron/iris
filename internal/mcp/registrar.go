@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -36,6 +37,13 @@ type Registrar struct {
 	tools     []ToolDefinition
 	stop      chan struct{}
 	wg        sync.WaitGroup
+
+	// onHeartbeat404 is invoked when the heartbeat re-register POST
+	// returns 404 — argus garbage-collected the registration (typically
+	// because the daemon restarted). The daemon wires this to
+	// argus.RecoverFunc as a passive fallback for the rare case where
+	// the Watcher missed the argus restart signal.
+	onHeartbeat404 func(context.Context)
 }
 
 // NewRegistrar constructs a Registrar. callbackBaseURL is the URL prefix
@@ -59,6 +67,24 @@ func (r *Registrar) SetHeartbeat(d time.Duration) {
 	r.mu.Lock()
 	r.heartbeat = d
 	r.mu.Unlock()
+}
+
+// SetOnHeartbeat404 registers a callback fired when the heartbeat re-POST
+// observes a 404 response from argus. The daemon binds this to
+// argus.RecoverFunc as a passive recovery fallback (the Watcher is the
+// fast path; the heartbeat catches the rare miss).
+func (r *Registrar) SetOnHeartbeat404(fn func(context.Context)) {
+	r.mu.Lock()
+	r.onHeartbeat404 = fn
+	r.mu.Unlock()
+}
+
+// ForceReregister POSTs every registered tool to argus immediately,
+// bypassing the heartbeat ticker. The argus-link recovery routine calls
+// this after argus restarts so the new daemon's tool catalog is
+// repopulated without waiting up to one heartbeat.
+func (r *Registrar) ForceReregister(ctx context.Context) error {
+	return r.registerAll(ctx)
 }
 
 // Add records a tool that should be registered when Start is called.
@@ -104,6 +130,15 @@ func (r *Registrar) Start(ctx context.Context) error {
 			case <-ticker.C:
 				if err := r.registerAll(ctx); err != nil {
 					r.log.Warn("heartbeat re-register failed", "err", err)
+					var httpErr *argus.HTTPError
+					if errors.As(err, &httpErr) && httpErr.StatusCode == 404 {
+						r.mu.Lock()
+						cb := r.onHeartbeat404
+						r.mu.Unlock()
+						if cb != nil {
+							cb(ctx)
+						}
+					}
 				}
 			}
 		}

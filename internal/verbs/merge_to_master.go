@@ -2,8 +2,10 @@ package verbs
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/anutron/iris/internal/argus"
 )
@@ -50,6 +52,20 @@ func MergeToMaster(ctx context.Context, client *argus.Client, taskID string, opt
 	mu := lockSourceRepo(resolved.SourceRepo)
 	defer mu.Unlock()
 
+	// Deferred cleanup: if the caller's context is cancelled mid-merge,
+	// the git process gets killed and MERGE_HEAD may persist. Best-effort
+	// abort with a fresh short context so the source repo lands clean
+	// even when the caller's deadline already elapsed.
+	mergeStarted := false
+	defer func() {
+		if !mergeStarted || ctx.Err() == nil {
+			return
+		}
+		cleanup, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_, _ = runGit(cleanup, resolved.SourceRepo, "merge", "--abort")
+		cancel()
+	}()
+
 	var logBuf strings.Builder
 
 	if out, err := runGit(ctx, resolved.SourceRepo, "fetch", "--all", "--prune"); err != nil {
@@ -81,11 +97,12 @@ func MergeToMaster(ctx context.Context, client *argus.Client, taskID string, opt
 	}
 	mergeArgs = append(mergeArgs, resolved.Branch)
 
+	mergeStarted = true
 	if out, err := runGit(ctx, resolved.SourceRepo, mergeArgs...); err != nil {
+		if errors.Is(ctx.Err(), context.Canceled) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return nil, fmt.Errorf("merge cancelled: %w", ctx.Err())
+		}
 		logBuf.WriteString(out)
-		// Conflict — abort to leave the repo clean. Best-effort: if abort
-		// itself errors (e.g., there was no merge in progress because the
-		// failure was pre-merge), we still surface the original error.
 		if _, abortErr := runGit(ctx, resolved.SourceRepo, "merge", "--abort"); abortErr != nil {
 			return nil, fmt.Errorf("merge failed and abort failed: %w (abort: %v); log:\n%s",
 				err, abortErr, logBuf.String())
@@ -95,6 +112,7 @@ func MergeToMaster(ctx context.Context, client *argus.Client, taskID string, opt
 	} else {
 		logBuf.WriteString(out)
 	}
+	mergeStarted = false // merge completed cleanly; deferred cleanup is a no-op
 
 	sha, err := runGit(ctx, resolved.SourceRepo, "rev-parse", "HEAD")
 	if err != nil {

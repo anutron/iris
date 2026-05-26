@@ -32,10 +32,19 @@ func newStatusCmd() *cobra.Command {
 
 			fmt.Fprintf(cmd.OutOrStdout(), "state_dir:  %s\n", cfg.StateDir)
 			fmt.Fprintf(cmd.OutOrStdout(), "token_file: %s", cfg.TokenPath())
-			if info, err := os.Stat(cfg.TokenPath()); err == nil && info.Size() > 0 {
-				fmt.Fprintln(cmd.OutOrStdout(), "  (present)")
-			} else {
-				fmt.Fprintln(cmd.OutOrStdout(), "  (MISSING — run setup.sh)")
+			switch _, statErr := os.Stat(cfg.TokenPath()); {
+			case os.IsNotExist(statErr):
+				fmt.Fprintln(cmd.OutOrStdout(), "  (MISSING – run setup.sh)")
+			case statErr != nil:
+				fmt.Fprintf(cmd.OutOrStdout(), "  (stat error: %v)\n", statErr)
+			default:
+				// File exists; LoadToken trims whitespace and rejects
+				// empties — surface that distinction to the operator.
+				if _, err := cfg.LoadToken(); err != nil {
+					fmt.Fprintln(cmd.OutOrStdout(), "  (EMPTY OR WHITESPACE – re-run setup.sh)")
+				} else {
+					fmt.Fprintln(cmd.OutOrStdout(), "  (present)")
+				}
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "argus_sock: %s\n", cfg.ArgusSocketPath)
 			return nil

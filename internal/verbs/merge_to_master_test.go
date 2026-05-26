@@ -9,95 +9,129 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/anutron/iris/internal/argus"
 )
 
-// stubArgus returns an httptest.Server that answers GET /api/tasks/<id>
-// with a fixed Task pointing at worktreePath. Callers run a test git
-// scenario in the temp worktree, then ask iris to merge it.
-func stubArgus(t *testing.T, worktreePath string) *argus.Client {
+// stubArgus returns an httptest.Server that answers two endpoints iris
+// needs: GET /api/tasks/<id> (returns a Task pointing at worktreePath)
+// and GET /api/projects/full (returns a single project whose path is the
+// canonicalized sourceRepo, so the allowlist check in verbs.Resolve
+// passes).
+func stubArgus(t *testing.T, sourceRepo, worktreePath string) *argus.Client {
 	t.Helper()
+	canon, _ := filepath.EvalSymlinks(sourceRepo)
+	if canon == "" {
+		canon = sourceRepo
+	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !strings.HasPrefix(r.URL.Path, "/api/tasks/") {
-			http.NotFound(w, r)
-			return
-		}
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"id":            strings.TrimPrefix(r.URL.Path, "/api/tasks/"),
-			"name":          "stub",
-			"project":       "iris-test",
-			"status":        "in_progress",
-			"worktree_path": worktreePath,
-		})
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/api/tasks/"):
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id":            strings.TrimPrefix(r.URL.Path, "/api/tasks/"),
+				"name":          "stub",
+				"project":       "iris-test",
+				"status":        "in_progress",
+				"worktree_path": worktreePath,
+			})
+		case r.URL.Path == "/api/projects/full":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"projects": []map[string]any{
+					{"name": "iris-test", "path": canon},
+				},
+			})
+		default:
+			http.NotFound(w, r)
+		}
 	}))
 	t.Cleanup(srv.Close)
 	return argus.New(srv.URL, "stub-token")
 }
 
-// setupRepoWithWorktree creates a realistic scenario: a bare "origin"
-// repo, a "source" clone with one commit on main, and an argus/<slug>
-// branch checked out as a linked worktree with its own commit. Returns
-// (sourceRepo, worktreePath).
-func setupRepoWithWorktree(t *testing.T, slug string) (string, string) {
+// stubArgusTaskNotFound returns an httptest.Server that 404s every
+// /api/tasks/<id> request (and answers /api/projects/full normally with
+// an empty list).
+func stubArgusTaskNotFound(t *testing.T) *argus.Client {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/api/projects/full" {
+			_ = json.NewEncoder(w).Encode(map[string]any{"projects": []map[string]any{}})
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	return argus.New(srv.URL, "stub-token")
+}
+
+// gitRun is a small helper closure factory; tests reuse it across temp dirs.
+func gitRunner(t *testing.T) func(dir string, args ...string) string {
+	t.Helper()
+	return func(dir string, args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		if dir != "" {
+			cmd.Dir = dir
+		}
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %s (cwd=%s): %v\n%s", strings.Join(args, " "), dir, err, out)
+		}
+		return string(out)
+	}
+}
+
+// setupRepoWithWorktree creates a bare origin, a clone, and an
+// argus/<slug> branch checked out as a linked worktree with its own commit.
+// Sets origin/HEAD on the source clone so verbs.DefaultBranch succeeds.
+func setupRepoWithWorktree(t *testing.T, slug string) (sourceRepo, worktreePath string) {
 	t.Helper()
 	tmp := t.TempDir()
 	bare := filepath.Join(tmp, "origin.git")
 	src := filepath.Join(tmp, "src")
 	wt := filepath.Join(tmp, "wt")
+	g := gitRunner(t)
 
-	run := func(dir string, args ...string) {
-		t.Helper()
-		cmd := exec.Command("git", args...)
-		if dir != "" {
-			cmd.Dir = dir
-		}
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %s (cwd=%s): %v\n%s", strings.Join(args, " "), dir, err, out)
-		}
-	}
-
-	run("", "init", "--bare", "-b", "main", bare)
-	run("", "clone", bare, src)
-	run(src, "config", "user.email", "iris-test@example.com")
-	run(src, "config", "user.name", "iris-test")
-	run(src, "commit", "--allow-empty", "-m", "initial")
-	run(src, "push", "-u", "origin", "main")
-	// Create the argus branch and add it as a linked worktree.
+	g("", "init", "--bare", "-b", "main", bare)
+	g("", "clone", bare, src)
+	g(src, "config", "user.email", "iris-test@example.com")
+	g(src, "config", "user.name", "iris-test")
+	g(src, "commit", "--allow-empty", "-m", "initial")
+	g(src, "push", "-u", "origin", "main")
+	// origin/HEAD isn't auto-set when the bare was empty at clone time.
+	g(src, "remote", "set-head", "origin", "main")
 	branch := "argus/" + slug
-	run(src, "branch", branch)
-	run(src, "worktree", "add", wt, branch)
-	// Make a unique commit on the worktree branch so the merge has content.
-	run(wt, "config", "user.email", "iris-test@example.com")
-	run(wt, "config", "user.name", "iris-test")
-	run(wt, "commit", "--allow-empty", "-m", "work on "+branch)
+	g(src, "branch", branch)
+	g(src, "worktree", "add", wt, branch)
+	g(wt, "config", "user.email", "iris-test@example.com")
+	g(wt, "config", "user.name", "iris-test")
+	g(wt, "commit", "--allow-empty", "-m", "work on "+branch)
 	return src, wt
 }
 
 func TestMergeToMaster_RefusesNonArgusBranch(t *testing.T) {
 	tmp := t.TempDir()
+	bare := filepath.Join(tmp, "origin.git")
 	src := filepath.Join(tmp, "src")
 	wt := filepath.Join(tmp, "wt")
-	run := func(dir string, args ...string) {
-		t.Helper()
-		cmd := exec.Command("git", args...)
-		if dir != "" {
-			cmd.Dir = dir
-		}
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
-		}
-	}
-	run("", "init", "-b", "main", src)
-	run(src, "config", "user.email", "x@y.z")
-	run(src, "config", "user.name", "x")
-	run(src, "commit", "--allow-empty", "-m", "initial")
-	run(src, "branch", "feature/something")
-	run(src, "worktree", "add", wt, "feature/something")
+	g := gitRunner(t)
 
-	client := stubArgus(t, wt)
+	g("", "init", "--bare", "-b", "main", bare)
+	g("", "clone", bare, src)
+	g(src, "config", "user.email", "x@y.z")
+	g(src, "config", "user.name", "x")
+	g(src, "commit", "--allow-empty", "-m", "initial")
+	g(src, "push", "-u", "origin", "main")
+	g(src, "remote", "set-head", "origin", "main")
+	g(src, "branch", "feature/something")
+	g(src, "worktree", "add", wt, "feature/something")
+
+	client := stubArgus(t, src, wt)
 	_, err := MergeToMaster(context.Background(), client, "task-1", MergeOptions{NoFF: true})
 	if err == nil {
 		t.Fatal("expected error for non-argus branch, got nil")
@@ -109,7 +143,7 @@ func TestMergeToMaster_RefusesNonArgusBranch(t *testing.T) {
 
 func TestMergeToMaster_HappyPath(t *testing.T) {
 	src, wt := setupRepoWithWorktree(t, "happy-slug")
-	client := stubArgus(t, wt)
+	client := stubArgus(t, src, wt)
 
 	result, err := MergeToMaster(context.Background(), client, "task-happy", MergeOptions{NoFF: true})
 	if err != nil {
@@ -121,7 +155,6 @@ func TestMergeToMaster_HappyPath(t *testing.T) {
 	if result.DefaultBranch != "main" {
 		t.Fatalf("unexpected default branch: %q", result.DefaultBranch)
 	}
-	// macOS prefixes the temp dir with /private; canonicalize for comparison.
 	wantSrc, _ := filepath.EvalSymlinks(src)
 	if result.SourceRepo != wantSrc {
 		t.Fatalf("unexpected source repo: %q (want %q)", result.SourceRepo, wantSrc)
@@ -129,7 +162,6 @@ func TestMergeToMaster_HappyPath(t *testing.T) {
 	if result.SHA == "" {
 		t.Fatal("empty merge SHA")
 	}
-	// Verify the source repo is now on main with a merge commit.
 	out, err := exec.Command("git", "-C", src, "log", "--oneline", "-2").CombinedOutput()
 	if err != nil {
 		t.Fatalf("git log: %v\n%s", err, out)
@@ -144,17 +176,7 @@ func TestMergeToMaster_ConflictAborts(t *testing.T) {
 	bare := filepath.Join(tmp, "origin.git")
 	src := filepath.Join(tmp, "src")
 	wt := filepath.Join(tmp, "wt")
-
-	run := func(dir string, args ...string) {
-		t.Helper()
-		cmd := exec.Command("git", args...)
-		if dir != "" {
-			cmd.Dir = dir
-		}
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %s (cwd=%s): %v\n%s", strings.Join(args, " "), dir, err, out)
-		}
-	}
+	g := gitRunner(t)
 	writeFile := func(dir, name, content string) {
 		t.Helper()
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
@@ -162,29 +184,28 @@ func TestMergeToMaster_ConflictAborts(t *testing.T) {
 		}
 	}
 
-	run("", "init", "--bare", "-b", "main", bare)
-	run("", "clone", bare, src)
-	run(src, "config", "user.email", "x@y.z")
-	run(src, "config", "user.name", "x")
+	g("", "init", "--bare", "-b", "main", bare)
+	g("", "clone", bare, src)
+	g(src, "config", "user.email", "x@y.z")
+	g(src, "config", "user.name", "x")
 	writeFile(src, "f.txt", "from-main\n")
-	run(src, "add", "f.txt")
-	run(src, "commit", "-m", "initial main")
-	run(src, "push", "-u", "origin", "main")
-	run(src, "branch", "argus/conflict-slug")
-	run(src, "worktree", "add", wt, "argus/conflict-slug")
-	// Diverge: edit f.txt on main…
+	g(src, "add", "f.txt")
+	g(src, "commit", "-m", "initial main")
+	g(src, "push", "-u", "origin", "main")
+	g(src, "remote", "set-head", "origin", "main")
+	g(src, "branch", "argus/conflict-slug")
+	g(src, "worktree", "add", wt, "argus/conflict-slug")
 	writeFile(src, "f.txt", "main-edit\n")
-	run(src, "add", "f.txt")
-	run(src, "commit", "-m", "main edit")
-	run(src, "push", "origin", "main")
-	// …and conflictingly edit it on the worktree.
+	g(src, "add", "f.txt")
+	g(src, "commit", "-m", "main edit")
+	g(src, "push", "origin", "main")
 	writeFile(wt, "f.txt", "wt-edit\n")
-	run(wt, "config", "user.email", "x@y.z")
-	run(wt, "config", "user.name", "x")
-	run(wt, "add", "f.txt")
-	run(wt, "commit", "-m", "wt edit")
+	g(wt, "config", "user.email", "x@y.z")
+	g(wt, "config", "user.name", "x")
+	g(wt, "add", "f.txt")
+	g(wt, "commit", "-m", "wt edit")
 
-	client := stubArgus(t, wt)
+	client := stubArgus(t, src, wt)
 	_, err := MergeToMaster(context.Background(), client, "task-conflict", MergeOptions{NoFF: true})
 	if err == nil {
 		t.Fatal("expected merge conflict error, got nil")
@@ -192,9 +213,219 @@ func TestMergeToMaster_ConflictAborts(t *testing.T) {
 	if !strings.Contains(err.Error(), "merge") {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	// Source repo should be back on main with no in-progress merge.
 	out, _ := exec.Command("git", "-C", src, "status", "--porcelain=v2", "--branch").CombinedOutput()
 	if strings.Contains(string(out), "MERGE_HEAD") {
 		t.Fatalf("expected merge aborted, but MERGE_HEAD present:\n%s", out)
+	}
+}
+
+// Delta scenario: "Refuses to merge master into master."
+// Setup: src is on a side branch; the worktree is on main. A misconfigured
+// argus task pointing at main itself must be rejected.
+func TestMergeToMaster_RefusesDefaultBranchIntoItself(t *testing.T) {
+	tmp := t.TempDir()
+	bare := filepath.Join(tmp, "origin.git")
+	src := filepath.Join(tmp, "src")
+	wt := filepath.Join(tmp, "wt")
+	g := gitRunner(t)
+
+	g("", "init", "--bare", "-b", "main", bare)
+	g("", "clone", bare, src)
+	g(src, "config", "user.email", "x@y.z")
+	g(src, "config", "user.name", "x")
+	g(src, "commit", "--allow-empty", "-m", "initial")
+	g(src, "push", "-u", "origin", "main")
+	g(src, "remote", "set-head", "origin", "main")
+	// Free up "main" for the worktree by moving src to a side branch.
+	g(src, "switch", "-c", "iris-test-host")
+	g(src, "worktree", "add", wt, "main")
+
+	client := stubArgus(t, src, wt)
+	_, err := MergeToMaster(context.Background(), client, "task-main", MergeOptions{NoFF: true})
+	if err == nil {
+		t.Fatal("expected error refusing main into main, got nil")
+	}
+	if !strings.Contains(err.Error(), "main") && !strings.Contains(err.Error(), "protected") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+// Delta scenario: "`no_ff=false` allows fast-forward".
+func TestMergeToMaster_FastForwardWhenNoFFFalse(t *testing.T) {
+	src, wt := setupRepoWithWorktree(t, "ff-slug")
+	client := stubArgus(t, src, wt)
+
+	result, err := MergeToMaster(context.Background(), client, "task-ff", MergeOptions{NoFF: false})
+	if err != nil {
+		t.Fatalf("ff merge: %v", err)
+	}
+	out, err := exec.Command("git", "-C", src, "log", "--oneline", "-3", "--no-merges").CombinedOutput()
+	if err != nil {
+		t.Fatalf("git log: %v\n%s", err, out)
+	}
+	if strings.Contains(string(out), "Merge branch") {
+		t.Fatalf("--ff-only produced a merge commit (should be linear):\n%s", out)
+	}
+	if result.SHA == "" {
+		t.Fatal("empty merge SHA")
+	}
+}
+
+// Delta scenario: "Custom merge message".
+func TestMergeToMaster_CustomMessage(t *testing.T) {
+	src, wt := setupRepoWithWorktree(t, "msg-slug")
+	client := stubArgus(t, src, wt)
+
+	const subject = "ship: my custom merge subject"
+	_, err := MergeToMaster(context.Background(), client, "task-msg", MergeOptions{NoFF: true, Message: subject})
+	if err != nil {
+		t.Fatalf("merge: %v", err)
+	}
+	out, err := exec.Command("git", "-C", src, "log", "-1", "--format=%s").CombinedOutput()
+	if err != nil {
+		t.Fatalf("git log: %v\n%s", err, out)
+	}
+	if strings.TrimSpace(string(out)) != subject {
+		t.Fatalf("merge subject: got %q, want %q", strings.TrimSpace(string(out)), subject)
+	}
+}
+
+// Host-bridge scenario: "Verb refuses an unknown task ID."
+func TestMergeToMaster_RefusesUnknownTaskID(t *testing.T) {
+	client := stubArgusTaskNotFound(t)
+	_, err := MergeToMaster(context.Background(), client, "ghost-task", MergeOptions{NoFF: true})
+	if err == nil {
+		t.Fatal("expected error for unknown task, got nil")
+	}
+	if !strings.Contains(err.Error(), "ghost-task") {
+		t.Fatalf("expected error to name task id, got: %v", err)
+	}
+}
+
+// Host-bridge scenario: "Verb refuses a source repo outside the project allowlist."
+func TestMergeToMaster_RefusesNonAllowlistedRepo(t *testing.T) {
+	src, wt := setupRepoWithWorktree(t, "denied-slug")
+	// Stub argus knows about a different project, NOT src.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/api/tasks/"):
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id":            "x",
+				"worktree_path": wt,
+			})
+		case r.URL.Path == "/api/projects/full":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"projects": []map[string]any{
+					{"name": "other", "path": "/some/other/repo"},
+				},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	client := argus.New(srv.URL, "stub-token")
+
+	_, err := MergeToMaster(context.Background(), client, "task-denied", MergeOptions{NoFF: true})
+	if err == nil {
+		t.Fatal("expected allowlist refusal, got nil")
+	}
+	if !strings.Contains(err.Error(), "allowlist") {
+		t.Fatalf("expected allowlist error, got: %v", err)
+	}
+	// Ensure the rejected path is named in the error so operators can
+	// diagnose ("source repo X is not in argus's project allowlist").
+	wantSrc, _ := filepath.EvalSymlinks(src)
+	if !strings.Contains(err.Error(), wantSrc) {
+		t.Fatalf("expected error to name rejected path %q, got: %v", wantSrc, err)
+	}
+}
+
+// Host-bridge scenario: "Two concurrent merge_to_master calls serialize."
+func TestMergeToMaster_ConcurrentCallsSerialize(t *testing.T) {
+	// Two argus tasks pointing at the SAME source repo, with two
+	// different argus/<slug> branches checked out as worktrees. Concurrent
+	// MergeToMaster calls must serialize on the per-source-repo mutex.
+	tmp := t.TempDir()
+	bare := filepath.Join(tmp, "origin.git")
+	src := filepath.Join(tmp, "src")
+	wt1 := filepath.Join(tmp, "wt1")
+	wt2 := filepath.Join(tmp, "wt2")
+	g := gitRunner(t)
+
+	g("", "init", "--bare", "-b", "main", bare)
+	g("", "clone", bare, src)
+	g(src, "config", "user.email", "x@y.z")
+	g(src, "config", "user.name", "x")
+	g(src, "commit", "--allow-empty", "-m", "initial")
+	g(src, "push", "-u", "origin", "main")
+	g(src, "remote", "set-head", "origin", "main")
+	g(src, "branch", "argus/concurrent-a")
+	g(src, "branch", "argus/concurrent-b")
+	g(src, "worktree", "add", wt1, "argus/concurrent-a")
+	g(src, "worktree", "add", wt2, "argus/concurrent-b")
+	// Distinct commit messages so the two merge commits have distinct SHAs
+	// (identical empty commits would otherwise hash to the same merge).
+	g(wt1, "config", "user.email", "x@y.z")
+	g(wt1, "config", "user.name", "x")
+	g(wt1, "commit", "--allow-empty", "-m", "work on a")
+	g(wt2, "config", "user.email", "x@y.z")
+	g(wt2, "config", "user.name", "x")
+	g(wt2, "commit", "--allow-empty", "-m", "work on b")
+
+	canon, _ := filepath.EvalSymlinks(src)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.URL.Path == "/api/tasks/task-a":
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": "task-a", "worktree_path": wt1})
+		case r.URL.Path == "/api/tasks/task-b":
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": "task-b", "worktree_path": wt2})
+		case r.URL.Path == "/api/projects/full":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"projects": []map[string]any{{"name": "iris-test", "path": canon}},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	client := argus.New(srv.URL, "stub-token")
+
+	var wg sync.WaitGroup
+	results := make([]*MergeResult, 2)
+	errs := make([]error, 2)
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		results[0], errs[0] = MergeToMaster(context.Background(), client, "task-a", MergeOptions{NoFF: true})
+	}()
+	// Tiny stagger so the goroutines start at slightly different times;
+	// the mutex must still produce a deterministic outcome.
+	time.Sleep(5 * time.Millisecond)
+	go func() {
+		defer wg.Done()
+		results[1], errs[1] = MergeToMaster(context.Background(), client, "task-b", MergeOptions{NoFF: true})
+	}()
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("merge %d: %v", i, err)
+		}
+	}
+	if results[0].SHA == results[1].SHA {
+		t.Fatalf("expected distinct merge SHAs from two task branches; both = %s", results[0].SHA)
+	}
+	// Serialization invariant: the second merge's HEAD must descend from
+	// the first merge's SHA (i.e., the second saw the first's result).
+	out, err := exec.Command("git", "-C", src, "log", "--oneline", "-5").CombinedOutput()
+	if err != nil {
+		t.Fatalf("git log: %v\n%s", err, out)
+	}
+	mergeCount := strings.Count(string(out), "Merge branch 'argus/concurrent-")
+	if mergeCount != 2 {
+		t.Fatalf("expected 2 merge commits, got %d:\n%s", mergeCount, out)
 	}
 }

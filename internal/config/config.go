@@ -27,19 +27,27 @@ type Config struct {
 
 	// ArgusSocketPath is the unix-domain socket exposed by the argus
 	// daemon for the Daemon.* RPC family (Ports, Ping). Iris queries it
-	// on startup to discover argus's dynamic REST port.
+	// on startup to discover argus's dynamic REST port and again on every
+	// reconnect after argus restarts.
 	// Default: ~/.argus/daemon.sock
 	ArgusSocketPath string
+
+	// ArgusPIDPath is the pid file argus rewrites on every daemon start.
+	// Iris polls its mtime in the Watcher to detect restarts.
+	// Default: ~/.argus/daemon.pid
+	ArgusPIDPath string
 }
 
 // Default returns a Config populated with the v1 defaults.
 func Default() *Config {
 	home, _ := os.UserHomeDir()
+	argusDir := filepath.Join(home, ".argus")
 	return &Config{
 		StateDir:        filepath.Join(home, ".iris"),
 		ListenAddr:      "127.0.0.1:0",
 		MCPHeartbeat:    5 * time.Minute,
-		ArgusSocketPath: filepath.Join(home, ".argus", "daemon.sock"),
+		ArgusSocketPath: filepath.Join(argusDir, "daemon.sock"),
+		ArgusPIDPath:    filepath.Join(argusDir, "daemon.pid"),
 	}
 }
 
