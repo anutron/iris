@@ -20,6 +20,6 @@
 
 ## 4. Validation
 
-- [ ] 4.1 Run `openspec validate refuse-cli-self-reload --strict`; resolve any reported issues.
-- [ ] 4.2 Run the full test suite (`go test ./...`) and confirm everything passes.
-- [ ] 4.3 Manually verify: run `iris reload` from a terminal in this worktree's parent iris install; confirm the structured error appears, no `git fetch` happens, no build runs, and the audit log shows the failure entry. (Do this in the source repo, not the sandbox, since the test is about CLI-from-terminal behavior.)
+- [x] 4.1 Run `openspec validate refuse-cli-self-reload --strict`; resolve any reported issues.
+- [x] 4.2 Run the full test suite (`go test ./...`) and confirm everything passes.
+- [x] 4.3 Manually verify: run `iris reload` from a terminal in this worktree's parent iris install; confirm the structured error appears, no `git fetch` happens, no build runs, and the audit log shows the failure entry. (Do this in the source repo, not the sandbox, since the test is about CLI-from-terminal behavior.)
