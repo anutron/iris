@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -403,8 +402,8 @@ mechanism = "none"
 }
 
 func TestPublish_PushRefusesDefaultBranch(t *testing.T) {
-	src, _, client := publishFixture(t, "push-default", "")
-	beforeSrcSHA := headSHA(t, src)
+	src, wt, client := publishFixture(t, "push-default", "")
+	wtSHA := headSHA(t, wt)
 	_, err := Publish(context.Background(), client, PublishInput{TaskID: "task-push-default", Push: true})
 	if err == nil {
 		t.Fatal("expected refusal to push default branch")
@@ -412,9 +411,12 @@ func TestPublish_PushRefusesDefaultBranch(t *testing.T) {
 	if !strings.Contains(err.Error(), "default branch") {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	// Local update may have happened before the push refusal — that's by design.
-	// The push itself must NOT have happened (we just assert the error name).
-	_ = beforeSrcSHA
+	// Spec scenario "Push refuses default branch even in publish" requires that the
+	// local update (ff or reset) has already happened before the push refusal — only
+	// the network-side push step is suppressed. Lock that down here.
+	if after := headSHA(t, src); after != wtSHA {
+		t.Fatalf("source HEAD: got %q, want %q (ff update should run before push refusal)", after, wtSHA)
+	}
 }
 
 func TestPublish_BuildFailureAbortsBeforeRestart(t *testing.T) {
@@ -455,6 +457,7 @@ mechanism = "none"
 }
 
 func TestPublish_RefusesUnknownTaskID(t *testing.T) {
+	setAuditDir(t)
 	client := stubArgusTaskNotFound(t)
 	_, err := Publish(context.Background(), client, PublishInput{TaskID: "ghost-task"})
 	if err == nil {
@@ -466,6 +469,7 @@ func TestPublish_RefusesUnknownTaskID(t *testing.T) {
 }
 
 func TestPublish_RefusesMissingTaskID(t *testing.T) {
+	setAuditDir(t)
 	client := stubArgusTaskNotFound(t)
 	_, err := Publish(context.Background(), client, PublishInput{})
 	if err == nil {
@@ -477,59 +481,102 @@ func TestPublish_RefusesMissingTaskID(t *testing.T) {
 }
 
 func TestPublish_ConcurrentPublishAndReloadSerialize(t *testing.T) {
+	// Two Publish calls against the same source repo, with a deliberately slow
+	// build, must serialize on the per-source-repo mutex shared with Reload and
+	// MergeToMaster. Since both calls perform the slow build under the lock, the
+	// total wall clock from first-start to last-end must be >= 2 * buildDuration
+	// (give or take scheduling jitter). A non-serialized run would finish in
+	// ~1 buildDuration since the two builds would overlap.
+	const buildDur = 250 * time.Millisecond
 	const tomlSlow = `schema_version = 1
 [build]
-command = ["sleep", "0.2"]
+command = ["sleep", "0.25"]
 [restart]
 mechanism = "none"
 `
 	_, _, client := publishFixture(t, "concurrent", tomlSlow)
 
 	var wg sync.WaitGroup
-	starts := make([]time.Time, 2)
-	ends := make([]time.Time, 2)
 	errs := make([]error, 2)
 
 	wg.Add(2)
+	overallStart := time.Now()
 	go func() {
 		defer wg.Done()
-		starts[0] = time.Now()
 		_, errs[0] = Publish(context.Background(), client, PublishInput{TaskID: "task-a"})
-		ends[0] = time.Now()
 	}()
 	// Stagger so the second call enters lockSourceRepo after the first.
 	time.Sleep(20 * time.Millisecond)
 	go func() {
 		defer wg.Done()
-		starts[1] = time.Now()
 		_, errs[1] = Publish(context.Background(), client, PublishInput{TaskID: "task-b"})
-		ends[1] = time.Now()
 	}()
 	wg.Wait()
+	overallDur := time.Since(overallStart)
 
-	// Both call attempts run; one (or both) may fail because after the first one
-	// publishes, the source repo HEAD has moved and the second call's ff-merge
-	// from the worktree's stale-relative-to-new-HEAD SHA may no-op or fail. That's
-	// fine — we're testing serialization, not idempotency.
-	if errs[0] != nil && errs[1] != nil {
-		// Acceptable as long as the order shows serialization. Continue.
-	}
+	// We don't care which (or both) failed — the second call may legitimately
+	// hit a non-fast-forward error because the first call advanced the source
+	// repo's HEAD past the second worktree's. We're testing serialization, not
+	// idempotency. But if BOTH errored without the second blocking, the lock
+	// might never have engaged, so the duration check below is the load-bearing
+	// assertion.
+	_ = errs
 
-	// Serialization invariant: end-of-first should be <= start-of-second-completing.
-	// Since starts have a 20ms stagger, just assert the runs didn't fully overlap.
-	if ends[0].Before(starts[1]) || ends[1].Before(starts[0]) {
-		// Non-overlapping (one finished before the other started) → serialized.
-		return
-	}
-	// They overlapped — assert at least one of them blocked for ~build duration.
-	durA := ends[0].Sub(starts[0])
-	durB := ends[1].Sub(starts[1])
-	if durA < 200*time.Millisecond && durB < 200*time.Millisecond {
-		t.Fatalf("expected one publish to block ~200ms while the other ran the slow build; durA=%s durB=%s", durA, durB)
+	// Serialization invariant: the two slow builds must NOT have overlapped. If
+	// they ran in parallel the total duration would be ~buildDur. If serialized
+	// (mutex held across each call), total >= 2 * buildDur.
+	minSerialized := 2 * buildDur
+	// 50ms scheduling slack — generous but still well below 2 * buildDur.
+	if overallDur < minSerialized-50*time.Millisecond {
+		t.Fatalf("publishes did not serialize: total duration %s < expected >= %s (2 × build)", overallDur, minSerialized)
 	}
 }
 
-func TestPublish_RefusesExitCodeMechanism(t *testing.T) {
+// TestPublish_SerializesWithReload verifies the cross-verb lock: a Reload and
+// a Publish on the same source repo must NOT run concurrently. Uses the shared
+// repoLocks sync.Map (per-source-repo mutex). We drive Reload with an explicit
+// Path (cross-target, no_pull) so it targets the same source repo Publish uses.
+func TestPublish_SerializesWithReload(t *testing.T) {
+	const buildDur = 250 * time.Millisecond
+	const tomlSlow = `schema_version = 1
+[build]
+command = ["sleep", "0.25"]
+[restart]
+mechanism = "none"
+`
+	src, _, client := publishFixture(t, "cross-verb", tomlSlow)
+
+	var wg sync.WaitGroup
+	var reloadErr, publishErr error
+
+	wg.Add(2)
+	overallStart := time.Now()
+	go func() {
+		defer wg.Done()
+		// Cross-target reload via explicit Path. publishFixture has already
+		// pointed `executable` elsewhere so isSelfTarget returns false; with
+		// Path=src + NoPull=true reload runs build+restart against the same
+		// source repo Publish targets — exercising the shared mutex.
+		_, reloadErr = Reload(context.Background(), client, ReloadInput{Path: src, NoPull: true, Caller: "cli"})
+	}()
+	time.Sleep(20 * time.Millisecond)
+	go func() {
+		defer wg.Done()
+		_, publishErr = Publish(context.Background(), client, PublishInput{TaskID: "task-x"})
+	}()
+	wg.Wait()
+	overallDur := time.Since(overallStart)
+
+	_ = reloadErr
+	_ = publishErr
+
+	minSerialized := 2 * buildDur
+	if overallDur < minSerialized-50*time.Millisecond {
+		t.Fatalf("reload+publish did not serialize: total duration %s < expected >= %s (2 × build)", overallDur, minSerialized)
+	}
+}
+
+func TestPublish_RefusesExitCodeMechanism_CrossTarget(t *testing.T) {
 	// Publish always treats the target as cross (it never runs the self-exit
 	// choreography), so .iris.toml with mechanism=exit_code must fail
 	// validation at pre-flight regardless of which source repo we're touching.
@@ -539,11 +586,44 @@ command = ["true"]
 [restart]
 mechanism = "exit_code"
 `
-	src, _, client := publishFixture(t, "exit-code", tomlExit)
+	src, _, client := publishFixture(t, "exit-code-cross", tomlExit)
 	before := headSHA(t, src)
-	_, err := Publish(context.Background(), client, PublishInput{TaskID: "task-exit"})
+	_, err := Publish(context.Background(), client, PublishInput{TaskID: "task-exit-cross"})
 	if err == nil {
 		t.Fatal("expected refusal for exit_code mechanism on publish")
+	}
+	if !strings.Contains(err.Error(), "exit_code") && !strings.Contains(err.Error(), "self-only") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if after := headSHA(t, src); after != before {
+		t.Fatalf("source HEAD changed on refusal: before=%q after=%q", before, after)
+	}
+}
+
+// Spec scenario: "self-publish refused for exit_code mechanism" — fires when
+// the source repo IS iris's own deployed repo. publishFixture overrides
+// `executable` to point elsewhere; this test overrides it to point AT the
+// source repo's bin/iris so the resolved target is iris's own deployed repo.
+// Publish must still refuse exit_code (it never runs the self-exit choreography).
+func TestPublish_RefusesExitCodeMechanism_SelfTarget(t *testing.T) {
+	const tomlExit = `schema_version = 1
+[build]
+command = ["true"]
+[restart]
+mechanism = "exit_code"
+`
+	src, _, client := publishFixture(t, "exit-code-self", tomlExit)
+	// Override executable to point AT this source repo's bin/iris, so anything
+	// that consults ResolveSelf treats the target as iris itself.
+	bin := filepath.Join(src, "bin", "iris")
+	old := executable
+	executable = func() (string, error) { return bin, nil }
+	t.Cleanup(func() { executable = old })
+
+	before := headSHA(t, src)
+	_, err := Publish(context.Background(), client, PublishInput{TaskID: "task-exit-self"})
+	if err == nil {
+		t.Fatal("expected refusal for exit_code mechanism on self-target publish")
 	}
 	if !strings.Contains(err.Error(), "exit_code") && !strings.Contains(err.Error(), "self-only") {
 		t.Fatalf("unexpected error: %v", err)
@@ -576,6 +656,3 @@ command = ["echo", "restart-ok"]
 		t.Fatalf("RestartOutput missing echo output: %q", result.RestartOutput)
 	}
 }
-
-// _ keeps exec imported when no other test uses it directly.
-var _ = exec.Command
