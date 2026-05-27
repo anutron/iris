@@ -15,8 +15,8 @@
 
 ## 3. Documentation
 
-- [ ] 3.1 Update `README.md`'s `iris reload` section with a short subsection titled "Why self-reload only works via MCP" explaining the structural reason (one paragraph) and pointing at the three working alternatives.
-- [ ] 3.2 Cross-check the SKETCH.md / STATUS.md if they reference `iris reload` self-flow; tighten any wording that implies CLI self-reload works.
+- [x] 3.1 Update `README.md`'s `iris reload` section with a short subsection titled "Why self-reload only works via MCP" explaining the structural reason (one paragraph) and pointing at the three working alternatives.
+- [x] 3.2 Cross-check the SKETCH.md / STATUS.md if they reference `iris reload` self-flow; tighten any wording that implies CLI self-reload works.
 
 ## 4. Validation
 

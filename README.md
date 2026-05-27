@@ -118,6 +118,14 @@ Every reload (success and failure) appends one JSON line to `~/.iris/reload-hist
 
 Iris compares the resolved target source repo against `os.Executable()`'s canonical git root. If they match, the reload is self-managed (only `exit_code` is legal as restart mechanism). Otherwise it is a cross-reload (any mechanism except `exit_code` is legal).
 
+### Why self-reload only works via MCP
+
+The `exit_code` mechanism respawns the process that exited. When `iris reload` runs from a terminal targeting iris itself, the CLI is the process that exits – so the LaunchAgent respawns the short-lived CLI, not the daemon, and the daemon keeps running the old binary. When the same verb runs through MCP, `verbs.Reload` executes inside the daemon process, so the daemon's exit is what triggers the LaunchAgent's respawn from the new binary. Iris refuses CLI self-reload up front rather than silently no-op'ing the daemon. Use one of:
+
+- invoke `iris_reload` via MCP from a Claude session (primary path)
+- `iris reload <other-iris-managed-project>` for cross-target reloads
+- `iris run-build && launchctl kickstart -k gui/$UID/<label>` to manually bounce the daemon after a build
+
 ### Iris's own `.iris.toml`
 
 Iris ships its own `.iris.toml` at the repo root. The same six-line example above is what iris itself uses when reloading. The argus project allowlist is not consulted for self-reloads.
