@@ -115,6 +115,33 @@ func TestBranchDeleteRemote_RefusesNonExistentBranch(t *testing.T) {
 	}
 }
 
+// TestBranchDeleteRemote_NonZeroGitExitReturnsError covers the spec
+// scenario "Non-zero git exit returns structured error" (e.g., protected
+// branch rejection on origin). We force a non-zero exit by setting
+// receive.denyDeletes=true on the bare repo — ls-remote still succeeds so
+// the pre-check passes, but the deletion push is rejected.
+func TestBranchDeleteRemote_NonZeroGitExitReturnsError(t *testing.T) {
+	src, wt, bare := setupRepoWithBareAndWorktree(t, "bdr-gitfail")
+	client := stubArgus(t, src, wt)
+
+	g := gitRunner(t)
+	g(src, "push", "origin", "argus/bdr-gitfail")
+
+	if out, err := runGit(context.Background(), bare, "config", "receive.denyDeletes", "true"); err != nil {
+		t.Fatalf("set receive.denyDeletes: %v; %s", err, out)
+	}
+
+	_, err := BranchDeleteRemote(context.Background(), BranchDeleteRemoteInput{
+		Client: client, TaskID: "task-bdr", Branch: "argus/bdr-gitfail",
+	})
+	if err == nil {
+		t.Fatal("expected error from origin-side rejection, got nil")
+	}
+	if !strings.Contains(err.Error(), "push origin") && !strings.Contains(err.Error(), "deny") {
+		t.Fatalf("expected push/deny failure in error, got: %v", err)
+	}
+}
+
 func TestBranchDeleteRemote_RefusesUnknownTaskID(t *testing.T) {
 	client := stubArgusTaskNotFound(t)
 	_, err := BranchDeleteRemote(context.Background(), BranchDeleteRemoteInput{

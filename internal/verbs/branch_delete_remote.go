@@ -61,8 +61,12 @@ func BranchDeleteRemote(ctx context.Context, in BranchDeleteRemoteInput) (*Branc
 		return nil, fmt.Errorf("branch %q does not exist on origin", in.Branch)
 	}
 
-	if out, err := runGit(ctx, resolved.SourceRepo, "push", "origin", ":"+in.Branch); err != nil {
-		return nil, fmt.Errorf("push origin :%s: %w; log:\n%s", in.Branch, err, out)
+	// Use the fully-namespaced refspec so git can't fall through to a
+	// same-named tag if the branch was deleted between our ls-remote
+	// pre-check and this push (external-actor TOCTOU).
+	refspec := ":refs/heads/" + in.Branch
+	if out, err := runGit(ctx, resolved.SourceRepo, "push", "origin", refspec); err != nil {
+		return nil, fmt.Errorf("push origin %s: %w; log:\n%s", refspec, err, out)
 	}
 
 	return &BranchDeleteRemoteResult{

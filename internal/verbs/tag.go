@@ -79,8 +79,11 @@ func Tag(ctx context.Context, in TagInput) (*TagResult, error) {
 		return nil, fmt.Errorf("tag -a %s: %w; log:\n%s", in.Tag, err, out)
 	}
 
-	if out, err := runGit(ctx, resolved.SourceRepo, "push", "origin", in.Tag); err != nil {
-		return nil, fmt.Errorf("push origin %s: %w; log:\n%s", in.Tag, err, out)
+	// Use the fully-namespaced refspec so git cannot ambiguously match a
+	// same-named branch on origin.
+	pushRefspec := "refs/tags/" + in.Tag + ":refs/tags/" + in.Tag
+	if out, err := runGit(ctx, resolved.SourceRepo, "push", "origin", pushRefspec); err != nil {
+		return nil, fmt.Errorf("push origin %s: %w; log:\n%s", pushRefspec, err, out)
 	}
 
 	return &TagResult{

@@ -79,6 +79,30 @@ exit 1
 	}
 }
 
+// TestGHPRView_MalformedJSONReturnsStructuredError covers the case where
+// gh exits 0 but emits non-JSON stdout (e.g., a future gh version changes
+// output shape or a CDN injects HTML). The contract requires a structured
+// error rather than a silent nil-map pass-through.
+func TestGHPRView_MalformedJSONReturnsStructuredError(t *testing.T) {
+	src, wt, _ := setupRepoWithBareAndWorktree(t, "ghview-malformed")
+	client := stubArgus(t, src, wt)
+	body := fakeGHCaptureArgv + `
+echo "this is not JSON"
+exit 0
+`
+	writeFakeGH(t, body)
+
+	_, err := GHPRView(context.Background(), client, "task-malformed-json", GHPRViewOptions{PRNumber: 1})
+	if err == nil {
+		t.Fatal("expected error from malformed JSON stdout, got nil")
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "json") &&
+		!strings.Contains(strings.ToLower(err.Error()), "parse") &&
+		!strings.Contains(strings.ToLower(err.Error()), "invalid") {
+		t.Fatalf("expected JSON/parse error indicator, got: %v", err)
+	}
+}
+
 func TestGHPRView_RefusesUnknownTaskID(t *testing.T) {
 	client := stubArgusTaskNotFound(t)
 	_, err := GHPRView(context.Background(), client, "ghost-task", GHPRViewOptions{PRNumber: 1})
