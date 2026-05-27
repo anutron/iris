@@ -102,12 +102,13 @@ Optional:
 - **`exec`** — requires `command = [...]`. Argv list, no shell. The long-tail escape hatch.
 - **`none`** — does nothing for restart. For build-is-deployment workflows.
 
-### The four verbs
+### The five verbs
 
 - **`iris:reload`** — Pre-flight refusals (clean tree, on default branch, parsed `.iris.toml`, allowlist for cross-reload), per-source-repo lock, optional `[pre_flight]`, `git fetch && git merge --ff-only`, build, restart, optional `[verify]`. Returns a structured result and appends one line to the audit log.
+- **`iris:publish`** — From an argus worktree, update the source repo's currently-checked-out branch to the worktree's HEAD, then rebuild and restart via the same `.iris.toml`. Default is ff-only; pass `--reset` for a hard reset (atomic ref + working tree). `--push` also pushes the target branch to origin (refuses the default branch, same as `iris:push`). v1.2 constraint: the target branch must equal the source repo's current branch.
 - **`iris:validate_config`** — Parse and cross-validate without any side effects (no pull, build, restart, audit). Used by CI and by Claude when authoring a config.
-- **`iris:ls`** — Reads the audit log and projects managed systems iris has reloaded recently.
-- **`iris:status`** — For one managed system: the resolved `.iris.toml`, current HEAD, default branch, origin SHA, working-tree-clean state, and the most recent reload outcome.
+- **`iris:ls`** — Reads the audit log and projects managed systems iris has touched recently (reloads and publishes both appear).
+- **`iris:status`** — For one managed system: the resolved `.iris.toml`, current HEAD, default branch, origin SHA, working-tree-clean state, and the most recent reload/publish outcome.
 
 ### Audit log
 

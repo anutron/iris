@@ -40,6 +40,7 @@ func newRootCmd() *cobra.Command {
 	root.AddCommand(newBranchDeleteRemoteCmd())
 	root.AddCommand(newTagCmd())
 	root.AddCommand(newReloadCmd())
+	root.AddCommand(newPublishCmd())
 	root.AddCommand(newValidateConfigCmd())
 	root.AddCommand(newLsCmd())
 	return root

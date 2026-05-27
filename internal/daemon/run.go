@@ -83,6 +83,7 @@ func Start(ctx context.Context, cfg *config.Config, log *slog.Logger) (*Daemon, 
 	mcpSrv.RegisterHandler("iris_branch_delete_remote", mcp.NewBranchDeleteRemoteHandler(client))
 	mcpSrv.RegisterHandler("iris_tag", mcp.NewTagHandler(client))
 	mcpSrv.RegisterHandler("iris_reload", mcp.NewReloadHandler(client))
+	mcpSrv.RegisterHandler("iris_publish", mcp.NewPublishHandler(client))
 	mcpSrv.RegisterHandler("iris_validate_config", mcp.NewValidateConfigHandler(client))
 	mcpSrv.RegisterHandler("iris_ls", mcp.NewLsHandler())
 	mcpSrv.RegisterHandler("iris_status", mcp.NewStatusHandler(client))
@@ -354,6 +355,20 @@ func toolDefinitions() []mcp.ToolDefinition {
 					"no_pull":         map[string]any{"type": "boolean", "description": "Skip the git fetch + ff-merge and build from current HEAD (default false)."},
 					"timeout_seconds": map[string]any{"type": "integer", "description": "(optional) Per-step timeout override in seconds."},
 				},
+			},
+		},
+		{
+			Name:        "iris_publish",
+			Description: "From an argus worktree, update the source repo's currently-checked-out branch to the worktree's HEAD, then rebuild and restart via the project's .iris.toml. Default is ff-only; pass reset=true for hard reset (atomic ref+working-tree). Optional push=true also pushes the target branch to origin (subject to the same default-branch refusal as iris:push). v1.2 constraint: the target branch must equal the source repo's current branch.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"task_id": map[string]any{"type": "string", "description": "Argus task ID. Iris resolves the source repo and worktree from this."},
+					"branch":  map[string]any{"type": "string", "description": "(optional) Target branch in the source repo. Defaults to the source repo's currently-checked-out branch; must equal it (v1.2)."},
+					"push":    map[string]any{"type": "boolean", "description": "Push the target branch to origin after the local update (default false). Subject to default-branch refusal."},
+					"reset":   map[string]any{"type": "boolean", "description": "Hard-reset the source repo to the worktree's HEAD (atomic ref+working tree). Default false (ff-only)."},
+				},
+				"required": []string{"task_id"},
 			},
 		},
 		{
