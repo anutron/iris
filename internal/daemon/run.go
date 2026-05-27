@@ -73,8 +73,19 @@ func Start(ctx context.Context, cfg *config.Config, log *slog.Logger) (*Daemon, 
 	mcpSrv.RegisterHandler("iris_push", mcp.NewPushHandler(client))
 	mcpSrv.RegisterHandler("iris_gh_pr_create", mcp.NewGHPRCreateHandler(client))
 	mcpSrv.RegisterHandler("iris_gh_pr_merge", mcp.NewGHPRMergeHandler(client))
+	mcpSrv.RegisterHandler("iris_gh_pr_view", mcp.NewGHPRViewHandler(client))
+	mcpSrv.RegisterHandler("iris_gh_pr_ready", mcp.NewGHPRReadyHandler(client))
+	mcpSrv.RegisterHandler("iris_gh_pr_comment", mcp.NewGHPRCommentHandler(client))
+	mcpSrv.RegisterHandler("iris_gh_pr_close", mcp.NewGHPRCloseHandler(client))
 	mcpSrv.RegisterHandler("iris_run_build", mcp.NewRunBuildHandler(client))
 	mcpSrv.RegisterHandler("iris_complete_task", mcp.NewCompleteTaskHandler(client))
+	mcpSrv.RegisterHandler("iris_fetch", mcp.NewFetchHandler(client))
+	mcpSrv.RegisterHandler("iris_branch_delete_remote", mcp.NewBranchDeleteRemoteHandler(client))
+	mcpSrv.RegisterHandler("iris_tag", mcp.NewTagHandler(client))
+	mcpSrv.RegisterHandler("iris_reload", mcp.NewReloadHandler(client))
+	mcpSrv.RegisterHandler("iris_validate_config", mcp.NewValidateConfigHandler(client))
+	mcpSrv.RegisterHandler("iris_ls", mcp.NewLsHandler())
+	mcpSrv.RegisterHandler("iris_status", mcp.NewStatusHandler(client))
 
 	registrar := mcp.NewRegistrar(client, mcpSrv.CallbackBaseURL(), auth, log)
 	registrar.SetHeartbeat(cfg.MCPHeartbeat)
@@ -223,6 +234,56 @@ func toolDefinitions() []mcp.ToolDefinition {
 			},
 		},
 		{
+			Name:        "iris_gh_pr_view",
+			Description: "Read a GitHub PR's state via the host's gh CLI. Shells out to `gh pr view <pr> --json state,checks,reviews,mergeable,headRefName,baseRefName,isDraft,statusCheckRollup` in the resolved source repo and returns the parsed JSON unchanged. For \"is this PR ready to merge\" agent loops.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"task_id":   map[string]any{"type": "string", "description": "Argus task ID. Iris resolves the source repo from this."},
+					"pr_number": map[string]any{"type": "integer", "minimum": 1, "description": "GitHub PR number to view."},
+				},
+				"required": []string{"task_id", "pr_number"},
+			},
+		},
+		{
+			Name:        "iris_gh_pr_ready",
+			Description: "Take a draft GitHub PR out of draft via the host's gh CLI. Pre-fetches isDraft so the result reports whether the call moved state; idempotent if the PR is already ready.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"task_id":   map[string]any{"type": "string", "description": "Argus task ID. Iris resolves the source repo from this."},
+					"pr_number": map[string]any{"type": "integer", "minimum": 1, "description": "GitHub PR number to mark ready."},
+				},
+				"required": []string{"task_id", "pr_number"},
+			},
+		},
+		{
+			Name:        "iris_gh_pr_comment",
+			Description: "Post a comment to a GitHub PR via the host's gh CLI. Returns the parsed comment URL; if gh's output cannot be parsed, returns a parse_warning with the raw stdout.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"task_id":   map[string]any{"type": "string", "description": "Argus task ID. Iris resolves the source repo from this."},
+					"pr_number": map[string]any{"type": "integer", "minimum": 1, "description": "GitHub PR number to comment on."},
+					"body":      map[string]any{"type": "string", "minLength": 1, "description": "Comment body. Required and must be non-empty."},
+				},
+				"required": []string{"task_id", "pr_number", "body"},
+			},
+		},
+		{
+			Name:        "iris_gh_pr_close",
+			Description: "Close a GitHub PR without merging via the host's gh CLI. Optional delete_branch flag passes --delete-branch to gh.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"task_id":       map[string]any{"type": "string", "description": "Argus task ID. Iris resolves the source repo from this."},
+					"pr_number":     map[string]any{"type": "integer", "minimum": 1, "description": "GitHub PR number to close."},
+					"delete_branch": map[string]any{"type": "boolean", "default": false, "description": "Pass --delete-branch to gh; deletes the source branch after closing."},
+				},
+				"required": []string{"task_id", "pr_number"},
+			},
+		},
+		{
 			Name:        "iris_run_build",
 			Description: "Run the project's build for an argus task in its worktree. Looks for an executable `script/iris-build` first, then `Makefile` (build target). Returns command, exit code, and combined output. On non-zero exit the response is an error that still carries the captured output so callers see compile errors.",
 			InputSchema: map[string]any{
@@ -244,6 +305,88 @@ func toolDefinitions() []mcp.ToolDefinition {
 					"merge_strategy": map[string]any{"type": "string", "enum": []string{"no_ff", "ff_only"}, "default": "no_ff", "description": "Merge strategy used by the embedded merge_to_master step."},
 				},
 				"required": []string{"task_id"},
+			},
+		},
+		{
+			Name:        "iris_fetch",
+			Description: "Run `git fetch origin` in the argus task's source repo under the per-source-repo lock. Returns the list of refs whose tracking SHAs changed.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"task_id": map[string]any{"type": "string", "description": "Argus task ID. Iris resolves the source repo from this."},
+				},
+				"required": []string{"task_id"},
+			},
+		},
+		{
+			Name:        "iris_branch_delete_remote",
+			Description: "Delete a remote branch on origin via `git push origin :<branch>`. Refuses the default branch and any branch absent from origin. Returns the branch's prior remote SHA.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"task_id": map[string]any{"type": "string", "description": "Argus task ID. Iris resolves the source repo from this."},
+					"branch":  map[string]any{"type": "string", "description": "Remote branch name to delete (required, non-empty, MUST NOT be the default branch)."},
+				},
+				"required": []string{"task_id", "branch"},
+			},
+		},
+		{
+			Name:        "iris_tag",
+			Description: "Create an annotated git tag at the SHA of origin/<default-branch> and push it to origin. Refuses if the tag already exists locally or on origin. Returns the tag SHA.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"task_id": map[string]any{"type": "string", "description": "Argus task ID. Iris resolves the source repo from this."},
+					"tag":     map[string]any{"type": "string", "description": "Tag name to create (required, non-empty)."},
+					"message": map[string]any{"type": "string", "description": "(optional) Annotation message. Defaults to \"Released by iris\" when empty."},
+				},
+				"required": []string{"task_id", "tag"},
+			},
+		},
+		{
+			Name:        "iris_reload",
+			Description: "Live-upgrade an iris-managed daemon. Pulls the default branch, runs the project-declared build, then dispatches to the project-declared restart mechanism in `.iris.toml`. Self-vs-cross detection is automatic. task_id and path are mutually exclusive; both omitted targets iris itself.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"task_id":         map[string]any{"type": "string", "description": "(optional) Argus task ID. Iris resolves the source repo from this. Omit for self-target."},
+					"path":            map[string]any{"type": "string", "description": "(optional) Absolute filesystem path to a source repo. Omit for self-target."},
+					"no_pull":         map[string]any{"type": "boolean", "description": "Skip the git fetch + ff-merge and build from current HEAD (default false)."},
+					"timeout_seconds": map[string]any{"type": "integer", "description": "(optional) Per-step timeout override in seconds."},
+				},
+			},
+		},
+		{
+			Name:        "iris_validate_config",
+			Description: "Parse and cross-validate a `.iris.toml` file at the resolved source repo. No side effects (no pull, build, restart, or audit write). Returns valid/invalid plus structured errors with line numbers and remediation hints.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"task_id": map[string]any{"type": "string", "description": "(optional) Argus task ID. Omit for self-target."},
+					"path":    map[string]any{"type": "string", "description": "(optional) Absolute filesystem path. Omit for self-target."},
+				},
+			},
+		},
+		{
+			Name:        "iris_ls",
+			Description: "List managed systems iris has reloaded recently. Reads `~/.iris/reload-history.jsonl` and projects per-system aggregates (last_reload_at, last_outcome, total_reload_count, total_failure_count). No registry; the audit log is the source of truth.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"limit": map[string]any{"type": "integer", "description": "(optional) Maximum number of entries (default 50)."},
+					"since": map[string]any{"type": "string", "description": "(optional) RFC3339 timestamp; exclude entries before this time."},
+				},
+			},
+		},
+		{
+			Name:        "iris_status",
+			Description: "For one managed system, report the parsed `.iris.toml`, current git state (HEAD, default branch, origin SHA, working-tree-clean), and the most recent reload outcome from the audit log. No side effects. task_id and path are mutually exclusive; both omitted targets iris itself.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"task_id": map[string]any{"type": "string", "description": "(optional) Argus task ID. Omit for self-target."},
+					"path":    map[string]any{"type": "string", "description": "(optional) Absolute filesystem path. Omit for self-target."},
+				},
 			},
 		},
 	}
