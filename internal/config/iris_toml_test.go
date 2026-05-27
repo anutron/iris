@@ -333,6 +333,103 @@ func TestValidate_AbsoluteWorkingDirectoryRejected(t *testing.T) {
 	}
 }
 
+// TestValidate_SelfMustUseExitCode verifies the spec scenario "Refuses
+// non-exit_code mechanism for self-reload" — iris's own .iris.toml must
+// declare mechanism=exit_code; anything else would suicide the daemon
+// mid-handler.
+func TestValidate_SelfMustUseExitCode(t *testing.T) {
+	cases := []RestartMechanism{
+		MechanismLaunchAgent,
+		MechanismLaunchDaemon,
+		MechanismSignal,
+		MechanismExec,
+		MechanismNone,
+	}
+	for _, m := range cases {
+		t.Run(string(m), func(t *testing.T) {
+			r := RestartBlock{Mechanism: m}
+			switch m {
+			case MechanismLaunchAgent, MechanismLaunchDaemon:
+				r.Label = "com.example.x"
+			case MechanismSignal:
+				r.PidFile = "/tmp/x.pid"
+				r.Signal = "SIGTERM"
+			case MechanismExec:
+				r.Command = []string{"true"}
+			}
+			doc := &IrisToml{
+				SchemaVersion: 1,
+				Build:         BuildBlock{Command: []string{"make"}},
+				Restart:       r,
+			}
+			errs := doc.Validate(true) // isSelf=true
+			found := false
+			for _, e := range errs {
+				if e.Field == "restart.mechanism" && strings.Contains(e.Message, "must use exit_code") {
+					found = true
+				}
+			}
+			if !found {
+				t.Fatalf("expected self-must-use-exit_code error for mechanism %q: %v", m, errs)
+			}
+		})
+	}
+}
+
+// TestValidate_HookAbsoluteWorkingDirectoryRejected verifies the
+// HookBlock.WorkingDirectory escape guard added in ralph-review loop 1.
+// Mirrors the BuildBlock check; covers both [pre_flight] and [verify].
+func TestValidate_HookAbsoluteWorkingDirectoryRejected(t *testing.T) {
+	for _, block := range []string{"pre_flight", "verify"} {
+		t.Run(block+"/absolute", func(t *testing.T) {
+			hook := &HookBlock{Command: []string{"true"}, WorkingDirectory: "/etc"}
+			doc := &IrisToml{
+				SchemaVersion: 1,
+				Build:         BuildBlock{Command: []string{"make"}},
+				Restart:       RestartBlock{Mechanism: MechanismNone},
+			}
+			if block == "pre_flight" {
+				doc.PreFlight = hook
+			} else {
+				doc.Verify = hook
+			}
+			errs := doc.Validate(false)
+			found := false
+			for _, e := range errs {
+				if e.Field == block+".working_directory" && strings.Contains(e.Message, "relative") {
+					found = true
+				}
+			}
+			if !found {
+				t.Fatalf("expected %s.working_directory absolute error: %v", block, errs)
+			}
+		})
+		t.Run(block+"/escape", func(t *testing.T) {
+			hook := &HookBlock{Command: []string{"true"}, WorkingDirectory: "../escape"}
+			doc := &IrisToml{
+				SchemaVersion: 1,
+				Build:         BuildBlock{Command: []string{"make"}},
+				Restart:       RestartBlock{Mechanism: MechanismNone},
+			}
+			if block == "pre_flight" {
+				doc.PreFlight = hook
+			} else {
+				doc.Verify = hook
+			}
+			errs := doc.Validate(false)
+			found := false
+			for _, e := range errs {
+				if e.Field == block+".working_directory" && strings.Contains(e.Message, "escape") {
+					found = true
+				}
+			}
+			if !found {
+				t.Fatalf("expected %s.working_directory escape error: %v", block, errs)
+			}
+		})
+	}
+}
+
 func TestSignalByName_Aliases(t *testing.T) {
 	cases := []struct {
 		in   string

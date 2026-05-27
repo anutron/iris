@@ -27,7 +27,15 @@ Target can be:
 			if len(args) == 1 {
 				taskID, path = classifyTarget(args[0])
 			}
-			client, _ := newCLIClient(cmd.Context())
+			client, err := newCLIClient(cmd.Context())
+			// Pure self-target never touches the argus allowlist, so a missing
+			// client is fine. Any explicit target requires the allowlist check.
+			if err != nil {
+				if taskID != "" || path != "" {
+					return fmt.Errorf("argus client required for non-self validate-config: %w", err)
+				}
+				client = nil
+			}
 			result, err := verbs.ValidateConfig(cmd.Context(), client, verbs.ValidateConfigInput{
 				TaskID: taskID, Path: path,
 			})
