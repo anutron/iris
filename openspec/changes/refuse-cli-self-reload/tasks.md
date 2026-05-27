@@ -1,11 +1,11 @@
 ## 1. Tests first
 
-- [ ] 1.1 Add `TestReload_CLISelfNoArg_Refused` in `internal/verbs/reload_test.go` — calls `verbs.Reload` with `Caller: "cli"`, no `TaskID`, no `Path`; asserts the returned error contains the token `cli-self-reload-not-supported`, asserts no audit entry with `outcome: "success"` was written, asserts an audit entry with `outcome: "failure"` and the reason token was written, asserts no `git fetch` or build command was executed (use the existing test harness's command observer).
-- [ ] 1.2 Add `TestReload_CLISelfExplicitPath_Refused` — same as 1.1 but with `Path` set to the test's faked self source-repo root.
-- [ ] 1.3 Add `TestReload_CLISelfTaskID_Refused` — same as 1.1 but with `TaskID` set to a fake argus task whose source repo equals the faked self root (use the test argus client).
-- [ ] 1.4 Add `TestReload_MCPSelfUnaffected` — invokes `verbs.Reload` with `Caller: "self"` (or an argus task_id), no `TaskID`, no `Path`; asserts the refusal does NOT fire and the existing self-reload happy path runs through to `scheduleSelfExit` (using the existing `exitFunc` override).
-- [ ] 1.5 Add `TestReload_CLICrossUnaffected` — invokes `verbs.Reload` with `Caller: "cli"` and a `Path` resolving to a non-self test repo; asserts the cross-reload flow runs through restart dispatch.
-- [ ] 1.6 Run the suite: tests 1.1–1.5 fail (the refusal does not exist yet).
+- [x] 1.1 Add `TestReload_CLISelfNoArg_Refused` in `internal/verbs/reload_test.go` — calls `verbs.Reload` with `Caller: "cli"`, no `TaskID`, no `Path`; asserts the returned error contains the token `cli-self-reload-not-supported`, asserts no audit entry with `outcome: "success"` was written, asserts an audit entry with `outcome: "failure"` and the reason token was written, asserts no `git fetch` or build command was executed (use the existing test harness's command observer).
+- [x] 1.2 Add `TestReload_CLISelfExplicitPath_Refused` — same as 1.1 but with `Path` set to the test's faked self source-repo root.
+- [x] 1.3 Add `TestReload_CLISelfTaskID_Refused` — same as 1.1 but with `TaskID` set to a fake argus task whose source repo equals the faked self root (use the test argus client).
+- [x] 1.4 Add `TestReload_MCPSelfUnaffected` — invokes `verbs.Reload` with `Caller: "self"` (or an argus task_id), no `TaskID`, no `Path`; asserts the refusal does NOT fire and the existing self-reload happy path runs through to `scheduleSelfExit` (using the existing `exitFunc` override).
+- [x] 1.5 Add `TestReload_CLICrossUnaffected` — invokes `verbs.Reload` with `Caller: "cli"` and a `Path` resolving to a non-self test repo; asserts the cross-reload flow runs through restart dispatch.
+- [x] 1.6 Run the suite: tests 1.1–1.5 fail (the refusal does not exist yet).
 
 ## 2. Implementation
 

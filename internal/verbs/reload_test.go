@@ -626,6 +626,160 @@ func TestReload_PathAndAllowlistEnforcedForCross(t *testing.T) {
 	}
 }
 
+// --- CLI self-reload refusal (refuse-cli-self-reload) ----------------------
+
+// tomlSelfBuildSentinel is a self-reload .iris.toml whose build emits a
+// sentinel string. The refused-case tests assert this sentinel never
+// appears in any audit entry's BuildOutput — proving the build never ran.
+const tomlSelfBuildSentinel = `
+schema_version = 1
+[build]
+command = ["sh", "-c", "echo BUILD_RAN_SENTINEL"]
+[restart]
+mechanism = "exit_code"
+`
+
+// assertCLISelfReloadRefused encapsulates the four assertions shared by the
+// no-arg / explicit-path / task_id refused-case tests:
+//   - the returned error is non-nil and carries the stable token
+//   - the audit log contains exactly one entry, outcome=failure with the token
+//   - no audit entry was ever written with outcome=success
+//   - the build sentinel never reached any BuildOutput (build did not run)
+//   - PrePullSha is empty on every audit entry (rev-parse / fetch did not run)
+func assertCLISelfReloadRefused(t *testing.T, err error) {
+	t.Helper()
+	const token = "cli-self-reload-not-supported"
+	if err == nil {
+		t.Fatal("expected refusal error, got nil")
+	}
+	if !strings.Contains(err.Error(), token) {
+		t.Fatalf("expected error to contain %q, got: %v", token, err)
+	}
+	entries, _ := ReadAudit(AuditReadOpts{})
+	if len(entries) != 1 {
+		t.Fatalf("expected exactly 1 audit entry, got %d: %+v", len(entries), entries)
+	}
+	e := entries[0]
+	if e.Outcome != "failure" {
+		t.Fatalf("expected audit outcome=failure, got %q (entry: %+v)", e.Outcome, e)
+	}
+	if !strings.Contains(e.FailureReason, token) {
+		t.Fatalf("expected audit failure_reason to contain %q, got %q", token, e.FailureReason)
+	}
+	for _, ent := range entries {
+		if ent.Outcome == "success" {
+			t.Fatalf("expected NO success audit entry; got: %+v", ent)
+		}
+		if strings.Contains(ent.BuildOutput, "BUILD_RAN_SENTINEL") {
+			t.Fatalf("build ran despite refusal: BuildOutput=%q", ent.BuildOutput)
+		}
+		if ent.PrePullSha != "" || ent.PostPullSha != "" {
+			t.Fatalf("git rev-parse / fetch ran despite refusal: pre=%q post=%q",
+				ent.PrePullSha, ent.PostPullSha)
+		}
+	}
+}
+
+func TestReload_CLISelfNoArg_Refused(t *testing.T) {
+	_, client := reloadFixture(t, tomlSelfBuildSentinel, true)
+	// No TaskID, no Path — Reload falls through to ResolveSelf and the
+	// target is the faked self source repo.
+	_, err := Reload(context.Background(), client, ReloadInput{
+		NoPull: true,
+		Caller: "cli",
+	})
+	assertCLISelfReloadRefused(t, err)
+}
+
+func TestReload_CLISelfExplicitPath_Refused(t *testing.T) {
+	src, client := reloadFixture(t, tomlSelfBuildSentinel, true)
+	// Explicit Path that resolves to the faked self source repo.
+	_, err := Reload(context.Background(), client, ReloadInput{
+		NoPull: true,
+		Caller: "cli",
+		Path:   src,
+	})
+	assertCLISelfReloadRefused(t, err)
+}
+
+func TestReload_CLISelfTaskID_Refused(t *testing.T) {
+	_, client := reloadFixture(t, tomlSelfBuildSentinel, true)
+	// TaskID pointing at the fake argus task whose worktree_path is the
+	// faked self source repo (see reloadFixture's httptest stub).
+	_, err := Reload(context.Background(), client, ReloadInput{
+		NoPull: true,
+		Caller: "cli",
+		TaskID: "fake-task-self",
+	})
+	assertCLISelfReloadRefused(t, err)
+}
+
+// TestReload_MCPSelfUnaffected confirms the refusal does NOT fire when the
+// caller is the MCP entry point (Caller != "cli"). The existing self-reload
+// happy path must run end-to-end, including scheduleSelfExit.
+func TestReload_MCPSelfUnaffected(t *testing.T) {
+	_, client := reloadFixture(t, `schema_version = 1
+[build]
+command = ["true"]
+[restart]
+mechanism = "exit_code"
+code = 75
+`, true)
+	res, err := Reload(context.Background(), client, ReloadInput{
+		NoPull: true,
+		Caller: "self",
+	})
+	if err != nil {
+		t.Fatalf("MCP self-reload returned error: %v", err)
+	}
+	if res == nil {
+		t.Fatal("expected non-nil result for MCP self-reload")
+	}
+	if res.Mode != "self" {
+		t.Fatalf("expected mode=self, got %q", res.Mode)
+	}
+	if !res.RestartPending {
+		t.Fatal("expected RestartPending=true for MCP self-reload")
+	}
+	if got := waitForExit(t, 2*time.Second); got != 75 {
+		t.Fatalf("expected scheduled exit code 75, got %d", got)
+	}
+	entries, _ := ReadAudit(AuditReadOpts{})
+	if len(entries) != 1 || entries[0].Outcome != "success" {
+		t.Fatalf("expected one success audit entry, got: %+v", entries)
+	}
+	if strings.Contains(entries[0].FailureReason, "cli-self-reload-not-supported") {
+		t.Fatalf("MCP self-reload incorrectly tripped CLI refusal: %+v", entries[0])
+	}
+}
+
+// TestReload_CLICrossUnaffected confirms the refusal does NOT fire when the
+// CLI targets a non-self repo. The full cross-reload flow runs.
+func TestReload_CLICrossUnaffected(t *testing.T) {
+	src, client := reloadFixture(t, tomlCrossNone, false)
+	res, err := Reload(context.Background(), client, ReloadInput{
+		NoPull: true,
+		Path:   src,
+		Caller: "cli",
+	})
+	if err != nil {
+		t.Fatalf("CLI cross-reload returned error: %v", err)
+	}
+	if res == nil {
+		t.Fatal("expected non-nil result for CLI cross-reload")
+	}
+	if res.Mode != "cross" {
+		t.Fatalf("expected mode=cross, got %q", res.Mode)
+	}
+	entries, _ := ReadAudit(AuditReadOpts{})
+	if len(entries) != 1 || entries[0].Outcome != "success" {
+		t.Fatalf("expected one success audit entry, got: %+v", entries)
+	}
+	if strings.Contains(entries[0].FailureReason, "cli-self-reload-not-supported") {
+		t.Fatalf("CLI cross-reload incorrectly tripped CLI refusal: %+v", entries[0])
+	}
+}
+
 func TestJoinValidationErrors(t *testing.T) {
 	t.Run("empty input", func(t *testing.T) {
 		if got := joinValidationErrors(nil); got != "" {
