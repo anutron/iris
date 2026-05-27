@@ -94,6 +94,7 @@ In v1.1, the self-hosting verbs are: `iris:reload`, `iris:validate_config`, `iri
 - **THEN** the verb does NOT consult argus's `/api/projects/full` (iris's own repo is implicit; the verb is constrained by being self-hosting, not by the allowlist)
 - **AND** when the same verb is invoked with `task_id` or `path` resolving to a NON-self source repo, the argus allowlist enforcement applies as for any other verb
 
+
 ### Requirement: Per-source-repo mutex on git operations
 
 The daemon SHALL hold a per-source-repo mutex for the duration of any git-mutating verb so concurrent calls against the same source repo serialize cleanly.
