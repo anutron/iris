@@ -30,6 +30,21 @@ import (
 // terminating the test process.
 var exitFunc = os.Exit
 
+// ErrCLISelfReloadUnsupported is returned when `iris reload` is invoked from
+// the CLI against the iris source repo itself. The exit_code restart
+// mechanism only respawns the process that exited, and the CLI is
+// short-lived, so the restart cannot land. The message body redirects the
+// caller to the three working alternatives. The grep-friendly token
+// `cli-self-reload-not-supported` appears here and in the audit log.
+var ErrCLISelfReloadUnsupported = errors.New(
+	"cli-self-reload-not-supported: self-reload from CLI is not supported: the exit_code restart mechanism\n" +
+		"only respawns the process that exited, and the CLI is short-lived. Use\n" +
+		"one of:\n" +
+		"  - invoke iris_reload via MCP from a Claude session (primary path)\n" +
+		"  - iris reload <other-iris-managed-project>  for cross-target\n" +
+		"  - iris run-build && launchctl kickstart -k gui/$UID/<label>\n" +
+		"    to manually bounce the daemon after a build")
+
 // ReloadInput is the public input shape for iris:reload.
 type ReloadInput struct {
 	TaskID         string
@@ -94,6 +109,21 @@ func Reload(ctx context.Context, client *argus.Client, in ReloadInput) (*ReloadR
 	mode := "cross"
 	if isSelf {
 		mode = "self"
+	}
+
+	// 2a. Refuse CLI self-reload before any side effects (no toml load, no
+	// working-tree check, no lock, no pull, no build). The exit_code restart
+	// only respawns the exiting process; the CLI is short-lived, so the
+	// restart cannot land.
+	if caller == "cli" && isSelf {
+		writeAudit(AuditEntry{
+			Caller:           caller,
+			TargetSourceRepo: target.SourceRepo,
+			Mode:             "self",
+			Outcome:          "failure",
+			FailureReason:    ErrCLISelfReloadUnsupported.Error(),
+		})
+		return nil, ErrCLISelfReloadUnsupported
 	}
 
 	// 3. Pre-flight refusals (clean tree, .iris.toml, schema)

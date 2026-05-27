@@ -9,9 +9,9 @@
 
 ## 2. Implementation
 
-- [ ] 2.1 In `internal/verbs/reload.go`, define a sentinel error variable `ErrCLISelfReloadUnsupported = errors.New("cli-self-reload-not-supported: ...")` whose message text matches the three-line redirect block in the design doc.
-- [ ] 2.2 In `verbs.Reload`, immediately after the `isSelfTarget` resolution (between current step 2 and step 3), branch on `caller == "cli" && isSelf`: write the audit entry with `Mode: "self"`, `Outcome: "failure"`, `FailureReason` containing the token `cli-self-reload-not-supported`, then return `(nil, ErrCLISelfReloadUnsupported)`.
-- [ ] 2.3 Run the test suite: tests 1.1–1.5 now pass.
+- [x] 2.1 In `internal/verbs/reload.go`, define a sentinel error variable `ErrCLISelfReloadUnsupported = errors.New("cli-self-reload-not-supported: ...")` whose message text matches the three-line redirect block in the design doc.
+- [x] 2.2 In `verbs.Reload`, immediately after the `isSelfTarget` resolution (between current step 2 and step 3), branch on `caller == "cli" && isSelf`: write the audit entry with `Mode: "self"`, `Outcome: "failure"`, `FailureReason` containing the token `cli-self-reload-not-supported`, then return `(nil, ErrCLISelfReloadUnsupported)`.
+- [x] 2.3 Run the test suite: tests 1.1–1.5 now pass.
 
 ## 3. Documentation
 

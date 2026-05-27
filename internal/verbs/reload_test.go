@@ -285,7 +285,9 @@ pid_file = "/tmp/foo.pid"
 
 func TestReload_NoPullSkipsFetch(t *testing.T) {
 	_, client := reloadFixture(t, tomlSelfExitCode, true)
-	res, err := Reload(context.Background(), client, ReloadInput{NoPull: true, Caller: "cli"})
+	// Caller "self" (not "cli") so the CLI-self-reload refusal does not fire;
+	// this test exercises the self-reload pull-skip path under MCP.
+	res, err := Reload(context.Background(), client, ReloadInput{NoPull: true, Caller: "self"})
 	if err != nil {
 		t.Fatalf("reload: %v", err)
 	}
@@ -308,7 +310,8 @@ func TestReload_DefaultPullsFastForward(t *testing.T) {
 	g(other, "commit", "--allow-empty", "-m", "new")
 	g(other, "push", "origin", "main")
 
-	res, err := Reload(context.Background(), client, ReloadInput{Caller: "cli"})
+	// Caller "self" — exercise the self-reload fast-forward path via MCP.
+	res, err := Reload(context.Background(), client, ReloadInput{Caller: "self"})
 	if err != nil {
 		t.Fatalf("reload: %v", err)
 	}
@@ -335,7 +338,9 @@ func TestReload_RefusesDivergentHistory(t *testing.T) {
 	g(other, "commit", "--allow-empty", "-m", "origin-side")
 	g(other, "push", "origin", "main")
 
-	_, err := Reload(context.Background(), client, ReloadInput{Caller: "cli"})
+	// Caller "self" — exercise the self-reload divergent-history refusal
+	// via MCP (the CLI-self-reload refusal would short-circuit otherwise).
+	_, err := Reload(context.Background(), client, ReloadInput{Caller: "self"})
 	if err == nil {
 		t.Fatal("expected divergent-history refusal")
 	}
@@ -353,7 +358,8 @@ command = ["sh", "-c", "echo hello && echo world"]
 [restart]
 mechanism = "exit_code"
 `, true)
-	res, err := Reload(context.Background(), client, ReloadInput{NoPull: true, Caller: "cli"})
+	// Caller "self" — exercise self-reload build path via MCP.
+	res, err := Reload(context.Background(), client, ReloadInput{NoPull: true, Caller: "self"})
 	if err != nil {
 		t.Fatalf("reload: %v", err)
 	}
@@ -369,7 +375,8 @@ command = ["sh", "-c", "echo oops; exit 7"]
 [restart]
 mechanism = "exit_code"
 `, true)
-	_, err := Reload(context.Background(), client, ReloadInput{NoPull: true, Caller: "cli"})
+	// Caller "self" — exercise self-reload build-failure path via MCP.
+	_, err := Reload(context.Background(), client, ReloadInput{NoPull: true, Caller: "self"})
 	if err == nil {
 		t.Fatal("expected build failure")
 	}
@@ -392,7 +399,8 @@ timeout_seconds = 1
 mechanism = "exit_code"
 `, true)
 	start := time.Now()
-	_, err := Reload(context.Background(), client, ReloadInput{NoPull: true, Caller: "cli"})
+	// Caller "self" — exercise self-reload build-timeout path via MCP.
+	_, err := Reload(context.Background(), client, ReloadInput{NoPull: true, Caller: "self"})
 	if err == nil {
 		t.Fatal("expected build timeout")
 	}
@@ -415,7 +423,8 @@ mechanism = "exit_code"
 [pre_flight]
 command = ["sh", "-c", "echo blocker; exit 1"]
 `, true)
-	_, err := Reload(context.Background(), client, ReloadInput{NoPull: true, Caller: "cli"})
+	// Caller "self" — exercise self-reload pre-flight-hook path via MCP.
+	_, err := Reload(context.Background(), client, ReloadInput{NoPull: true, Caller: "self"})
 	if err == nil {
 		t.Fatal("expected pre-flight refusal")
 	}
@@ -434,7 +443,9 @@ command = ["true"]
 mechanism = "exit_code"
 code = 42
 `, true)
-	res, err := Reload(context.Background(), client, ReloadInput{NoPull: true, Caller: "cli"})
+	// Caller "self" — exercise the self-reload exit_code dispatch via MCP
+	// (CLI self-reload is refused at pre-flight).
+	res, err := Reload(context.Background(), client, ReloadInput{NoPull: true, Caller: "self"})
 	if err != nil {
 		t.Fatalf("reload: %v", err)
 	}
