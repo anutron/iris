@@ -49,12 +49,14 @@ The sandboxed agent only sees `iris:merge_to_master` as a callable tool. It does
 | `iris:gh_pr_merge` | `task_id`, `pr_number`, `strategy=squash` | Run `gh pr merge` after CI green. |
 | `iris:run_build` | `task_id`, `target?` | Run the repo's declared build script (see "Build convention" below). Stream stdout/stderr. |
 | `iris:complete_task` | `task_id`, `merge_strategy=ff_merge` | Composite: merge → push → delete remote branch → delete worktree → mark argus task complete. The full "I'm done, ship it" verb. |
+| `iris:branch_create` | `task_id`, `name`, `base_ref` | In the source repo: `git branch <name> <base_ref>`. Does NOT change the current checkout. Refuses default branch, leading-dash refnames, invalid git refs, and pre-existing branches. |
+| `iris:cherry_pick` | `task_id`, `commit`, `target_branch` | In the source repo: checkout `target_branch`, `git cherry-pick <commit>`, abort cleanly on conflict. Refuses the default branch as target. Atomic under one lock. |
+| `iris:checkout` | `task_id`, `branch`, `force=false` | In the source repo: `git checkout <branch>`. With `force=true`, aborts any in-progress merge/cherry-pick/rebase and discards uncommitted changes first — recovery from a stuck source repo. |
 
 Verbs are deliberately coarse-grained. `iris:complete_task` is the headline verb – it captures the most common case (the agent has finished a task and wants it shipped) in a single call. Finer verbs exist for cases the composite doesn't cover.
 
 Not in scope for v1, but documented as future verbs:
 
-- `iris:cherry_pick_to_master` – for hotfix-style flows
 - `iris:rebase_on_master` (in the worktree, if the in-sandbox `git rebase` proves problematic)
 - `iris:gh_release_create` – tagged releases
 - `iris:open_in_editor` – open a path in VSCode/Cursor on the host (a kindness verb for "I made changes you should look at")

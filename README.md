@@ -52,6 +52,12 @@ iris complete-task <task-id>       Composite ship-it: merge + push default + del
 iris fetch <task-id>               Run `git fetch origin` in the source repo; returns refs whose tracking SHAs changed.
 iris branch-delete-remote <task-id> --branch <name>
                                    Delete a remote branch on origin (refuses the default branch).
+iris branch-create <task-id> <name> <base-ref>
+                                   Create a branch in the source repo from an arbitrary ref (e.g. origin/master). Does NOT change the current checkout.
+iris cherry-pick <task-id> <commit> <target-branch>
+                                   Checkout target-branch and apply commit; aborts cleanly on conflict. Refuses default branch as target.
+iris checkout <task-id> <branch> [--force]
+                                   Switch the source repo to a branch. --force aborts in-progress merge/cherry-pick/rebase and discards uncommitted changes first (recovery path).
 iris tag <task-id> --tag <name> [--message "..."]
                                    Create an annotated tag at origin/<default-branch> and push it to origin.
 iris reload [target]               Live-upgrade an iris-managed daemon via .iris.toml (--no-pull, --timeout).
