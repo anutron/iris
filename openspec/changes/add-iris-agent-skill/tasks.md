@@ -2,7 +2,7 @@
 
 ## 1. Tests
 
-- [x] 1.1 Write `claude/install_test.sh`: a bash test that runs the installer's agent-asset steps against a throwaway `HOME` and asserts the behaviors from the `iris-agent-skill` deltas (symlink created; re-run idempotent; pre-existing non-symlink not clobbered; CLAUDE.md marker block added; re-run replaces in place, no duplicate; frontmatter stripped; decline prints the path). It SHALL fail until Stages 2-3 land.
+- [x] 1.1 Write `claude/install_test.sh`: a bash test that runs `install-claude-skills.sh` / `uninstall-claude-skills.sh` against a throwaway `HOME` and asserts the `iris-agent-skill` deltas (symlink create/idempotent/non-symlink-not-clobbered; per-action Y/n incl. decline-snippet and decline-both; CLAUDE.md block add/replace-in-place/frontmatter-stripped/decline-prints-path; uninstall removes our assets, leaves a foreign symlink, no-ops clean). It SHALL fail until Stages 2-3 land.
 - [x] 1.2 Write a content-gate check (in `claude/install_test.sh` or alongside) asserting: `claude/skills/iris/SKILL.md` frontmatter `description` mentions the argus gate; the skill body's first section names `~/.argus/worktrees/` and `ARGUS_TASK_ID`; the snippet's first content line is the gate; the snippet frontmatter has `tags` and `audience`.
 - [x] 1.3 Confirm 1.1 and 1.2 fail against the current tree (Prove-It).
 
@@ -24,19 +24,19 @@
 
 **Depends on:** Stage 1
 
-- [x] 3.1 Add a `SKILL_SRC="${SCRIPT_DIR}/claude/skills/iris"`, `SKILL_DEST="${HOME}/.claude/skills/iris"`, `SNIPPET_SRC="${SCRIPT_DIR}/claude/snippets/iris.md"`, `CLAUDE_MD="${HOME}/.claude/CLAUDE.md"` config block to `setup.sh`.
-- [x] 3.2 Add a `--skill-only` flag that runs only the new agent-asset steps (skill symlink + snippet offer) and exits — used by the test and by users who want the docs without the daemon.
-- [x] 3.3 Implement the skill-symlink step: create `~/.claude/skills/` if missing; if `SKILL_DEST` is already the correct symlink, report "already current"; if it is a different file/dir/symlink, warn and skip without clobbering; else create the symlink and report it.
-- [x] 3.4 Implement a `strip_frontmatter()` helper that emits a file's body with a leading `---`…`---` YAML block removed.
-- [x] 3.5 Implement the snippet step: `confirm()` (Y/n) to append into `~/.claude/CLAUDE.md`; on accept, write the stripped snippet body between `# BEGIN IRIS (argus)` / `# END IRIS (argus)`, replacing an existing marked block in place (no duplicate) and reporting added/updated/unchanged; on decline, print the absolute snippet path.
-- [x] 3.6 Wire both steps into the normal (non-`--skill-only`) flow as new numbered steps; renumber the step headers and update the trailing "Setup complete" guidance to mention the skill.
-- [x] 3.7 Run `bash claude/install_test.sh`; iterate until green.
+- [x] 3.1 Write `claude/lib-claude-assets.sh` (sourced, not executed): constants (`SKILL_SRC`/`SKILL_DEST`/`SNIPPET_SRC`/`CLAUDE_MD`/markers computed relative to the lib), color helpers, `confirm()` honoring `ASSUME_YES`, `strip_frontmatter()`, `link_skill`/`unlink_skill`, `append_snippet`/`remove_snippet_block`.
+- [x] 3.2 Write `install-claude-skills.sh`: source the lib; parse `--yes`; prompt (Y/n) separately for `link_skill` and `append_snippet`; decline-snippet prints the path.
+- [x] 3.3 Write `uninstall-claude-skills.sh`: source the lib; parse `--yes`; prompt (Y/n) separately for `unlink_skill` (repo-only) and `remove_snippet_block`.
+- [x] 3.4 `link_skill`: idempotent symlink; report already-current; warn + no-clobber on any other pre-existing path. `unlink_skill`: remove only when it points at this repo.
+- [x] 3.5 `append_snippet`: write stripped body between markers, replace in place on re-run (no duplicate), report added/updated/unchanged. `remove_snippet_block`: delete the marked block; no-op when absent.
+- [x] 3.6 Extend `setup.sh`: after daemon setup, prompt (Y/n) to install the skills and delegate to `install-claude-skills.sh` (forward `--yes` when non-interactive); decline points at the installer. Update the usage comment.
+- [x] 3.7 `chmod +x` the scripts; run `bash claude/install_test.sh`; iterate until green.
 
 ## 4. Docs + validation
 
 **Depends on:** Stage 2, Stage 3
 
-- [x] 4.1 Add a short "Agent-facing discoverability" section to `README.md` pointing at `claude/skills/iris/`, the snippet, and the `setup.sh` (incl. `--skill-only`) install path.
+- [x] 4.1 Add a short "Agent-facing discoverability" section to `README.md` pointing at `claude/skills/iris/`, the snippet, and `install-claude-skills.sh` / `uninstall-claude-skills.sh`.
 - [x] 4.2 `openspec validate add-iris-agent-skill --strict` clean.
 - [x] 4.3 `openspec validate --all --strict` clean.
-- [x] 4.4 Run `./setup.sh --skill-only` locally; verify `~/.claude/skills/iris` resolves to the repo and the CLAUDE.md marker block is correct.
+- [x] 4.4 `bash claude/install_test.sh` green (exercises install + uninstall against a throwaway HOME — the host `~/.claude` run is left to the user, since it's outside the argus sandbox).

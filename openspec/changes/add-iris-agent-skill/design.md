@@ -24,11 +24,13 @@ This mirrors the precedent set by plannotator-argus, which solved the parallel d
 
 ### Decision 1: Docs ship in this repo, installed into `~/.claude/`, gated at runtime
 
-Three artifacts live under a new top-level `claude/` directory:
+The agent-facing payload lives under a new top-level `claude/` directory; the installers sit at the repo root beside `setup.sh`:
 
 - `claude/skills/iris/SKILL.md` — the agent-facing reference (primary surface).
 - `claude/snippets/iris.md` — an optional always-in-context orientation fragment.
-- `setup.sh` (extended) — symlinks the skill into `~/.claude/skills/iris` and offers to wire the snippet into `~/.claude/CLAUDE.md`.
+- `claude/lib-claude-assets.sh` — shared bash helpers sourced by the installers.
+- `install-claude-skills.sh` / `uninstall-claude-skills.sh` — dedicated, idempotent scripts that install / remove the assets.
+- `setup.sh` (extended) — after daemon setup, offers (Y/n) to run `install-claude-skills.sh`.
 
 The `claude/` directory is distinct from the repo's existing `.claude/` directory, which holds the *developer's* OpenSpec commands and skills. `claude/` is the agent-facing install payload; `.claude/` is plugin-developer tooling.
 
@@ -51,13 +53,17 @@ The snippet's first content line is the gate, per the handoff: "If `ARGUS_TASK_I
 
 plannotator-argus ships a PreToolUse guard because `plannotator <verb>` is an unambiguous 1:1 redirect to an MCP tool, and the direct call EPERMs. Iris is different: most `git` commands (local commits, branches, `status`, `diff`, `log`) are perfectly fine inside a worktree. Only a few operations — `git push`, `gh pr ...`, and anything that mutates the canonical source repo's checkout — need the host. A Bash guard cannot reliably tell source-repo intent from the command string alone, so it would either miss cases or deny legitimate local git. The skill's "common Bash mistakes" section does the teaching instead. If the skill proves insufficient in practice, a narrow guard (push + gh only) is a separate future change.
 
-### Decision 5: `setup.sh` appends the snippet into `~/.claude/CLAUDE.md` between markers, with a Y/n prompt
+### Decision 5: Dedicated install/uninstall scripts, each action separately Y/n-gated
 
-Rather than assume every user has a snippet-compilation pipeline, `setup.sh` offers (Y/n) to append the snippet's **body** (YAML frontmatter stripped) into `~/.claude/CLAUDE.md` between `# BEGIN IRIS (argus)` / `# END IRIS (argus)` markers. Re-running replaces the marked block in place (idempotent) and reports added / updated / unchanged. Stripping the frontmatter keeps CLAUDE.md clean while the snippet file retains its `tags` / `audience` frontmatter so it still slots into a compile pipeline (e.g. Aaron's `claude-rules/snippets/`) for users who prefer that path.
+The agent-asset logic lives in its own `install-claude-skills.sh` / `uninstall-claude-skills.sh` (not buried inside `setup.sh`), sharing helpers via `claude/lib-claude-assets.sh`. Each script prompts (Y/n) **separately** for the two actions — the skill symlink and the CLAUDE.md snippet — so a user can take one without the other. A `--yes` flag accepts both for non-interactive/test runs. Dedicated scripts give a discoverable, reversible surface (you can uninstall) and keep `setup.sh` focused on the daemon.
 
-### Decision 6: Skill install is a symlink, idempotent
+### Decision 6: Skill install is a symlink; snippet is a frontmatter-stripped marked block
 
-`setup.sh` symlinks `claude/skills/iris` → `~/.claude/skills/iris` so live edits flow through. On re-run it detects an existing correct symlink and skips; it reports what changed. A pre-existing non-symlink at the target is surfaced as a warning, not clobbered.
+The skill is symlinked `claude/skills/iris` → `~/.claude/skills/iris` so live edits flow through; an existing correct symlink is reported and skipped, and any other pre-existing path is warned about and never clobbered. The snippet body (YAML frontmatter stripped) is appended into `~/.claude/CLAUDE.md` between `# BEGIN IRIS (argus)` / `# END IRIS (argus)` markers and replaced in place on re-run. Stripping the frontmatter keeps CLAUDE.md clean while the snippet file retains its `tags` / `audience` frontmatter so it still slots into a compile pipeline (e.g. Aaron's `claude-rules/snippets/`) for users who prefer that path. Uninstall removes the symlink only when it points at this repo, and deletes the marked block.
+
+### Decision 7: `setup.sh` delegates rather than duplicates
+
+After its daemon-setup steps, `setup.sh` asks one Y/n — "install the Claude skills now?" — and, if accepted, execs `install-claude-skills.sh` (forwarding `--yes` when non-interactive). This keeps a single `./setup.sh` able to set up everything while leaving the asset logic in one place. Declining points the user at the installer for later.
 
 ## Risks / Trade-offs
 
@@ -98,9 +104,21 @@ Rather than assume every user has a snippet-compilation pipeline, `setup.sh` off
 
 ### Installer behavior
 
-- It should symlink `claude/skills/iris` into `~/.claude/skills/iris`.
+- `install-claude-skills.sh` should prompt (Y/n) separately for the skill symlink and for the CLAUDE.md snippet, with `--yes` accepting both.
+- It should symlink `claude/skills/iris` into `~/.claude/skills/iris` when the skill prompt is accepted.
 - It should detect an existing correct symlink and skip it, reporting "already current."
-- It should offer (Y/n) to append the snippet body into `~/.claude/CLAUDE.md` between `# BEGIN IRIS (argus)` / `# END IRIS (argus)` markers.
-- It should strip the snippet's YAML frontmatter before appending to `~/.claude/CLAUDE.md`.
+- It should not clobber a pre-existing non-symlink (or foreign symlink) at the target; it should warn instead.
+- It should strip the snippet's YAML frontmatter before appending to `~/.claude/CLAUDE.md` between the markers.
 - It should replace the marked block in place on re-run rather than appending a duplicate.
-- It should report what changed (added / updated / unchanged / skipped) for each step.
+- It should print the snippet path when the snippet prompt is declined.
+
+### Uninstaller behavior
+
+- `uninstall-claude-skills.sh` should prompt (Y/n) separately to remove the skill symlink and the CLAUDE.md block, with `--yes` accepting both.
+- It should remove the skill symlink only when it points at this repo, and leave a foreign symlink or real directory untouched.
+- It should remove the marked block from `~/.claude/CLAUDE.md`.
+- It should be a no-op (exit success) when neither asset is present.
+
+### setup.sh delegation
+
+- `setup.sh` should prompt (Y/n) whether to install the Claude skills after daemon setup, and delegate to `install-claude-skills.sh` (forwarding non-interactive mode) when accepted.

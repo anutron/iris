@@ -15,25 +15,31 @@ A Claude session spawned inside an argus worktree sees only the `mcp__argus__iri
 - Short by design: gate + two-sentence orientation + top Bash→iris redirects + a pointer to load the full `iris` skill.
 - Retains `tags` / `audience` frontmatter for compile-pipeline compatibility.
 
+### New `install-claude-skills.sh` and `uninstall-claude-skills.sh`
+
+- Dedicated, idempotent scripts (peers of `setup.sh`) that install / remove the agent-facing assets, sharing logic via `claude/lib-claude-assets.sh`.
+- `install-claude-skills.sh` prompts (Y/n) **separately** to (a) symlink `claude/skills/iris` → `~/.claude/skills/iris` and (b) append the snippet **body** (frontmatter stripped) into `~/.claude/CLAUDE.md` between `# BEGIN IRIS (argus)` / `# END IRIS (argus)` markers (replaced in place on re-run). Declining the snippet prints its path. `--yes` accepts both.
+- `uninstall-claude-skills.sh` prompts (Y/n) separately to remove the skill symlink (only if it points at this repo) and the CLAUDE.md block. No-op when nothing is present. `--yes` accepts both.
+
 ### Extended `setup.sh`
 
-- New step: idempotently symlink `claude/skills/iris` → `~/.claude/skills/iris`; detect an existing correct symlink and skip.
-- New step: offer (Y/n) to append the snippet **body** (frontmatter stripped) into `~/.claude/CLAUDE.md` between `# BEGIN IRIS (argus)` / `# END IRIS (argus)` markers; replace the block in place on re-run.
-- Reports added / updated / unchanged / skipped per step. Reuses the existing `confirm()` and color helpers.
+- After its daemon-setup steps, `setup.sh` prompts (Y/n) whether to install the Claude skills and delegates to `install-claude-skills.sh` (forwarding non-interactive mode). Declining points the user at the installer for later. No agent-asset logic lives in `setup.sh` itself.
 
 ## Capabilities
 
 ### New Capabilities
 
-- `iris-agent-skill` — the agent-facing skill, the orientation snippet, and the installer behavior that lands them in `~/.claude/`.
+- `iris-agent-skill` — the agent-facing skill, the orientation snippet, and the install/uninstall behavior that lands them in (and removes them from) `~/.claude/`.
 
 ### Modified Capabilities
 
-- (none) — `setup.sh` has no existing delta spec capability; its new behavior is captured under the new `iris-agent-skill` capability rather than a separate installer capability.
+- (none) — the installer scripts have no existing delta spec capability; their behavior is captured under the new `iris-agent-skill` capability.
 
 ## Impact
 
 - New `claude/skills/iris/SKILL.md` and `claude/snippets/iris.md` (documentation; no Go code).
-- `setup.sh`: two new numbered steps + a frontmatter-stripping append helper.
-- `README.md`: a short "Agent-facing discoverability" section pointing at the skill and the installer steps.
+- New `install-claude-skills.sh`, `uninstall-claude-skills.sh`, and `claude/lib-claude-assets.sh` (shared bash helpers).
+- New `claude/install_test.sh` (installer + content-gate tests).
+- `setup.sh`: one new Y/n prompt that delegates to `install-claude-skills.sh`.
+- `README.md`: a short "Agent-facing discoverability" section pointing at the skill, snippet, and install/uninstall scripts.
 - No changes to the daemon, verbs, MCP handlers, or argus core.

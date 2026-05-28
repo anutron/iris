@@ -52,40 +52,79 @@ The plugin SHALL ship an optional CLAUDE.md snippet at `claude/snippets/iris.md`
 
 ### Requirement: Idempotent skill installation
 
-The installer (`setup.sh`) SHALL symlink `claude/skills/iris` to `~/.claude/skills/iris` and SHALL be safe to re-run. On re-run it SHALL detect an existing correct symlink and skip it, reporting that the skill is already current. A pre-existing path at the target that is not the expected symlink SHALL be surfaced as a warning and SHALL NOT be clobbered.
+A dedicated installer script `install-claude-skills.sh` SHALL install the agent-facing assets and SHALL be safe to re-run. It SHALL prompt (Y/n) before symlinking the skill, and SHALL prompt (Y/n) separately before wiring the snippet. A `--yes` flag SHALL accept both prompts non-interactively. When the skill prompt is accepted it SHALL symlink `claude/skills/iris` to `~/.claude/skills/iris`; on re-run it SHALL detect an existing correct symlink and report the skill as already current; a pre-existing path at the target that is not the expected symlink SHALL be surfaced as a warning and SHALL NOT be clobbered.
 
 #### Scenario: Fresh install creates the symlink
 
-- **WHEN** `setup.sh` runs and `~/.claude/skills/iris` does not exist
+- **WHEN** `install-claude-skills.sh` runs, the skill prompt is accepted, and `~/.claude/skills/iris` does not exist
 - **THEN** it creates a symlink `~/.claude/skills/iris` → `<repo>/claude/skills/iris` and reports the link as created
 
 #### Scenario: Re-run detects an existing symlink
 
-- **WHEN** `setup.sh` runs and `~/.claude/skills/iris` already points at `<repo>/claude/skills/iris`
+- **WHEN** `install-claude-skills.sh` runs with the skill prompt accepted and `~/.claude/skills/iris` already points at `<repo>/claude/skills/iris`
 - **THEN** it leaves the symlink in place and reports that the skill is already current
 
 #### Scenario: Pre-existing non-symlink is not clobbered
 
-- **WHEN** `setup.sh` runs and `~/.claude/skills/iris` exists but is a regular directory or a symlink to a different target
+- **WHEN** `install-claude-skills.sh` runs with the skill prompt accepted and `~/.claude/skills/iris` exists but is a regular directory or a symlink to a different target
 - **THEN** it does NOT overwrite it; it warns naming the conflicting path and leaves it untouched
+
+#### Scenario: Declining the skill prompt installs nothing
+
+- **WHEN** `install-claude-skills.sh` runs and the user declines the skill prompt
+- **THEN** no symlink is created at `~/.claude/skills/iris`
 
 ### Requirement: Snippet wiring into CLAUDE.md
 
-The installer SHALL offer, with a Y/n prompt, to wire the orientation snippet into `~/.claude/CLAUDE.md`. When accepted, it SHALL append the snippet's body — with the YAML frontmatter stripped — between the markers `# BEGIN IRIS (argus)` and `# END IRIS (argus)`. On re-run it SHALL replace the content between the markers in place rather than appending a duplicate block, and SHALL report whether the block was added, updated, or left unchanged. When the prompt is declined, it SHALL print the snippet's path so the user can wire it in manually.
+`install-claude-skills.sh` SHALL offer, with its own Y/n prompt (separate from the skill prompt), to wire the orientation snippet into `~/.claude/CLAUDE.md`. When accepted, it SHALL append the snippet's body — with the YAML frontmatter stripped — between the markers `# BEGIN IRIS (argus)` and `# END IRIS (argus)`. On re-run it SHALL replace the content between the markers in place rather than appending a duplicate block, and SHALL report whether the block was added, updated, or left unchanged. When the prompt is declined, it SHALL leave `~/.claude/CLAUDE.md` unmodified and print the snippet's path so the user can wire it in manually.
 
 #### Scenario: Accepting the prompt appends a marked block
 
 - **GIVEN** `~/.claude/CLAUDE.md` contains no iris markers
-- **WHEN** `setup.sh` runs and the user accepts the snippet prompt
+- **WHEN** `install-claude-skills.sh` runs and the user accepts the snippet prompt
 - **THEN** it appends the snippet body between `# BEGIN IRIS (argus)` and `# END IRIS (argus)`, with the YAML frontmatter removed, and reports the block as added
 
 #### Scenario: Re-run replaces the marked block in place
 
 - **GIVEN** `~/.claude/CLAUDE.md` already contains an iris marked block
-- **WHEN** `setup.sh` runs again and the user accepts the snippet prompt
+- **WHEN** `install-claude-skills.sh` runs again and the user accepts the snippet prompt
 - **THEN** it replaces only the content between the markers and reports the block as updated (or unchanged if identical), never appending a second block
 
 #### Scenario: Declining prints the path
 
-- **WHEN** `setup.sh` runs and the user declines the snippet prompt
+- **WHEN** `install-claude-skills.sh` runs and the user declines the snippet prompt
 - **THEN** it does not modify `~/.claude/CLAUDE.md` and prints the absolute path to `claude/snippets/iris.md` so the user can wire it in manually
+
+### Requirement: Agent-asset uninstallation
+
+A dedicated `uninstall-claude-skills.sh` SHALL remove the agent-facing assets and SHALL be safe to re-run. It SHALL prompt (Y/n) before removing the skill symlink, and SHALL prompt (Y/n) separately before removing the snippet block; `--yes` SHALL accept both non-interactively. The skill symlink SHALL be removed only when it points at this repo; a symlink to a different target, a real directory, or an absent target SHALL be left untouched. The snippet block SHALL be removed by deleting the content between (and including) the `# BEGIN IRIS (argus)` / `# END IRIS (argus)` markers, and SHALL be a no-op when no block is present.
+
+#### Scenario: Uninstall removes our own assets
+
+- **GIVEN** the assets were installed by `install-claude-skills.sh`
+- **WHEN** `uninstall-claude-skills.sh` runs and both prompts are accepted
+- **THEN** the `~/.claude/skills/iris` symlink is removed and the iris marked block is removed from `~/.claude/CLAUDE.md`
+
+#### Scenario: A foreign symlink is left alone
+
+- **WHEN** `uninstall-claude-skills.sh` runs with the skill prompt accepted and `~/.claude/skills/iris` is a symlink to a target other than this repo
+- **THEN** it does NOT remove it; it warns naming the target and leaves it untouched
+
+#### Scenario: Uninstall on a clean target is a no-op
+
+- **WHEN** `uninstall-claude-skills.sh` runs and neither the symlink nor the marked block is present
+- **THEN** it exits successfully and reports there was nothing to remove
+
+### Requirement: setup.sh delegates the skills install
+
+The daemon installer `setup.sh` SHALL, after its daemon-setup steps, prompt (Y/n) whether to install the agent-facing Claude skills. When accepted it SHALL delegate to `install-claude-skills.sh` (forwarding non-interactive mode). When declined it SHALL skip the install and point the user at `install-claude-skills.sh` for later.
+
+#### Scenario: Accepting delegates to the installer
+
+- **WHEN** `setup.sh` finishes its daemon steps and the user accepts the skills prompt
+- **THEN** it invokes `install-claude-skills.sh` (with `--yes` when `setup.sh` is running non-interactively)
+
+#### Scenario: Declining skips the install
+
+- **WHEN** `setup.sh` finishes its daemon steps and the user declines the skills prompt
+- **THEN** it does not modify `~/.claude` and prints that the skills can be installed later via `install-claude-skills.sh`
