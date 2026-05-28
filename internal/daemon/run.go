@@ -81,6 +81,9 @@ func Start(ctx context.Context, cfg *config.Config, log *slog.Logger) (*Daemon, 
 	mcpSrv.RegisterHandler("iris_complete_task", mcp.NewCompleteTaskHandler(client))
 	mcpSrv.RegisterHandler("iris_fetch", mcp.NewFetchHandler(client))
 	mcpSrv.RegisterHandler("iris_branch_delete_remote", mcp.NewBranchDeleteRemoteHandler(client))
+	mcpSrv.RegisterHandler("iris_branch_create", mcp.NewBranchCreateHandler(client))
+	mcpSrv.RegisterHandler("iris_cherry_pick", mcp.NewCherryPickHandler(client))
+	mcpSrv.RegisterHandler("iris_checkout", mcp.NewCheckoutHandler(client))
 	mcpSrv.RegisterHandler("iris_tag", mcp.NewTagHandler(client))
 	mcpSrv.RegisterHandler("iris_reload", mcp.NewReloadHandler(client))
 	mcpSrv.RegisterHandler("iris_publish", mcp.NewPublishHandler(client))
@@ -328,6 +331,45 @@ func toolDefinitions() []mcp.ToolDefinition {
 				"properties": map[string]any{
 					"task_id": map[string]any{"type": "string", "description": "Argus task ID. Iris resolves the source repo from this."},
 					"branch":  map[string]any{"type": "string", "description": "Remote branch name to delete (required, non-empty, MUST NOT be the default branch)."},
+				},
+				"required": []string{"task_id", "branch"},
+			},
+		},
+		{
+			Name:        "iris_branch_create",
+			Description: "Create a branch in the resolved source repo from an arbitrary ref via `git branch <name> <base_ref>`. Does NOT change the source repo's current checkout. Refuses the default branch name, leading-dash refnames, invalid git refs (per `git check-ref-format --branch`), and pre-existing local branches. Pair with `iris:checkout` to switch.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"task_id":  map[string]any{"type": "string", "description": "Argus task ID. Iris resolves the source repo from this."},
+					"name":     map[string]any{"type": "string", "description": "New branch name. MUST NOT begin with '-', equal the default branch (or main/master), or already exist locally."},
+					"base_ref": map[string]any{"type": "string", "description": "Ref to branch from — e.g. `origin/master`, a SHA, a tag. MUST NOT begin with '-'. Iris does not pre-fetch; call `iris_fetch` first if you need the latest origin state."},
+				},
+				"required": []string{"task_id", "name", "base_ref"},
+			},
+		},
+		{
+			Name:        "iris_cherry_pick",
+			Description: "Cherry-pick a commit onto a target branch in the source repo. Checks out `target_branch` then runs `git cherry-pick <commit>` under the per-source-repo lock; the pair is atomic from other iris callers' view. On conflict, runs `git cherry-pick --abort` and returns a structured error carrying the conflict paths; the source repo lands back on `target_branch` with a clean working tree. Refuses cherry-picking onto the default branch (use `iris_merge_to_master` for that).",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"task_id":       map[string]any{"type": "string", "description": "Argus task ID. Iris resolves the source repo from this."},
+					"commit":        map[string]any{"type": "string", "description": "Commit-ish to cherry-pick (SHA, branch name, etc.). MUST NOT begin with '-'."},
+					"target_branch": map[string]any{"type": "string", "description": "Local branch to apply the commit onto. MUST NOT begin with '-', equal the default branch, or be absent locally."},
+				},
+				"required": []string{"task_id", "commit", "target_branch"},
+			},
+		},
+		{
+			Name:        "iris_checkout",
+			Description: "Switch the source repo to a branch. With `force=false` (default), runs plain `git checkout <branch>` and propagates git's refusal for dirty working trees or in-progress merges/cherry-picks. With `force=true`, runs best-effort `git merge --abort`, `git cherry-pick --abort`, `git rebase --abort`, then `git checkout -f <branch>` — the explicit recovery path for a source repo stuck mid-operation. `prior_branch` and `prior_head` reflect the state before any recovery so the discarded SHA is recoverable via reflog.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"task_id": map[string]any{"type": "string", "description": "Argus task ID. Iris resolves the source repo from this."},
+					"branch":  map[string]any{"type": "string", "description": "Branch to switch to. MUST NOT begin with '-'."},
+					"force":   map[string]any{"type": "boolean", "default": false, "description": "Abort any in-progress merge/cherry-pick/rebase and discard uncommitted changes before switching. Destructive — pair with reflog for recovery."},
 				},
 				"required": []string{"task_id", "branch"},
 			},
