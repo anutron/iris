@@ -112,7 +112,12 @@ func (e ValidationError) Error() string {
 // Returns:
 //   - (*IrisToml, nil, nil) on a successful parse with no validation errors
 //   - (*IrisToml, errs, nil) on a successful parse with cross-validation errors
-//   - (nil, errs, nil) when the file is missing or malformed (errs name the issue)
+//   - (nil, errs, nil) when the file is malformed (errs name the issue)
+//   - (nil, nil, nil) when the file is missing (ENOENT). Missing is NOT
+//     an error: callers that require a config check for `doc == nil` and
+//     synthesize their own error message. Callers that treat the config
+//     as optional (e.g. iris:status) silently fall back to the
+//     no-config code path.
 //   - (nil, nil, err) for I/O or unexpected errors only
 //
 // Validation requires knowing whether the file is iris's own (`isSelf=true`):
@@ -122,11 +127,7 @@ func LoadIrisToml(path string, isSelf bool) (*IrisToml, []ValidationError, error
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			return nil, []ValidationError{{
-				Field:   IrisTomlFilename,
-				Message: fmt.Sprintf("file not found at %s", path),
-				Hint:    "create .iris.toml at the source repo root",
-			}}, nil
+			return nil, nil, nil
 		}
 		return nil, nil, fmt.Errorf("read %s: %w", path, err)
 	}

@@ -16,6 +16,12 @@ type Task struct {
 	Branch       string `json:"branch"`
 }
 
+// listTasksResponse mirrors argus's GET /api/tasks envelope, modelled on
+// the same `{ "<resource>": [...] }` shape used by /api/projects/full.
+type listTasksResponse struct {
+	Tasks []Task `json:"tasks"`
+}
+
 // GetTask fetches one task by ID.
 func (c *Client) GetTask(ctx context.Context, taskID string) (*Task, error) {
 	var t Task
@@ -23,6 +29,17 @@ func (c *Client) GetTask(ctx context.Context, taskID string) (*Task, error) {
 		return nil, err
 	}
 	return &t, nil
+}
+
+// ListTasks fetches argus's full task list. Iris filters client-side to
+// find a task whose worktree_path matches a given source repo; argus's
+// task list is small enough that server-side filtering is unnecessary.
+func (c *Client) ListTasks(ctx context.Context) ([]Task, error) {
+	var resp listTasksResponse
+	if _, err := c.doJSON(ctx, "GET", "/api/tasks", nil, &resp); err != nil {
+		return nil, err
+	}
+	return resp.Tasks, nil
 }
 
 // SetTaskStatus updates an argus task's status (e.g., "complete").

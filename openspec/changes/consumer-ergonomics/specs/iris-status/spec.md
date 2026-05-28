@@ -28,9 +28,15 @@ The result shape changes for missing `.iris.toml`:
 
 #### Scenario: argus_task is null when no task matches
 
-- **GIVEN** a source repo with no argus task pointing at it (or with argus unreachable)
+- **GIVEN** a source repo with no argus task pointing at it (argus reachable, list returned)
 - **WHEN** `iris:status` is invoked
-- **THEN** iris returns `argus_task: null` and (if argus was unreachable) appends a warning to `warnings`
+- **THEN** iris returns `argus_task: null` with NO argus-related warning
+
+#### Scenario: argus unreachable surfaces a warning
+
+- **GIVEN** argus returns an error to `GET /api/tasks` (or is unreachable)
+- **WHEN** `iris:status` is invoked
+- **THEN** iris returns `argus_task: null` and appends a warning of the form "could not query argus for matching task: <err>" to `warnings`. The verb does NOT fail.
 
 #### Scenario: Missing `.iris.toml` is silent
 

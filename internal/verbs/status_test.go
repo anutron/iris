@@ -15,8 +15,17 @@ import (
 )
 
 // statusFixture returns a source repo (committed clean, origin/HEAD set,
-// .iris.toml present) plus a stub argus that allowlists it.
+// .iris.toml present when body != "") plus a stub argus that allowlists
+// it. The stub answers /api/tasks with an empty list by default;
+// statusFixtureWithTasks supports seeding tasks.
 func statusFixture(t *testing.T, body string) (string, *argus.Client) {
+	return statusFixtureWithTasks(t, body, nil)
+}
+
+// statusFixtureWithTasks is the configurable variant. tasks (when
+// non-nil) is returned from /api/tasks so FindTaskBySourceRepo has a
+// chance to match.
+func statusFixtureWithTasks(t *testing.T, body string, tasks []map[string]any) (string, *argus.Client) {
 	t.Helper()
 	setAuditDir(t)
 	src := setupRepoOnly(t)
@@ -30,15 +39,21 @@ func statusFixture(t *testing.T, body string) (string, *argus.Client) {
 		g(src, "push", "origin", "main")
 	}
 	canon, _ := filepath.EvalSymlinks(src)
+	if tasks == nil {
+		tasks = []map[string]any{}
+	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		if r.URL.Path == "/api/projects/full" {
+		switch r.URL.Path {
+		case "/api/projects/full":
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"projects": []map[string]any{{"name": "iris-test", "path": canon}},
 			})
-			return
+		case "/api/tasks":
+			_ = json.NewEncoder(w).Encode(map[string]any{"tasks": tasks})
+		default:
+			http.NotFound(w, r)
 		}
-		http.NotFound(w, r)
 	}))
 	t.Cleanup(srv.Close)
 	// Make ResolveSelf point elsewhere so this is a cross-target.
@@ -169,7 +184,10 @@ func TestStatus_MissingAuditLogReturnsLastReloadNil(t *testing.T) {
 	}
 }
 
-func TestStatus_MissingIrisTomlSurfacedAsWarning(t *testing.T) {
+// TestStatus_MissingIrisTomlIsSilent verifies the consumer-ergonomics
+// contract: a missing `.iris.toml` is NOT a warning; it produces
+// config: nil with no warning emitted about the missing file.
+func TestStatus_MissingIrisTomlIsSilent(t *testing.T) {
 	src, client := statusFixture(t, "") // no .iris.toml
 	res, err := Status(context.Background(), client, StatusInput{Path: src})
 	if err != nil {
@@ -178,14 +196,184 @@ func TestStatus_MissingIrisTomlSurfacedAsWarning(t *testing.T) {
 	if res.Config != nil {
 		t.Fatal("expected config nil when .iris.toml missing")
 	}
-	found := false
 	for _, w := range res.Warnings {
 		if strings.Contains(w, ".iris.toml") || strings.Contains(w, "file not found") {
+			t.Fatalf("expected no warning about missing .iris.toml, got: %q", w)
+		}
+	}
+}
+
+// TestStatus_MalformedIrisTomlStillWarns verifies that parse errors
+// continue to surface as warnings (the silent-missing contract only
+// applies to ENOENT, not to malformed content).
+func TestStatus_MalformedIrisTomlStillWarns(t *testing.T) {
+	src, client := statusFixture(t, "")
+	// Write malformed TOML directly (bypass fixture's commit, so we don't
+	// reject schema_version validation – we want a parse error specifically).
+	if err := os.WriteFile(filepath.Join(src, ".iris.toml"), []byte("broken = [\n"), 0o644); err != nil {
+		t.Fatalf("write malformed: %v", err)
+	}
+	res, err := Status(context.Background(), client, StatusInput{Path: src})
+	if err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	if res.Config != nil {
+		t.Fatal("expected config nil when .iris.toml malformed")
+	}
+	found := false
+	for _, w := range res.Warnings {
+		if strings.Contains(w, "parse error") || strings.Contains(w, "TOML") {
 			found = true
 		}
 	}
 	if !found {
-		t.Fatalf("expected .iris.toml warning, got: %+v", res.Warnings)
+		t.Fatalf("expected parse-error warning, got: %+v", res.Warnings)
+	}
+}
+
+// TestStatus_BranchAndArgusTask verifies the new fields populate when
+// the source repo's HEAD is on a branch and argus advertises a task
+// whose worktree_path equals the canonicalized source repo.
+func TestStatus_BranchAndArgusTask(t *testing.T) {
+	tasks := []map[string]any{
+		{"id": "other", "worktree_path": "/some/elsewhere"},
+		// Filled in after we know canon path below.
+	}
+	src, client := statusFixtureWithTasks(t, tomlNone, tasks)
+	canon, _ := filepath.EvalSymlinks(src)
+	// Add a feature branch and switch to it.
+	g := gitRunner(t)
+	g(src, "checkout", "-b", "argus/feature-x")
+	// Re-spin the fixture with the canonical path in a task. (Simplest:
+	// rebuild the client with a fresh fixture.) Instead, run another
+	// fixture iteration: but easier — make a second fixture pointing at
+	// the same src is not possible because setupRepoOnly creates a fresh
+	// repo. So just construct the argus stub directly here.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/projects/full":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"projects": []map[string]any{{"name": "iris-test", "path": canon}},
+			})
+		case "/api/tasks":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"tasks": []map[string]any{
+					{"id": "other", "worktree_path": "/some/elsewhere"},
+					{"id": "match", "name": "matched task", "project": "iris",
+						"status": "in_progress", "worktree_path": canon,
+						"branch": "argus/feature-x"},
+				},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	client = argus.New(srv.URL, "stub")
+
+	res, err := Status(context.Background(), client, StatusInput{Path: src})
+	if err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	if res.Branch != "argus/feature-x" {
+		t.Fatalf("branch = %q want %q", res.Branch, "argus/feature-x")
+	}
+	if res.ArgusTask == nil {
+		t.Fatal("expected argus_task to be populated")
+	}
+	if res.ArgusTask.ID != "match" {
+		t.Fatalf("argus_task.id = %q want match", res.ArgusTask.ID)
+	}
+}
+
+// TestStatus_ArgusTaskNullWhenNoMatch confirms the absence path is
+// silent (null task, no warning) – this is the "argus has tasks but
+// none point at this source repo" case.
+func TestStatus_ArgusTaskNullWhenNoMatch(t *testing.T) {
+	src, client := statusFixtureWithTasks(t, tomlNone, []map[string]any{
+		{"id": "elsewhere", "worktree_path": "/some/elsewhere"},
+	})
+	res, err := Status(context.Background(), client, StatusInput{Path: src})
+	if err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	if res.ArgusTask != nil {
+		t.Fatalf("expected argus_task nil, got %#v", res.ArgusTask)
+	}
+	for _, w := range res.Warnings {
+		if strings.Contains(w, "argus") {
+			t.Fatalf("expected no argus warning when list-tasks succeeded, got: %q", w)
+		}
+	}
+}
+
+// TestStatus_ArgusUnreachableSurfacesWarning confirms that when argus
+// errors on /api/tasks (server 500), Status still succeeds, argus_task
+// is nil, and a warning is appended.
+func TestStatus_ArgusUnreachableSurfacesWarning(t *testing.T) {
+	// Build a fixture, then swap the argus client to one that 500s on
+	// /api/tasks (but still allowlists / on projects so Resolve succeeds).
+	src := setupRepoOnly(t)
+	setAuditDir(t)
+	canon, _ := filepath.EvalSymlinks(src)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/projects/full":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"projects": []map[string]any{{"name": "iris-test", "path": canon}},
+			})
+		case "/api/tasks":
+			http.Error(w, "boom", http.StatusInternalServerError)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	elsewhere := setupRepoOnly(t)
+	bin := filepath.Join(elsewhere, "bin", "iris")
+	_ = os.MkdirAll(filepath.Dir(bin), 0o755)
+	_ = os.WriteFile(bin, []byte("x"), 0o755)
+	old := executable
+	executable = func() (string, error) { return bin, nil }
+	t.Cleanup(func() { executable = old })
+	client := argus.New(srv.URL, "stub")
+
+	res, err := Status(context.Background(), client, StatusInput{Path: src})
+	if err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	if res.ArgusTask != nil {
+		t.Fatal("expected argus_task nil when argus errors")
+	}
+	found := false
+	for _, w := range res.Warnings {
+		if strings.Contains(w, "could not query argus") || strings.Contains(w, "matching task") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected an argus-unreachable warning, got: %+v", res.Warnings)
+	}
+}
+
+// TestStatus_BranchEmptyOnDetachedHead verifies the detached-HEAD
+// normalization: `git rev-parse --abbrev-ref HEAD` returns "HEAD" in
+// that state; Status reports branch as "".
+func TestStatus_BranchEmptyOnDetachedHead(t *testing.T) {
+	src, client := statusFixture(t, tomlNone)
+	g := gitRunner(t)
+	// Detach HEAD by checking out the current commit by SHA.
+	sha := strings.TrimSpace(headSHA(t, src))
+	g(src, "checkout", "--detach", sha)
+
+	res, err := Status(context.Background(), client, StatusInput{Path: src})
+	if err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	if res.Branch != "" {
+		t.Fatalf("expected branch=\"\" on detached HEAD, got %q", res.Branch)
 	}
 }
 

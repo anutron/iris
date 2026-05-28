@@ -4,18 +4,18 @@
 
 ## 2. Status enrichment + warning silencing (Agent A)
 
-- [ ] 2.1 Add `ListTasks` method to `internal/argus/Client` (GET `/api/tasks`, return `[]Task`).
-- [ ] 2.2 Add `FindTaskByWorktreePath` helper in `internal/verbs/` (or near Resolve) that calls ListTasks and filters using `EqualSourceRepos`.
-- [ ] 2.3 Add `Branch` (string) and `ArgusTask` (*argus.Task) fields to `verbs.StatusResult`.
-- [ ] 2.4 Populate `Branch` from `git rev-parse --abbrev-ref HEAD` in the resolved source repo.
-- [ ] 2.5 Populate `ArgusTask` when iris can resolve a task matching the source repo; null otherwise. Do not fail Status if argus is unreachable – warn and leave null.
-- [ ] 2.6 Change `LoadIrisToml`: ENOENT returns `(nil, nil, nil)` instead of synthesizing a ValidationError. Update existing callers that depend on the old shape (search for `LoadIrisToml`).
-- [ ] 2.7 Update `verbs.Status` to set `Config: nil` with no warning when `doc == nil` (file absent). Parse errors still flow as warnings.
-- [ ] 2.8 Update `internal/verbs/status_test.go` for the new fields + silent-missing-config behavior.
-- [ ] 2.9 Update other tests broken by the LoadIrisToml signature/behavior change.
-- [ ] 2.10 Update tool description for `iris_status` in `internal/daemon/run.go` to mention the new fields.
-- [ ] 2.11 `make test`, `make vet`, `gofmt -l .` clean.
-- [ ] 2.12 Update this change's `specs/iris-status/spec.md` delta with the final field shape and scenarios.
+- [x] 2.1 Add `ListTasks` method to `internal/argus/Client` (GET `/api/tasks`, return `[]Task`).
+- [x] 2.2 Add `FindTaskByWorktreePath` helper in `internal/verbs/` (or near Resolve) that calls ListTasks and filters using `EqualSourceRepos`.
+- [x] 2.3 Add `Branch` (string) and `ArgusTask` (*argus.Task) fields to `verbs.StatusResult`.
+- [x] 2.4 Populate `Branch` from `git rev-parse --abbrev-ref HEAD` in the resolved source repo.
+- [x] 2.5 Populate `ArgusTask` when iris can resolve a task matching the source repo; null otherwise. Do not fail Status if argus is unreachable – warn and leave null.
+- [x] 2.6 Change `LoadIrisToml`: ENOENT returns `(nil, nil, nil)` instead of synthesizing a ValidationError. Update existing callers that depend on the old shape (search for `LoadIrisToml`).
+- [x] 2.7 Update `verbs.Status` to set `Config: nil` with no warning when `doc == nil` (file absent). Parse errors still flow as warnings.
+- [x] 2.8 Update `internal/verbs/status_test.go` for the new fields + silent-missing-config behavior.
+- [x] 2.9 Update other tests broken by the LoadIrisToml signature/behavior change.
+- [x] 2.10 Update tool description for `iris_status` in `internal/daemon/run.go` to mention the new fields.
+- [x] 2.11 `make test`, `make vet`, `gofmt -l .` clean.
+- [x] 2.12 Update this change's `specs/iris-status/spec.md` delta with the final field shape and scenarios.
 
 ## 3. Merge enhancements + post_merge hook (Agent B)
 

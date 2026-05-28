@@ -395,7 +395,7 @@ func toolDefinitions() []mcp.ToolDefinition {
 		},
 		{
 			Name:        "iris_status",
-			Description: "For one managed system, report the parsed `.iris.toml`, current git state (HEAD, default branch, origin SHA, working-tree-clean), and the most recent reload outcome from the audit log. No side effects. task_id and path are mutually exclusive; both omitted targets iris itself.",
+			Description: "For one managed system, report the parsed `.iris.toml`, current git state (HEAD, branch, default branch, origin SHA, working-tree-clean), the matching argus task when iris can find one whose worktree_path equals the resolved source repo (`argus_task`, null otherwise), and the most recent reload outcome from the audit log. A missing `.iris.toml` is silent (`config: null`, no warning); parse errors still surface as warnings. No side effects. task_id and path are mutually exclusive; both omitted targets iris itself.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{

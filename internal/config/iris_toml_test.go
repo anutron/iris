@@ -55,16 +55,20 @@ mechanism = "exit_code"
 	}
 }
 
-func TestLoadIrisToml_MissingFile(t *testing.T) {
+// TestLoadIrisToml_MissingFileIsSilent verifies the consumer-ergonomics
+// contract: a missing `.iris.toml` is a non-event, not a validation
+// error. Callers that require a config check `doc == nil` themselves
+// and synthesize their own error.
+func TestLoadIrisToml_MissingFileIsSilent(t *testing.T) {
 	doc, errs, err := LoadIrisToml(filepath.Join(t.TempDir(), "nope.toml"), true)
 	if err != nil {
 		t.Fatalf("io error: %v", err)
 	}
 	if doc != nil {
-		t.Fatalf("expected nil doc when file missing")
+		t.Fatalf("expected nil doc when file missing, got %+v", doc)
 	}
-	if len(errs) != 1 || !strings.Contains(errs[0].Message, "file not found") {
-		t.Fatalf("expected file-not-found error, got: %v", errs)
+	if len(errs) != 0 {
+		t.Fatalf("expected no validation errors when file missing, got: %v", errs)
 	}
 }
 
