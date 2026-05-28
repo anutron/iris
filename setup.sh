@@ -6,6 +6,7 @@
 # Usage:
 #   ./setup.sh                          # interactive, prompts before mutating
 #   ./setup.sh --yes                    # non-interactive, accept all defaults
+#   ./setup.sh --skill-only             # install only the agent skill + snippet
 #   ./setup.sh --uninstall-launchagent  # remove the LaunchAgent only, then exit
 #
 # Prereqs: argus on PATH, go on PATH.
@@ -27,14 +28,24 @@ PLIST_PATH="${HOME}/Library/LaunchAgents/${PLIST_LABEL}.plist"
 LAUNCH_TARGET="gui/$(id -u)/${PLIST_LABEL}"
 LOG_PATH="${STATE_DIR}/launchd.log"
 
+# Agent-facing assets (skill + orientation snippet) installed into ~/.claude.
+SKILL_SRC="${SCRIPT_DIR}/claude/skills/iris"
+SKILL_DEST="${HOME}/.claude/skills/iris"
+SNIPPET_SRC="${SCRIPT_DIR}/claude/snippets/iris.md"
+CLAUDE_MD="${HOME}/.claude/CLAUDE.md"
+SNIPPET_BEGIN="# BEGIN IRIS (argus)"
+SNIPPET_END="# END IRIS (argus)"
+
 PLATFORM="$(uname)"
 
 NON_INTERACTIVE=false
 UNINSTALL_ONLY=false
+SKILL_ONLY=false
 for arg in "$@"; do
   case "$arg" in
     --yes|-y) NON_INTERACTIVE=true ;;
     --uninstall-launchagent) UNINSTALL_ONLY=true ;;
+    --skill-only) SKILL_ONLY=true ;;
     *) echo "unknown flag: $arg" >&2; exit 1 ;;
   esac
 done
@@ -149,10 +160,103 @@ uninstall_launchagent() {
   fi
 }
 
+# --- agent-asset helpers ----------------------------------------------------
+
+# Symlink the agent-facing skill into ~/.claude/skills/iris. Idempotent: an
+# existing correct symlink is reported and left alone; any other pre-existing
+# path at the target is warned about and NOT clobbered.
+install_skill_symlink() {
+  mkdir -p "${HOME}/.claude/skills"
+  if [[ -L "${SKILL_DEST}" ]]; then
+    local cur; cur="$(readlink "${SKILL_DEST}")"
+    if [[ "${cur}" == "${SKILL_SRC}" ]]; then
+      green "  ✓ skill already current (${SKILL_DEST})"
+      return 0
+    fi
+    warn "  ${SKILL_DEST} is a symlink to ${cur}; leaving it untouched"
+    warn "  (remove it and re-run to relink to ${SKILL_SRC})"
+    return 0
+  fi
+  if [[ -e "${SKILL_DEST}" ]]; then
+    warn "  ${SKILL_DEST} exists and is not an iris symlink; leaving it untouched"
+    return 0
+  fi
+  ln -s "${SKILL_SRC}" "${SKILL_DEST}"
+  green "  ✓ linked ${SKILL_DEST} → ${SKILL_SRC}"
+}
+
+# Emit a file's body with a leading "--- ... ---" YAML frontmatter block removed.
+strip_frontmatter() {
+  awk '
+    BEGIN { infm = 0; started = 0 }
+    NR == 1 && $0 ~ /^---[[:space:]]*$/ { infm = 1; next }
+    infm == 1 && $0 ~ /^---[[:space:]]*$/ { infm = 0; next }
+    infm == 1 { next }
+    { print }
+  ' "$1"
+}
+
+# Offer (Y/n) to wire the orientation snippet into ~/.claude/CLAUDE.md between
+# marker lines. Re-run replaces the marked block in place (no duplicate).
+# Declining prints the snippet path for manual wiring.
+wire_snippet() {
+  if ! confirm "  Append the iris orientation snippet to ${CLAUDE_MD}?"; then
+    warn "  skipped. Wire it in yourself from:"
+    echo "    ${SNIPPET_SRC}"
+    return 0
+  fi
+  mkdir -p "$(dirname "${CLAUDE_MD}")"
+  touch "${CLAUDE_MD}"
+
+  local body; body="$(strip_frontmatter "${SNIPPET_SRC}")"
+  local block; block="${SNIPPET_BEGIN}"$'\n'"${body}"$'\n'"${SNIPPET_END}"
+
+  if grep -qF "${SNIPPET_BEGIN}" "${CLAUDE_MD}"; then
+    local existing
+    existing="$(awk -v b="${SNIPPET_BEGIN}" -v e="${SNIPPET_END}" '
+      f && $0 == e { f = 0 } f { print } $0 == b { f = 1 }' "${CLAUDE_MD}")"
+    if [[ "${existing}" == "${body}" ]]; then
+      green "  ✓ iris block already up to date in ${CLAUDE_MD}"
+      return 0
+    fi
+    local tmp; tmp="$(mktemp)"
+    # Drop the existing marked block (inclusive), then append a fresh one.
+    awk -v b="${SNIPPET_BEGIN}" -v e="${SNIPPET_END}" '
+      $0 == b { skip = 1 }
+      skip == 0 { print }
+      $0 == e { skip = 0 }
+    ' "${CLAUDE_MD}" > "${tmp}"
+    { cat "${tmp}"; printf '\n%s\n' "${block}"; } > "${CLAUDE_MD}"
+    rm -f "${tmp}"
+    green "  ✓ updated iris block in ${CLAUDE_MD}"
+  else
+    printf '\n%s\n' "${block}" >> "${CLAUDE_MD}"
+    green "  ✓ appended iris block to ${CLAUDE_MD}"
+  fi
+}
+
 # --- uninstall short-circuit ------------------------------------------------
 
 if $UNINSTALL_ONLY; then
   uninstall_launchagent
+  exit 0
+fi
+
+# --- skill-only short-circuit -----------------------------------------------
+# Install just the agent-facing assets (skill + snippet). Skips the build,
+# token mint, and LaunchAgent — useful for installing the docs without the
+# daemon, and for the install test harness.
+
+if $SKILL_ONLY; then
+  bold "iris agent assets (skill + snippet only)"
+  echo
+  bold "Agent skill"
+  install_skill_symlink
+  echo
+  bold "Orientation snippet"
+  wire_snippet
+  echo
+  bold "Done. Skill + snippet handled; daemon untouched."
   exit 0
 fi
 
@@ -188,7 +292,7 @@ fi
 
 # --- 1. build iris -----------------------------------------------------------
 
-bold "1/5  Build"
+bold "1/7  Build"
 echo "  building ${BUILT_BIN}…"
 (cd "${SCRIPT_DIR}" && go build -o "${BUILT_BIN}" ./cmd/iris)
 green "  ✓ built ${BUILT_BIN}"
@@ -196,7 +300,7 @@ echo
 
 # --- 2. install to ~/bin -----------------------------------------------------
 
-bold "2/5  Install to ${BIN_DIR}"
+bold "2/7  Install to ${BIN_DIR}"
 mkdir -p "${BIN_DIR}"
 if [[ -x "${INSTALL_PATH}" ]] && cmp -s "${BUILT_BIN}" "${INSTALL_PATH}"; then
   green "  ✓ ${INSTALL_PATH} is already current"
@@ -221,7 +325,7 @@ echo
 
 # --- 3. state dir -----------------------------------------------------------
 
-bold "3/5  State directory ${STATE_DIR}"
+bold "3/7  State directory ${STATE_DIR}"
 if [[ -d "${STATE_DIR}" ]]; then
   green "  ✓ ${STATE_DIR} already exists"
 else
@@ -233,7 +337,7 @@ echo
 
 # --- 4. scope token ---------------------------------------------------------
 
-bold "4/5  Scope token"
+bold "4/7  Scope token"
 if [[ -s "${TOKEN_PATH}" ]]; then
   green "  ✓ ${TOKEN_PATH} already populated; leaving alone"
   echo "    (delete it and re-run to mint a fresh one)"
@@ -261,7 +365,7 @@ echo
 
 # --- 5. LaunchAgent ---------------------------------------------------------
 
-bold "5/5  LaunchAgent (runs at login, restarts on crash)"
+bold "5/7  LaunchAgent (runs at login, restarts on crash)"
 if [[ "${PLATFORM}" != "Darwin" ]]; then
   warn "  skipping LaunchAgent install (not macOS: ${PLATFORM})"
 elif ! confirm "  Install ~/Library/LaunchAgents/${PLIST_LABEL}.plist?"; then
@@ -284,6 +388,18 @@ else
   echo "    launchctl print ${LAUNCH_TARGET} | head"
   echo "    tail -f ${LOG_PATH}"
 fi
+echo
+
+# --- 6. agent-facing skill --------------------------------------------------
+
+bold "6/7  Agent skill (~/.claude/skills/iris)"
+install_skill_symlink
+echo
+
+# --- 7. orientation snippet -------------------------------------------------
+
+bold "7/7  Orientation snippet (optional, into ~/.claude/CLAUDE.md)"
+wire_snippet
 echo
 
 # --- done ------------------------------------------------------------------

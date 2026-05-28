@@ -33,6 +33,23 @@ Uninstall the LaunchAgent only:
 ./setup.sh --uninstall-launchagent
 ```
 
+## Agent-facing discoverability
+
+A Claude session spawned inside an argus worktree sees only the `mcp__argus__iris_*` tool names and their one-line descriptions. To teach it what iris is, when to use it instead of plain `Bash`, how it composes with sibling plugins, and the intended workflows, iris ships two installable, runtime-gated assets:
+
+- `claude/skills/iris/SKILL.md` — the agent-facing skill (the primary surface). Its frontmatter gates on being inside an argus sandbox, so the model only reaches for it there.
+- `claude/snippets/iris.md` — an optional always-in-context orientation fragment for users who want a short reminder loaded every turn.
+
+`./setup.sh` installs both as its last two steps: it symlinks the skill into `~/.claude/skills/iris` (idempotent — an existing correct symlink is left alone, any other pre-existing path is reported and not clobbered) and offers (Y/n) to append the snippet into `~/.claude/CLAUDE.md` between `# BEGIN IRIS (argus)` / `# END IRIS (argus)` markers (replaced in place on re-run). Both self-gate on `ARGUS_TASK_ID` or a cwd under `~/.argus/worktrees/`, so they stay inert outside an argus sandbox.
+
+Install just these assets without touching the daemon:
+
+```bash
+./setup.sh --skill-only
+```
+
+The snippet keeps `tags` / `audience` frontmatter so it also slots into a snippet-compilation pipeline; `setup.sh` strips that frontmatter before appending to `CLAUDE.md`. `bash claude/install_test.sh` exercises the installer against a throwaway `HOME`.
+
 ## CLI
 
 ```
