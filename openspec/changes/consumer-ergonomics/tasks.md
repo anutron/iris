@@ -37,8 +37,8 @@
 
 ## 4. Integration validation (after both agents merge back)
 
-- [ ] 4.1 Merge Agent A's branch and Agent B's branch into argus/iris-feedback-rough-edges. Resolve conflicts in `iris_toml.go`, `daemon/run.go` if any.
-- [ ] 4.2 `make test -race -count=1` green on the merged branch.
-- [ ] 4.3 `go vet ./...` clean.
-- [ ] 4.4 `openspec validate consumer-ergonomics --strict` clean.
-- [ ] 4.5 `openspec validate --all --strict` clean.
+- [x] 4.1 Merge Agent A's branch and Agent B's branch into argus/iris-feedback-rough-edges. Resolve conflicts in `iris_toml.go`, `daemon/run.go` if any.
+- [x] 4.2 `make test -race -count=1` green on the merged branch.
+- [x] 4.3 `go vet ./...` clean.
+- [x] 4.4 `openspec validate consumer-ergonomics --strict` clean.
+- [x] 4.5 `openspec validate --all --strict` clean.
