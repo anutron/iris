@@ -33,6 +33,30 @@ Uninstall the LaunchAgent only:
 ./setup.sh --uninstall-launchagent
 ```
 
+## Agent-facing discoverability
+
+A Claude session spawned inside an argus worktree sees only the `mcp__argus__iris_*` tool names and their one-line descriptions. To teach it what iris is, when to use it instead of plain `Bash`, how it composes with sibling plugins, and the intended workflows, iris ships two installable, runtime-gated assets:
+
+- `claude/skills/iris/SKILL.md` — the agent-facing skill (the primary surface). Its frontmatter gates on being inside an argus sandbox, so the model only reaches for it there.
+- `claude/snippets/iris.md` — an optional always-in-context orientation fragment for users who want a short reminder loaded every turn.
+
+Install them with the dedicated script (also offered as the final Y/n step of `./setup.sh`):
+
+```bash
+./install-claude-skills.sh        # prompts Y/n for the skill, then for the snippet
+./install-claude-skills.sh --yes  # accept both non-interactively
+```
+
+It prompts separately to (1) symlink the skill into `~/.claude/skills/iris` (idempotent — an existing correct symlink is left alone, any other pre-existing path is reported and not clobbered) and (2) append the snippet into `~/.claude/CLAUDE.md` between `# BEGIN IRIS (argus)` / `# END IRIS (argus)` markers (replaced in place on re-run; declining prints the snippet path). Both assets self-gate on `ARGUS_TASK_ID` or a cwd under `~/.argus/worktrees/`, so they stay inert outside an argus sandbox.
+
+Undo with:
+
+```bash
+./uninstall-claude-skills.sh      # prompts Y/n to remove the symlink, then the snippet block
+```
+
+The skill symlink is only removed if it points at this repo. The snippet keeps `tags` / `audience` frontmatter so it also slots into a snippet-compilation pipeline; the installer strips that frontmatter before appending to `CLAUDE.md`. Shared logic lives in `claude/lib-claude-assets.sh`; `bash claude/install_test.sh` exercises install + uninstall against a throwaway `HOME`.
+
 ## CLI
 
 ```

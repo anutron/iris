@@ -8,6 +8,10 @@
 #   ./setup.sh --yes                    # non-interactive, accept all defaults
 #   ./setup.sh --uninstall-launchagent  # remove the LaunchAgent only, then exit
 #
+# At the end it offers (Y/n) to install the agent-facing Claude skills by
+# delegating to ./install-claude-skills.sh. Those assets can also be managed
+# independently via ./install-claude-skills.sh / ./uninstall-claude-skills.sh.
+#
 # Prereqs: argus on PATH, go on PATH.
 
 set -euo pipefail
@@ -283,6 +287,19 @@ else
   echo "  Verify with:"
   echo "    launchctl print ${LAUNCH_TARGET} | head"
   echo "    tail -f ${LOG_PATH}"
+fi
+echo
+
+# --- agent-facing Claude skills --------------------------------------------
+
+if confirm "Install the agent-facing Claude skills (skill + orientation snippet) now?"; then
+  if $NON_INTERACTIVE; then
+    bash "${SCRIPT_DIR}/install-claude-skills.sh" --yes
+  else
+    bash "${SCRIPT_DIR}/install-claude-skills.sh"
+  fi
+else
+  warn "skipped Claude skills. Install later with ./install-claude-skills.sh"
 fi
 echo
 
