@@ -10,7 +10,7 @@ The result shape adds:
 
 - `task_branch_still_exists` (bool) – true on every successful return path. Iris does not delete the branch.
 - `worktree_still_present` (bool) – true on every successful return path. Iris does not delete the worktree.
-- `post_merge` (object or null) – populated when `.iris.toml` declares a `[post_merge]` block and the merge was not a dry run. Shape: `{ exit_code, stdout, stderr, duration_ms, error }`. `error` is non-empty when iris could not execute the hook (e.g., binary missing, timeout). Null when no hook was configured or when `dry_run: true`.
+- `post_merge` (object or null) – populated when `.iris.toml` declares a `[post_merge]` block and the merge was not a dry run. Shape: `{ exit_code, stdout, stderr, duration_ms, error }`. `error` is non-empty when iris could not execute the hook (e.g., binary missing, timeout); `exit_code` is `-1` when the hook could not be executed (timeout or exec failure), the process's real exit code otherwise. Null when no hook was configured or when `dry_run: true`. The hook also runs when the merge step is invoked indirectly via `iris:complete_task`.
 
 Dry-run mode SHALL:
 

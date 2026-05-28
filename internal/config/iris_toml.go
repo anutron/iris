@@ -57,6 +57,7 @@ type IrisToml struct {
 	Restart       RestartBlock `toml:"restart"        json:"restart"`
 	PreFlight     *HookBlock   `toml:"pre_flight"     json:"pre_flight,omitempty"`
 	Verify        *HookBlock   `toml:"verify"         json:"verify,omitempty"`
+	PostMerge     *HookBlock   `toml:"post_merge"     json:"post_merge,omitempty"`
 }
 
 // BuildBlock declares the build step.
@@ -202,6 +203,9 @@ func (c *IrisToml) Validate(isSelf bool) []ValidationError {
 	}
 	if c.Verify != nil {
 		errs = append(errs, c.Verify.validate("verify")...)
+	}
+	if c.PostMerge != nil {
+		errs = append(errs, c.PostMerge.validate("post_merge")...)
 	}
 
 	return errs

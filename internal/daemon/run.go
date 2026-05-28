@@ -184,13 +184,14 @@ func toolDefinitions() []mcp.ToolDefinition {
 	return []mcp.ToolDefinition{
 		{
 			Name:        "iris_merge_to_master",
-			Description: "Merge an argus task's branch into the source repo's default branch (master/main). Resolves the source repo from the argus task_id. Refuses any branch not prefixed `argus/`. Returns the merge SHA and git log.",
+			Description: "Merge an argus task's branch into the source repo's default branch (master/main). Resolves the source repo from the argus task_id. Refuses any branch not prefixed `argus/`. Does NOT delete the task branch or the worktree — call `iris_branch_delete_remote` and let argus archive the worktree (or use `iris_complete_task` for the full ship-it sequence). The result reports factual postconditions: `task_branch_still_exists` and `worktree_still_present` are always `true`. When `.iris.toml` declares a `[post_merge]` hook, iris runs it after a successful real merge and captures the outcome in `post_merge` (exit_code/stdout/stderr/duration_ms/error). With `dry_run: true`, iris previews the merge via `git merge --no-commit --no-ff` and `merge --abort`, returning `would_succeed`, `files_changed`, and `conflicts` without committing or running the hook.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"task_id": map[string]any{"type": "string", "description": "Argus task ID. Iris resolves the source repo and branch from this."},
 					"no_ff":   map[string]any{"type": "boolean", "description": "Pass --no-ff to git merge (default true). When false, requires fast-forward."},
 					"message": map[string]any{"type": "string", "description": "(optional) Merge commit message (-m <message>)."},
+					"dry_run": map[string]any{"type": "boolean", "description": "Preview the merge: run `git merge --no-commit --no-ff <branch>`, capture files_changed + conflicts, then `merge --abort`. No commit, no post_merge hook. Defaults to false."},
 				},
 				"required": []string{"task_id"},
 			},

@@ -19,21 +19,21 @@
 
 ## 3. Merge enhancements + post_merge hook (Agent B)
 
-- [ ] 3.1 Add `PostMerge *HookBlock` to `config.IrisToml` (toml tag `post_merge`).
-- [ ] 3.2 Wire `PostMerge` into `IrisToml.Validate` (reuse existing HookBlock validate with blockName="post_merge").
-- [ ] 3.3 Add `iris_toml_test.go` cases for the new `[post_merge]` block (happy + missing command + bad working_directory).
-- [ ] 3.4 Add `DryRun bool` to `verbs.MergeOptions`; add `TaskBranchStillExists`, `WorktreeStillPresent`, `PostMerge *PostMergeResult`, `DryRun bool`, `WouldSucceed bool`, `FilesChanged []string`, `Conflicts []string` to `MergeResult` (group dry-run-only fields together; keep struct readable).
-- [ ] 3.5 Implement dry-run path: `fetch + checkout default + pull --ff-only + merge --no-commit --no-ff <branch>`, capture `git diff --cached --name-only` (or equivalent) and conflict list from `git diff --name-only --diff-filter=U`, then `merge --abort` unconditionally. Set `DryRun: true`, `WouldSucceed`, `FilesChanged`, `Conflicts`. No post_merge.
-- [ ] 3.6 Implement post_merge execution: after a successful real merge, if `cfg.PostMerge != nil`, run the command with env IRIS_TASK_ID, IRIS_TASK_BRANCH, IRIS_SOURCE_REPO, IRIS_DEFAULT_BRANCH, IRIS_MERGE_SHA. Honor working_directory (relative to source repo) and timeout_seconds (default 60). Capture stdout/stderr/exit_code/duration into `PostMergeResult`.
-- [ ] 3.7 A non-zero post_merge exit reports failure in the result but does NOT roll back the merge. Caller is informed via `post_merge.exit_code` and `post_merge.error`.
-- [ ] 3.8 Set `TaskBranchStillExists: true` and `WorktreeStillPresent: true` on every successful return path (real and dry-run). The fields are factual descriptions of iris's output state.
-- [ ] 3.9 Update `internal/verbs/merge_to_master_test.go` for: dry-run happy + dry-run conflict + post_merge success + post_merge failure (non-rollback) + post_merge env vars + postconditions present on every success.
-- [ ] 3.10 Update `internal/mcp/handler_merge_to_master.go` to accept `dry_run` from input.
-- [ ] 3.11 Update `cmd/iris/merge_to_master.go` to add `--dry-run` flag.
-- [ ] 3.12 Update tool description in `internal/daemon/run.go` for `iris_merge_to_master`: clarify that the verb does NOT delete the task branch or the worktree, reference `iris_complete_task` and `iris_branch_delete_remote` as follow-ups, document `dry_run`.
-- [ ] 3.13 Update README with `--dry-run`, the `[post_merge]` block, and the new result fields.
-- [ ] 3.14 `make test`, `make vet`, `gofmt -l .` clean.
-- [ ] 3.15 Update this change's `specs/iris-merge-to-master/spec.md` delta with the final field shape and scenarios.
+- [x] 3.1 Add `PostMerge *HookBlock` to `config.IrisToml` (toml tag `post_merge`).
+- [x] 3.2 Wire `PostMerge` into `IrisToml.Validate` (reuse existing HookBlock validate with blockName="post_merge").
+- [x] 3.3 Add `iris_toml_test.go` cases for the new `[post_merge]` block (happy + missing command + bad working_directory).
+- [x] 3.4 Add `DryRun bool` to `verbs.MergeOptions`; add `TaskBranchStillExists`, `WorktreeStillPresent`, `PostMerge *PostMergeResult`, `DryRun bool`, `WouldSucceed bool`, `FilesChanged []string`, `Conflicts []string` to `MergeResult` (group dry-run-only fields together; keep struct readable).
+- [x] 3.5 Implement dry-run path: `fetch + checkout default + pull --ff-only + merge --no-commit --no-ff <branch>`, capture `git diff --cached --name-only` (or equivalent) and conflict list from `git diff --name-only --diff-filter=U`, then `merge --abort` unconditionally. Set `DryRun: true`, `WouldSucceed`, `FilesChanged`, `Conflicts`. No post_merge.
+- [x] 3.6 Implement post_merge execution: after a successful real merge, if `cfg.PostMerge != nil`, run the command with env IRIS_TASK_ID, IRIS_TASK_BRANCH, IRIS_SOURCE_REPO, IRIS_DEFAULT_BRANCH, IRIS_MERGE_SHA. Honor working_directory (relative to source repo) and timeout_seconds (default 60). Capture stdout/stderr/exit_code/duration into `PostMergeResult`.
+- [x] 3.7 A non-zero post_merge exit reports failure in the result but does NOT roll back the merge. Caller is informed via `post_merge.exit_code` and `post_merge.error`.
+- [x] 3.8 Set `TaskBranchStillExists: true` and `WorktreeStillPresent: true` on every successful return path (real and dry-run). The fields are factual descriptions of iris's output state.
+- [x] 3.9 Update `internal/verbs/merge_to_master_test.go` for: dry-run happy + dry-run conflict + post_merge success + post_merge failure (non-rollback) + post_merge env vars + postconditions present on every success.
+- [x] 3.10 Update `internal/mcp/handler_merge_to_master.go` to accept `dry_run` from input.
+- [x] 3.11 Update `cmd/iris/merge_to_master.go` to add `--dry-run` flag.
+- [x] 3.12 Update tool description in `internal/daemon/run.go` for `iris_merge_to_master`: clarify that the verb does NOT delete the task branch or the worktree, reference `iris_complete_task` and `iris_branch_delete_remote` as follow-ups, document `dry_run`.
+- [x] 3.13 Update README with `--dry-run`, the `[post_merge]` block, and the new result fields.
+- [x] 3.14 `make test`, `make vet`, `gofmt -l .` clean.
+- [x] 3.15 Update this change's `specs/iris-merge-to-master/spec.md` delta with the final field shape and scenarios.
 
 ## 4. Integration validation (after both agents merge back)
 

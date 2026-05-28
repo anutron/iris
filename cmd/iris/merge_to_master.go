@@ -17,6 +17,7 @@ func newMergeToMasterCmd() *cobra.Command {
 	var noFF bool
 	var ffOnly bool
 	var message string
+	var dryRun bool
 
 	cmd := &cobra.Command{
 		Use:   "merge-to-master <task-id>",
@@ -40,7 +41,7 @@ func newMergeToMasterCmd() *cobra.Command {
 			}
 			client := argus.New(fmt.Sprintf("http://127.0.0.1:%d", apiPort), token)
 
-			opts := verbs.MergeOptions{NoFF: noFF, Message: message}
+			opts := verbs.MergeOptions{NoFF: noFF, Message: message, DryRun: dryRun}
 			if ffOnly {
 				opts.NoFF = false
 			}
@@ -57,6 +58,7 @@ func newMergeToMasterCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&noFF, "no-ff", true, "pass --no-ff to git merge")
 	cmd.Flags().BoolVar(&ffOnly, "ff-only", false, "require fast-forward (cannot be combined with --no-ff)")
 	cmd.Flags().StringVarP(&message, "message", "m", "", "merge commit message (-m)")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "preview the merge: run `git merge --no-commit --no-ff <branch>`, capture would-be state, abort cleanly; no commit, no post_merge hook")
 	// --no-ff defaults to true; explicitly passing both is contradictory.
 	// Cobra surfaces the conflict at parse time instead of silently picking one.
 	cmd.MarkFlagsMutuallyExclusive("no-ff", "ff-only")

@@ -382,9 +382,20 @@ func TestValidate_SelfMustUseExitCode(t *testing.T) {
 
 // TestValidate_HookAbsoluteWorkingDirectoryRejected verifies the
 // HookBlock.WorkingDirectory escape guard added in ralph-review loop 1.
-// Mirrors the BuildBlock check; covers both [pre_flight] and [verify].
+// Mirrors the BuildBlock check; covers `[pre_flight]`, `[verify]`, and
+// `[post_merge]`.
 func TestValidate_HookAbsoluteWorkingDirectoryRejected(t *testing.T) {
-	for _, block := range []string{"pre_flight", "verify"} {
+	assign := func(doc *IrisToml, block string, hook *HookBlock) {
+		switch block {
+		case "pre_flight":
+			doc.PreFlight = hook
+		case "verify":
+			doc.Verify = hook
+		case "post_merge":
+			doc.PostMerge = hook
+		}
+	}
+	for _, block := range []string{"pre_flight", "verify", "post_merge"} {
 		t.Run(block+"/absolute", func(t *testing.T) {
 			hook := &HookBlock{Command: []string{"true"}, WorkingDirectory: "/etc"}
 			doc := &IrisToml{
@@ -392,11 +403,7 @@ func TestValidate_HookAbsoluteWorkingDirectoryRejected(t *testing.T) {
 				Build:         BuildBlock{Command: []string{"make"}},
 				Restart:       RestartBlock{Mechanism: MechanismNone},
 			}
-			if block == "pre_flight" {
-				doc.PreFlight = hook
-			} else {
-				doc.Verify = hook
-			}
+			assign(doc, block, hook)
 			errs := doc.Validate(false)
 			found := false
 			for _, e := range errs {
@@ -415,11 +422,7 @@ func TestValidate_HookAbsoluteWorkingDirectoryRejected(t *testing.T) {
 				Build:         BuildBlock{Command: []string{"make"}},
 				Restart:       RestartBlock{Mechanism: MechanismNone},
 			}
-			if block == "pre_flight" {
-				doc.PreFlight = hook
-			} else {
-				doc.Verify = hook
-			}
+			assign(doc, block, hook)
 			errs := doc.Validate(false)
 			found := false
 			for _, e := range errs {
@@ -431,6 +434,63 @@ func TestValidate_HookAbsoluteWorkingDirectoryRejected(t *testing.T) {
 				t.Fatalf("expected %s.working_directory escape error: %v", block, errs)
 			}
 		})
+	}
+}
+
+// TestValidate_PostMergeHappy verifies a `[post_merge]` block decodes
+// cleanly and validates with no errors when shaped like the existing hook
+// blocks. Sister test to the pre_flight/verify happy paths.
+func TestValidate_PostMergeHappy(t *testing.T) {
+	data := `
+schema_version = 1
+
+[build]
+command = ["make", "build"]
+
+[restart]
+mechanism = "none"
+
+[post_merge]
+command = ["echo", "done"]
+working_directory = "."
+timeout_seconds = 5
+`
+	doc, errs, err := DecodeIrisToml([]byte(data), "stub.toml", false)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(errs) != 0 {
+		t.Fatalf("expected no validation errors, got: %v", errs)
+	}
+	if doc.PostMerge == nil {
+		t.Fatal("expected PostMerge to be populated")
+	}
+	if got := doc.PostMerge.Command; len(got) != 2 || got[0] != "echo" {
+		t.Fatalf("PostMerge.Command = %#v", got)
+	}
+	if doc.PostMerge.ResolvedTimeoutSeconds(60) != 5 {
+		t.Fatalf("PostMerge resolved timeout = %d", doc.PostMerge.ResolvedTimeoutSeconds(60))
+	}
+}
+
+// TestValidate_PostMergeMissingCommand verifies that an empty `[post_merge]`
+// command surfaces the same validation error as the other hook blocks.
+func TestValidate_PostMergeMissingCommand(t *testing.T) {
+	doc := &IrisToml{
+		SchemaVersion: 1,
+		Build:         BuildBlock{Command: []string{"make"}},
+		Restart:       RestartBlock{Mechanism: MechanismNone},
+		PostMerge:     &HookBlock{},
+	}
+	errs := doc.Validate(false)
+	found := false
+	for _, e := range errs {
+		if e.Field == "post_merge.command" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected post_merge.command missing error: %v", errs)
 	}
 }
 

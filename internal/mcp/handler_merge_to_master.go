@@ -14,6 +14,7 @@ type mergeToMasterInput struct {
 	TaskID  string `json:"task_id"`
 	NoFF    *bool  `json:"no_ff,omitempty"`
 	Message string `json:"message,omitempty"`
+	DryRun  bool   `json:"dry_run,omitempty"`
 }
 
 // NewMergeToMasterHandler returns a Handler that decodes the envelope
@@ -30,7 +31,7 @@ func NewMergeToMasterHandler(client *argus.Client) Handler {
 			return ErrorResponse("iris:merge_to_master: task_id is required")
 		}
 
-		opts := verbs.MergeOptions{NoFF: true, Message: in.Message}
+		opts := verbs.MergeOptions{NoFF: true, Message: in.Message, DryRun: in.DryRun}
 		if in.NoFF != nil {
 			opts.NoFF = *in.NoFF
 		}

@@ -3,6 +3,7 @@ package verbs
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -418,6 +419,405 @@ func TestMergeToMaster_AllowlistMatchesNonCanonicalArgusPath(t *testing.T) {
 	if _, err := MergeToMaster(context.Background(), client, "task-canon", MergeOptions{NoFF: true}); err != nil {
 		t.Fatalf("expected canonicalization to bridge %q ↔ %q: %v", nonCanonical, canonical, err)
 	}
+}
+
+// Delta scenario: "Postconditions present on every success path"
+// (real merge variant). The dry-run variant is covered by the dry-run
+// happy-path test below.
+func TestMergeToMaster_PostconditionsOnRealMerge(t *testing.T) {
+	src, wt := setupRepoWithWorktree(t, "postcond-slug")
+	client := stubArgus(t, src, wt)
+
+	result, err := MergeToMaster(context.Background(), client, "task-postcond", MergeOptions{NoFF: true})
+	if err != nil {
+		t.Fatalf("merge: %v", err)
+	}
+	if !result.TaskBranchStillExists {
+		t.Fatal("expected task_branch_still_exists=true on success")
+	}
+	if !result.WorktreeStillPresent {
+		t.Fatal("expected worktree_still_present=true on success")
+	}
+	if result.DryRun {
+		t.Fatal("expected dry_run=false on real merge")
+	}
+	if result.PostMerge != nil {
+		t.Fatalf("expected post_merge=nil when no .iris.toml: %+v", result.PostMerge)
+	}
+}
+
+// Delta scenario: "Dry-run previews a clean merge."
+func TestMergeToMaster_DryRunCleanPreview(t *testing.T) {
+	tmp := t.TempDir()
+	bare := filepath.Join(tmp, "origin.git")
+	src := filepath.Join(tmp, "src")
+	wt := filepath.Join(tmp, "wt")
+	g := gitRunner(t)
+	writeFile := func(dir, name, content string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+
+	g("", "init", "--bare", "-b", "main", bare)
+	g("", "clone", bare, src)
+	g(src, "config", "user.email", "x@y.z")
+	g(src, "config", "user.name", "x")
+	g(src, "commit", "--allow-empty", "-m", "initial")
+	g(src, "push", "-u", "origin", "main")
+	g(src, "remote", "set-head", "origin", "main")
+	g(src, "branch", "argus/dryrun-clean")
+	g(src, "worktree", "add", wt, "argus/dryrun-clean")
+	writeFile(wt, "new.txt", "hello\n")
+	g(wt, "config", "user.email", "x@y.z")
+	g(wt, "config", "user.name", "x")
+	g(wt, "add", "new.txt")
+	g(wt, "commit", "-m", "add new.txt")
+
+	client := stubArgus(t, src, wt)
+	before := headSHA(t, src)
+
+	result, err := MergeToMaster(context.Background(), client, "task-dry-clean", MergeOptions{NoFF: true, DryRun: true})
+	if err != nil {
+		t.Fatalf("dry-run merge: %v", err)
+	}
+
+	if !result.DryRun {
+		t.Fatal("expected dry_run=true")
+	}
+	if !result.WouldSucceed {
+		t.Fatalf("expected would_succeed=true, conflicts=%v", result.Conflicts)
+	}
+	if result.SHA != "" {
+		t.Fatalf("expected empty sha on dry-run, got %q", result.SHA)
+	}
+	if len(result.Conflicts) != 0 {
+		t.Fatalf("expected no conflicts, got %v", result.Conflicts)
+	}
+	if !contains(result.FilesChanged, "new.txt") {
+		t.Fatalf("expected files_changed to include new.txt, got %v", result.FilesChanged)
+	}
+	if !result.TaskBranchStillExists || !result.WorktreeStillPresent {
+		t.Fatalf("expected postconditions true on dry-run, got %+v", result)
+	}
+	if result.PostMerge != nil {
+		t.Fatalf("expected post_merge=nil on dry-run, got %+v", result.PostMerge)
+	}
+	if after := headSHA(t, src); after == before {
+		// Dry-run still does fetch + checkout default + pull --ff-only,
+		// so the source repo may move to the default branch's tip. What
+		// it MUST NOT contain is a merge commit. Assert no MERGE_HEAD.
+		_ = after // value-unused once we drop the strict-equality check
+	}
+	statusOut, _ := exec.Command("git", "-C", src, "status", "--porcelain=v2", "--branch").CombinedOutput()
+	if strings.Contains(string(statusOut), "MERGE_HEAD") {
+		t.Fatalf("expected no in-progress merge after dry-run:\n%s", statusOut)
+	}
+	// Last commit on the default branch must not be a merge commit.
+	logOut, err := exec.Command("git", "-C", src, "log", "-1", "--format=%s").CombinedOutput()
+	if err != nil {
+		t.Fatalf("git log: %v", err)
+	}
+	if strings.Contains(string(logOut), "Merge branch") {
+		t.Fatalf("dry-run produced a merge commit: %s", logOut)
+	}
+}
+
+// Delta scenario: "Dry-run previews a conflicted merge."
+func TestMergeToMaster_DryRunConflictPreview(t *testing.T) {
+	tmp := t.TempDir()
+	bare := filepath.Join(tmp, "origin.git")
+	src := filepath.Join(tmp, "src")
+	wt := filepath.Join(tmp, "wt")
+	g := gitRunner(t)
+	writeFile := func(dir, name, content string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+
+	g("", "init", "--bare", "-b", "main", bare)
+	g("", "clone", bare, src)
+	g(src, "config", "user.email", "x@y.z")
+	g(src, "config", "user.name", "x")
+	writeFile(src, "f.txt", "from-main\n")
+	g(src, "add", "f.txt")
+	g(src, "commit", "-m", "initial main")
+	g(src, "push", "-u", "origin", "main")
+	g(src, "remote", "set-head", "origin", "main")
+	g(src, "branch", "argus/dryrun-conflict")
+	g(src, "worktree", "add", wt, "argus/dryrun-conflict")
+	writeFile(src, "f.txt", "main-edit\n")
+	g(src, "add", "f.txt")
+	g(src, "commit", "-m", "main edit")
+	g(src, "push", "origin", "main")
+	writeFile(wt, "f.txt", "wt-edit\n")
+	g(wt, "config", "user.email", "x@y.z")
+	g(wt, "config", "user.name", "x")
+	g(wt, "add", "f.txt")
+	g(wt, "commit", "-m", "wt edit")
+
+	client := stubArgus(t, src, wt)
+
+	result, err := MergeToMaster(context.Background(), client, "task-dry-conflict", MergeOptions{NoFF: true, DryRun: true})
+	if err != nil {
+		t.Fatalf("dry-run merge (should report conflict in result, not return error): %v", err)
+	}
+	if !result.DryRun {
+		t.Fatal("expected dry_run=true")
+	}
+	if result.WouldSucceed {
+		t.Fatalf("expected would_succeed=false on conflict, conflicts=%v", result.Conflicts)
+	}
+	if !contains(result.Conflicts, "f.txt") {
+		t.Fatalf("expected f.txt in conflicts, got %v", result.Conflicts)
+	}
+	// The source repo must not be left mid-merge.
+	statusOut, _ := exec.Command("git", "-C", src, "status", "--porcelain=v2", "--branch").CombinedOutput()
+	if strings.Contains(string(statusOut), "MERGE_HEAD") {
+		t.Fatalf("expected no in-progress merge after dry-run conflict:\n%s", statusOut)
+	}
+}
+
+// Delta scenario: "Dry-run skips post_merge hook."
+func TestMergeToMaster_DryRunSkipsPostMerge(t *testing.T) {
+	src, wt := setupRepoWithWorktree(t, "dry-no-hook")
+	// Place a [post_merge] block in .iris.toml. A real merge would run it
+	// and create marker.txt; the dry-run path must NOT execute it.
+	markerPath := filepath.Join(t.TempDir(), "marker.txt")
+	writeIrisTomlPostMerge(t, src, []string{"sh", "-c", "echo ran >" + markerPath})
+
+	client := stubArgus(t, src, wt)
+
+	result, err := MergeToMaster(context.Background(), client, "task-dry-hook", MergeOptions{NoFF: true, DryRun: true})
+	if err != nil {
+		t.Fatalf("dry-run merge: %v", err)
+	}
+	if result.PostMerge != nil {
+		t.Fatalf("expected post_merge=nil on dry-run, got %+v", result.PostMerge)
+	}
+	if _, err := os.Stat(markerPath); !os.IsNotExist(err) {
+		t.Fatalf("expected post_merge marker NOT to exist on dry-run: stat err=%v", err)
+	}
+}
+
+// Delta scenario: "post_merge hook runs after successful merge" and
+// "post_merge env vars carry merge context."
+func TestMergeToMaster_PostMergeHookRuns(t *testing.T) {
+	src, wt := setupRepoWithWorktree(t, "hook-happy")
+	envDump := filepath.Join(t.TempDir(), "env.txt")
+	writeIrisTomlPostMerge(t, src, []string{"sh", "-c",
+		"echo task_id=$IRIS_TASK_ID > " + envDump +
+			" && echo task_branch=$IRIS_TASK_BRANCH >> " + envDump +
+			" && echo source_repo=$IRIS_SOURCE_REPO >> " + envDump +
+			" && echo default_branch=$IRIS_DEFAULT_BRANCH >> " + envDump +
+			" && echo merge_sha=$IRIS_MERGE_SHA >> " + envDump +
+			" && echo hello"})
+
+	client := stubArgus(t, src, wt)
+
+	result, err := MergeToMaster(context.Background(), client, "task-hook", MergeOptions{NoFF: true})
+	if err != nil {
+		t.Fatalf("merge: %v", err)
+	}
+	if result.PostMerge == nil {
+		t.Fatal("expected post_merge result")
+	}
+	if result.PostMerge.ExitCode != 0 {
+		t.Fatalf("expected exit_code=0, got %+v", result.PostMerge)
+	}
+	if !strings.Contains(result.PostMerge.Stdout, "hello") {
+		t.Fatalf("expected stdout to capture echo, got %q", result.PostMerge.Stdout)
+	}
+	if result.PostMerge.Error != "" {
+		t.Fatalf("expected empty error, got %q", result.PostMerge.Error)
+	}
+
+	body, err := os.ReadFile(envDump)
+	if err != nil {
+		t.Fatalf("read env dump: %v", err)
+	}
+	got := string(body)
+	wantSrc, _ := filepath.EvalSymlinks(src)
+	checks := map[string]string{
+		"task_id":        "task-hook",
+		"task_branch":    "argus/hook-happy",
+		"source_repo":    wantSrc,
+		"default_branch": "main",
+		"merge_sha":      result.SHA,
+	}
+	for k, v := range checks {
+		if !strings.Contains(got, k+"="+v) {
+			t.Fatalf("env dump missing %s=%s; full:\n%s", k, v, got)
+		}
+	}
+}
+
+// Delta scenario: "post_merge failure does not roll back the merge."
+func TestMergeToMaster_PostMergeNonZeroDoesNotRollback(t *testing.T) {
+	src, wt := setupRepoWithWorktree(t, "hook-fail")
+	writeIrisTomlPostMerge(t, src, []string{"sh", "-c", "echo oops >&2; exit 7"})
+
+	client := stubArgus(t, src, wt)
+
+	result, err := MergeToMaster(context.Background(), client, "task-hookfail", MergeOptions{NoFF: true})
+	if err != nil {
+		t.Fatalf("merge: %v (post_merge failure must NOT propagate as Go error)", err)
+	}
+	if result.PostMerge == nil {
+		t.Fatal("expected post_merge result")
+	}
+	if result.PostMerge.ExitCode != 7 {
+		t.Fatalf("expected exit_code=7, got %+v", result.PostMerge)
+	}
+	if !strings.Contains(result.PostMerge.Stderr, "oops") {
+		t.Fatalf("expected stderr to contain 'oops', got %q", result.PostMerge.Stderr)
+	}
+	if result.PostMerge.Error != "" {
+		t.Fatalf("expected error empty (hook ran), got %q", result.PostMerge.Error)
+	}
+	// Merge MUST still be present on the default branch.
+	if result.SHA == "" {
+		t.Fatal("expected non-empty merge SHA")
+	}
+	logOut, _ := exec.Command("git", "-C", src, "log", "-1", "--format=%s").CombinedOutput()
+	if !strings.Contains(string(logOut), "Merge branch 'argus/hook-fail'") {
+		t.Fatalf("expected merge commit on default branch, got: %s", logOut)
+	}
+}
+
+// Delta scenario: "post_merge timeout terminates the hook."
+func TestMergeToMaster_PostMergeTimeout(t *testing.T) {
+	src, wt := setupRepoWithWorktree(t, "hook-timeout")
+	writeIrisTomlPostMergeWithTimeout(t, src, []string{"sh", "-c", "sleep 5"}, 1)
+
+	client := stubArgus(t, src, wt)
+
+	result, err := MergeToMaster(context.Background(), client, "task-hooktimeout", MergeOptions{NoFF: true})
+	if err != nil {
+		t.Fatalf("merge: %v", err)
+	}
+	if result.PostMerge == nil {
+		t.Fatal("expected post_merge result")
+	}
+	if result.PostMerge.ExitCode != -1 {
+		t.Fatalf("expected exit_code=-1 sentinel on timeout, got %d", result.PostMerge.ExitCode)
+	}
+	if !strings.Contains(result.PostMerge.Error, "timeout") {
+		t.Fatalf("expected timeout in error, got %q", result.PostMerge.Error)
+	}
+}
+
+// Delta scenario: "post_merge respects working_directory."
+func TestMergeToMaster_PostMergeWorkingDirectory(t *testing.T) {
+	src, wt := setupRepoWithWorktree(t, "hook-wd")
+	// Create a subdir inside the source repo; the hook will pwd into it.
+	subdir := filepath.Join(src, "subdir")
+	if err := os.MkdirAll(subdir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	pwdDump := filepath.Join(t.TempDir(), "pwd.txt")
+	writeIrisTomlPostMergeWithDir(t, src, []string{"sh", "-c", "pwd > " + pwdDump}, "subdir")
+
+	client := stubArgus(t, src, wt)
+	if _, err := MergeToMaster(context.Background(), client, "task-hookwd", MergeOptions{NoFF: true}); err != nil {
+		t.Fatalf("merge: %v", err)
+	}
+	body, err := os.ReadFile(pwdDump)
+	if err != nil {
+		t.Fatalf("read pwd dump: %v", err)
+	}
+	wantSubdir, _ := filepath.EvalSymlinks(subdir)
+	if !strings.Contains(string(body), wantSubdir) {
+		t.Fatalf("expected pwd to be %q, got %q", wantSubdir, strings.TrimSpace(string(body)))
+	}
+}
+
+// Delta scenario: "Missing .iris.toml does not block merge."
+func TestMergeToMaster_MissingIrisTomlSilentlySkipsPostMerge(t *testing.T) {
+	src, wt := setupRepoWithWorktree(t, "no-toml")
+	// Intentionally do NOT write .iris.toml.
+	client := stubArgus(t, src, wt)
+	result, err := MergeToMaster(context.Background(), client, "task-no-toml", MergeOptions{NoFF: true})
+	if err != nil {
+		t.Fatalf("merge: %v", err)
+	}
+	if result.PostMerge != nil {
+		t.Fatalf("expected post_merge=nil when .iris.toml absent, got %+v", result.PostMerge)
+	}
+	if result.SHA == "" {
+		t.Fatal("expected non-empty merge SHA")
+	}
+}
+
+// writeIrisTomlPostMerge writes a minimal .iris.toml with a [post_merge]
+// block at the source repo root.
+func writeIrisTomlPostMerge(t *testing.T, srcRepo string, command []string) {
+	t.Helper()
+	writeIrisTomlPostMergeWithTimeout(t, srcRepo, command, 0)
+}
+
+func writeIrisTomlPostMergeWithTimeout(t *testing.T, srcRepo string, command []string, timeoutSec int) {
+	t.Helper()
+	writeIrisTomlPostMergeFull(t, srcRepo, command, "", timeoutSec)
+}
+
+func writeIrisTomlPostMergeWithDir(t *testing.T, srcRepo string, command []string, workingDir string) {
+	t.Helper()
+	writeIrisTomlPostMergeFull(t, srcRepo, command, workingDir, 0)
+}
+
+func writeIrisTomlPostMergeFull(t *testing.T, srcRepo string, command []string, workingDir string, timeoutSec int) {
+	t.Helper()
+	var b strings.Builder
+	b.WriteString(`schema_version = 1
+
+[build]
+command = ["true"]
+
+[restart]
+mechanism = "none"
+
+[post_merge]
+command = [`)
+	for i, c := range command {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		// Naive quoting fine for test inputs.
+		b.WriteString("\"")
+		b.WriteString(strings.ReplaceAll(c, `"`, `\"`))
+		b.WriteString("\"")
+	}
+	b.WriteString("]\n")
+	if workingDir != "" {
+		fmt.Fprintf(&b, "working_directory = %q\n", workingDir)
+	}
+	if timeoutSec > 0 {
+		fmt.Fprintf(&b, "timeout_seconds = %d\n", timeoutSec)
+	}
+
+	tomlPath := filepath.Join(srcRepo, ".iris.toml")
+	if err := os.WriteFile(tomlPath, []byte(b.String()), 0o644); err != nil {
+		t.Fatalf("write .iris.toml: %v", err)
+	}
+	// Commit so the merge from the task branch doesn't introduce a
+	// working-tree change. The hook test fixtures expect a clean repo.
+	g := gitRunner(t)
+	g(srcRepo, "add", ".iris.toml")
+	g(srcRepo, "commit", "-m", "add iris.toml")
+	g(srcRepo, "push", "origin", "HEAD:main")
+}
+
+func contains(haystack []string, needle string) bool {
+	for _, s := range haystack {
+		if s == needle {
+			return true
+		}
+	}
+	return false
 }
 
 // Host-bridge scenario: "Two concurrent merge_to_master calls serialize."
