@@ -39,7 +39,7 @@ Uninstall the LaunchAgent only:
 iris start --foreground            Run the daemon (called by the LaunchAgent).
 iris stop                          SIGTERM to the running daemon.
 iris status                        Daemon health (no args) OR self-mgmt status (with target).
-iris merge-to-master <task-id>     Merge an argus task's branch into the source repo's default branch.
+iris merge-to-master <task-id>     Merge an argus task's branch into the source repo's default branch (--dry-run previews).
 iris push <task-id>                Push the task's branch to origin (host-side; --force-with-lease).
 iris gh-pr-create <task-id> -t T   Create a GitHub PR via gh CLI (--title required; --body, --draft).
 iris gh-pr-merge <task-id> -p N    Merge a GitHub PR via gh CLI (--strategy squash|merge|rebase).
@@ -92,6 +92,7 @@ Optional:
 - `[build] timeout_seconds`, `working_directory`, `env` — knobs for the build step.
 - `[pre_flight] command = [...]` — runs after iris's built-in pre-flight refusals, before pull. Non-zero exit aborts.
 - `[verify] command = [...]` — runs after restart (cross-reload only). Non-zero exit reports failure but does NOT roll back.
+- `[post_merge] command = [...]` — runs after a successful `iris:merge_to_master` (or the merge step of `iris:complete_task`). Same `HookBlock` shape as `[pre_flight]` / `[verify]`: optional `working_directory` (relative to the source repo) and `timeout_seconds` (default 60). Iris exports `IRIS_TASK_ID`, `IRIS_TASK_BRANCH`, `IRIS_SOURCE_REPO`, `IRIS_DEFAULT_BRANCH`, `IRIS_MERGE_SHA` to the command's environment. Non-zero exit and timeouts are captured into the result but do NOT roll back the merge (the hook is informational).
 
 ### Restart mechanisms
 
@@ -129,3 +130,19 @@ The `exit_code` mechanism respawns the process that exited. When `iris reload` r
 ### Iris's own `.iris.toml`
 
 Iris ships its own `.iris.toml` at the repo root. The same six-line example above is what iris itself uses when reloading. The argus project allowlist is not consulted for self-reloads.
+
+## `iris:merge_to_master`
+
+Merges an argus task's branch into the source repo's default branch under the per-source-repo lock. Refuses any branch not prefixed `argus/` and any merge of the default branch into itself.
+
+Iris does NOT clean up after the merge: the task branch and the worktree remain. Call `iris:branch_delete_remote` to remove the remote branch and let argus archive the worktree, or use `iris:complete_task` for the full ship-it sequence (merge + push default + delete remote branch + mark complete + archive).
+
+The structured result includes:
+
+- `sha`, `default_branch`, `task_branch`, `source_repo`, `log` — the merge outcome.
+- `task_branch_still_exists` — always `true` on success. Factual; iris does not delete the branch.
+- `worktree_still_present` — always `true` on success. Factual; iris does not delete the worktree.
+- `post_merge` — populated when `.iris.toml` declares a `[post_merge]` block and the merge was not a dry run. Shape: `{exit_code, stdout, stderr, duration_ms, error}`. `error` is non-empty when iris could not execute the hook (timeout, binary missing). A non-zero `exit_code` is captured but does NOT roll back the merge.
+- `dry_run`, `would_succeed`, `files_changed`, `conflicts` — populated only when `dry_run: true`.
+
+`--dry-run` previews the merge: iris runs `git merge --no-commit --no-ff <branch>` under the same lock, captures `files_changed` and `conflicts`, then `merge --abort` unconditionally. No commit, no `[post_merge]` hook. `sha` is empty; `would_succeed` reports whether the real merge would land cleanly.

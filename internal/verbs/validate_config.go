@@ -2,6 +2,7 @@ package verbs
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 
 	"github.com/anutron/iris/internal/argus"
@@ -16,10 +17,10 @@ type ValidateConfigInput struct {
 
 // ValidateConfigResult is the structured result.
 type ValidateConfigResult struct {
-	Valid    bool                      `json:"valid"`
-	Errors   []config.ValidationError  `json:"errors"`
-	Warnings []string                  `json:"warnings"`
-	Resolved *config.IrisToml          `json:"resolved,omitempty"`
+	Valid    bool                     `json:"valid"`
+	Errors   []config.ValidationError `json:"errors"`
+	Warnings []string                 `json:"warnings"`
+	Resolved *config.IrisToml         `json:"resolved,omitempty"`
 }
 
 // ValidateConfig parses the `.iris.toml` at the resolved source repo and
@@ -40,6 +41,17 @@ func ValidateConfig(ctx context.Context, client *argus.Client, in ValidateConfig
 	doc, verrs, err := config.LoadIrisToml(tomlPath, isSelf)
 	if err != nil {
 		return nil, err
+	}
+	// validate_config requires a config to validate. LoadIrisToml is silent
+	// on ENOENT now (a missing file is a non-event for verbs that treat
+	// the config as optional), so this verb synthesizes the
+	// file-not-found error itself.
+	if doc == nil && len(verrs) == 0 {
+		verrs = append(verrs, config.ValidationError{
+			Field:   config.IrisTomlFilename,
+			Message: fmt.Sprintf("file not found at %s", tomlPath),
+			Hint:    "create .iris.toml at the source repo root",
+		})
 	}
 
 	result := &ValidateConfigResult{

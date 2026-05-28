@@ -93,8 +93,8 @@ func TestWatcher_CoalescesConcurrentTriggers(t *testing.T) {
 	var firing atomic.Bool
 	var fired atomic.Int32
 	w := &Watcher{
-		PidPath: pidPath,
-		Ping:    func(context.Context) error { return errors.New("always fail") }, // every tick triggers
+		PidPath:  pidPath,
+		Ping:     func(context.Context) error { return errors.New("always fail") }, // every tick triggers
 		Interval: 5 * time.Millisecond,
 		OnRestart: func(context.Context) {
 			firing.Store(true)

@@ -104,6 +104,17 @@ func Publish(ctx context.Context, client *argus.Client, in PublishInput) (*Publi
 		})
 		return nil, err
 	}
+	// publish requires .iris.toml to know how to build + restart on the
+	// target host; ENOENT is no longer a ValidationError so synthesize the
+	// refusal here.
+	if doc == nil {
+		reason := fmt.Sprintf("%s not found at %s", config.IrisTomlFilename, tomlPath)
+		writeAudit(AuditEntry{
+			Caller: caller, TargetSourceRepo: src, Mode: "publish", Outcome: "failure",
+			FailureReason: reason,
+		})
+		return nil, fmt.Errorf("%s", reason)
+	}
 	if len(verrs) > 0 {
 		reason := joinValidationErrors(verrs)
 		writeAudit(AuditEntry{
@@ -192,7 +203,7 @@ func Publish(ctx context.Context, client *argus.Client, in PublishInput) (*Publi
 	if err != nil {
 		writeAudit(AuditEntry{
 			Caller: caller, TargetSourceRepo: src, Mode: "publish", Outcome: "failure",
-			PrePullSha: preSHA,
+			PrePullSha:    preSHA,
 			FailureReason: err.Error(),
 		})
 		return nil, fmt.Errorf("re-read source repo HEAD after update: %w", err)

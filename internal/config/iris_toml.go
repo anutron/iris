@@ -57,6 +57,7 @@ type IrisToml struct {
 	Restart       RestartBlock `toml:"restart"        json:"restart"`
 	PreFlight     *HookBlock   `toml:"pre_flight"     json:"pre_flight,omitempty"`
 	Verify        *HookBlock   `toml:"verify"         json:"verify,omitempty"`
+	PostMerge     *HookBlock   `toml:"post_merge"     json:"post_merge,omitempty"`
 }
 
 // BuildBlock declares the build step.
@@ -112,7 +113,12 @@ func (e ValidationError) Error() string {
 // Returns:
 //   - (*IrisToml, nil, nil) on a successful parse with no validation errors
 //   - (*IrisToml, errs, nil) on a successful parse with cross-validation errors
-//   - (nil, errs, nil) when the file is missing or malformed (errs name the issue)
+//   - (nil, errs, nil) when the file is malformed (errs name the issue)
+//   - (nil, nil, nil) when the file is missing (ENOENT). Missing is NOT
+//     an error: callers that require a config check for `doc == nil` and
+//     synthesize their own error message. Callers that treat the config
+//     as optional (e.g. iris:status) silently fall back to the
+//     no-config code path.
 //   - (nil, nil, err) for I/O or unexpected errors only
 //
 // Validation requires knowing whether the file is iris's own (`isSelf=true`):
@@ -122,11 +128,7 @@ func LoadIrisToml(path string, isSelf bool) (*IrisToml, []ValidationError, error
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			return nil, []ValidationError{{
-				Field:   IrisTomlFilename,
-				Message: fmt.Sprintf("file not found at %s", path),
-				Hint:    "create .iris.toml at the source repo root",
-			}}, nil
+			return nil, nil, nil
 		}
 		return nil, nil, fmt.Errorf("read %s: %w", path, err)
 	}
@@ -201,6 +203,9 @@ func (c *IrisToml) Validate(isSelf bool) []ValidationError {
 	}
 	if c.Verify != nil {
 		errs = append(errs, c.Verify.validate("verify")...)
+	}
+	if c.PostMerge != nil {
+		errs = append(errs, c.PostMerge.validate("post_merge")...)
 	}
 
 	return errs

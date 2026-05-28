@@ -136,6 +136,16 @@ func Reload(ctx context.Context, client *argus.Client, in ReloadInput) (*ReloadR
 		})
 		return nil, err
 	}
+	// reload requires .iris.toml to declare build + restart; ENOENT is no
+	// longer a ValidationError, so synthesize a clear refusal here.
+	if doc == nil {
+		reason := fmt.Sprintf("%s not found at %s", config.IrisTomlFilename, tomlPath)
+		writeAudit(AuditEntry{
+			Caller: caller, TargetSourceRepo: target.SourceRepo, Mode: mode,
+			Outcome: "failure", FailureReason: reason,
+		})
+		return nil, fmt.Errorf("%s", reason)
+	}
 	if len(verrs) > 0 {
 		reason := joinValidationErrors(verrs)
 		writeAudit(AuditEntry{
@@ -217,7 +227,7 @@ func Reload(ctx context.Context, client *argus.Client, in ReloadInput) (*ReloadR
 			writeAudit(AuditEntry{
 				Caller: caller, TargetSourceRepo: target.SourceRepo, Mode: mode,
 				PreFlightOutput: preFlightOutput,
-				Outcome: "failure", FailureReason: err.Error(),
+				Outcome:         "failure", FailureReason: err.Error(),
 			})
 			return nil, err
 		}
@@ -311,7 +321,7 @@ func Reload(ctx context.Context, client *argus.Client, in ReloadInput) (*ReloadR
 				PreFlightOutput: preFlightOutput, BuildOutput: buildOutput,
 				RestartMechanism: string(doc.Restart.Mechanism), RestartOutput: restartOutput,
 				VerifyOutput: verifyOutput,
-				Outcome: "failure", FailureReason: err.Error(),
+				Outcome:      "failure", FailureReason: err.Error(),
 				Warnings: warnings,
 			})
 			return nil, err
