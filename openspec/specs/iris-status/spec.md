@@ -5,13 +5,51 @@ TBD - created by archiving change add-daemon-self-management. Update Purpose aft
 ## Requirements
 ### Requirement: `iris:status` verb
 
-The plugin SHALL expose `iris:status` as an MCP tool and CLI subcommand that, for one managed system, returns the resolved `.iris.toml`, the current git state, and the most recent reload outcome from the audit log. The verb SHALL NOT perform any side effects.
+The plugin SHALL expose `iris:status` as an MCP tool and CLI subcommand that, for one managed system, returns the resolved `.iris.toml`, the current git state, the most recent reload outcome from the audit log, and (when discoverable) the matching argus task. The verb SHALL NOT perform any side effects.
 
-#### Scenario: Returns full status for a managed system
+The result shape adds:
 
-- **GIVEN** a source repo with `.iris.toml`, HEAD at SHA `aaa...`, `origin/main` at SHA `aaa...`, working tree clean, and an audit-log entry from 1h ago with `outcome: "success"` and `post_pull_sha: "aaa..."`
+- `branch` (string) – the current HEAD branch name from `git rev-parse --abbrev-ref HEAD`, or empty when HEAD is detached.
+- `argus_task` (`*argus.Task` or null) – populated when iris can find an argus task whose canonicalized `worktree_path` equals the resolved source repo. Null when no match exists, or when iris cannot reach argus.
+
+The result shape changes for missing `.iris.toml`:
+
+- A missing file produces `config: null` and NO warning. Parse errors and validation errors still surface as warnings, unchanged.
+
+#### Scenario: Returns branch and argus_task when available
+
+- **GIVEN** a source repo with `.iris.toml`, HEAD on branch `argus/feature-x`, and an argus task with `worktree_path` equal to that source repo
 - **WHEN** `iris:status` is invoked targeting that repo
-- **THEN** iris returns `{ source_repo, head_sha, default_branch, origin_default_sha, working_tree_clean: true, drift: false, up_to_date: true, config: { schema_version, build, restart, ... }, last_reload: { timestamp, outcome, mode, pre_pull_sha, post_pull_sha, ... } }`
+- **THEN** iris returns the existing fields plus `branch: "argus/feature-x"` and `argus_task: { id, name, project, status, worktree_path, branch }`
+
+#### Scenario: Branch reports detached HEAD as empty
+
+- **WHEN** the source repo's HEAD is detached
+- **THEN** iris returns `branch: ""` and the rest of the result unchanged
+
+#### Scenario: argus_task is null when no task matches
+
+- **GIVEN** a source repo with no argus task pointing at it (argus reachable, list returned)
+- **WHEN** `iris:status` is invoked
+- **THEN** iris returns `argus_task: null` with NO argus-related warning
+
+#### Scenario: argus unreachable surfaces a warning
+
+- **GIVEN** argus returns an error to `GET /api/tasks` (or is unreachable)
+- **WHEN** `iris:status` is invoked
+- **THEN** iris returns `argus_task: null` and appends a warning of the form "could not query argus for matching task: <err>" to `warnings`. The verb does NOT fail.
+
+#### Scenario: Missing `.iris.toml` is silent
+
+- **GIVEN** a source repo with no `.iris.toml`
+- **WHEN** `iris:status` is invoked
+- **THEN** iris returns `config: null` with no warning about the missing file; git state and audit log are still reported
+
+#### Scenario: Malformed `.iris.toml` still warns
+
+- **GIVEN** a source repo with a `.iris.toml` that fails TOML parsing
+- **WHEN** `iris:status` is invoked
+- **THEN** iris returns `config: null` and includes the parse error in `warnings`
 
 #### Scenario: Drift is reported when local HEAD differs from last reload
 
@@ -27,12 +65,6 @@ The plugin SHALL expose `iris:status` as an MCP tool and CLI subcommand that, fo
 
 - **WHEN** no audit-log entry exists for the resolved source repo
 - **THEN** iris returns `last_reload: null` and a structured warning ("no reload recorded for this system yet")
-
-#### Scenario: Missing or invalid `.iris.toml` is surfaced but does not fail
-
-- **GIVEN** a source repo with no `.iris.toml` (or a malformed one)
-- **WHEN** `iris:status` is invoked
-- **THEN** iris returns `config: null` and includes the parse error in `warnings`; the git state and audit log are still reported
 
 #### Scenario: `task_id` is optional, same shape as reload
 
