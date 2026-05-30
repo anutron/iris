@@ -22,9 +22,9 @@
 
 ## 4. Status integration
 
-- [ ] 4.1 Add failing tests in `internal/verbs/status_test.go` for the three manifest scenarios (present, absent, malformed).
-- [ ] 4.2 Extend `verbs.Status` to read the manifest via `ReadManifest` and populate the new `Dogfood` field. Append a warning on parse failure.
-- [ ] 4.3 Confirm no new side effects (existing "no side effects" scenario still passes).
+- [x] 4.1 Add failing tests in `internal/verbs/status_test.go` for the three manifest scenarios (present, absent, malformed).
+- [x] 4.2 Extend `verbs.Status` to read the manifest via `ReadManifest` and populate the new `Dogfood` field. Append a warning on parse failure.
+- [x] 4.3 Confirm no new side effects (existing "no side effects" scenario still passes).
 
 ## 5. `iris:ship_feature` verb — pr mode
 
