@@ -1,6 +1,8 @@
 package verbs
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -39,6 +41,29 @@ type LayeredEntry struct {
 // manifestPath returns the absolute path to the manifest inside stateDir.
 func manifestPath(stateDir string) string {
 	return filepath.Join(stateDir, DogfoodManifestFilename)
+}
+
+// SourceRepoStateDir returns the per-source-repo state directory where
+// repo-scoped artifacts (the dogfood manifest) live, under the iris state dir
+// that also holds the global audit log. The directory name combines the source
+// repo's basename with a short hash of its absolute path so two repos sharing a
+// basename never collide. The caller is expected to pass a canonicalized path
+// (verbs.Resolve already canonicalizes SourceRepo) so the same repo always maps
+// to the same directory.
+func SourceRepoStateDir(sourceRepo string) (string, error) {
+	base, err := AuditDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(base, "repos", repoStateSlug(sourceRepo)), nil
+}
+
+// repoStateSlug derives a filesystem-safe, collision-resistant directory name
+// from an absolute source-repo path: the basename plus the first 12 hex
+// characters of the SHA-256 of the full path.
+func repoStateSlug(sourceRepo string) string {
+	sum := sha256.Sum256([]byte(sourceRepo))
+	return filepath.Base(sourceRepo) + "-" + hex.EncodeToString(sum[:])[:12]
 }
 
 // WriteManifest persists m as dogfood-manifest.json inside stateDir,

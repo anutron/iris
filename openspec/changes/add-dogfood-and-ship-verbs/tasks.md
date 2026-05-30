@@ -14,11 +14,11 @@
 
 ## 3. `iris:set_dogfood` verb
 
-- [ ] 3.1 Write failing tests in `internal/verbs/set_dogfood_test.go` matching every scenario in `specs/iris-set-dogfood/spec.md`.
-- [ ] 3.2 Implement `verbs.SetDogfood(ctx, client, taskID, opts) (*SetDogfoodResult, error)` in `internal/verbs/set_dogfood.go`. Steps: resolve task -> require dogfood_branch config -> verify SHA reachable -> acquire source-repo lock -> write manifest -> hard-reset (create branch if missing) -> reload sequence -> return result.
-- [ ] 3.3 Wire MCP handler in `internal/mcp/handler_set_dogfood.go` and register in the handler registry.
-- [ ] 3.4 Wire CLI subcommand `iris set-dogfood --sha <sha> --manifest <path-or-json>` in `cmd/`.
-- [ ] 3.5 Ensure all tests green; update integration tests for the manifest-write-before-reset ordering.
+- [x] 3.1 Write failing tests in `internal/verbs/set_dogfood_test.go` matching every scenario in `specs/iris-set-dogfood/spec.md`.
+- [x] 3.2 Implement `verbs.SetDogfood(ctx, client, taskID, opts) (*SetDogfoodResult, error)` in `internal/verbs/set_dogfood.go`. Steps: resolve task -> require dogfood_branch config -> verify SHA reachable -> acquire source-repo lock -> write manifest -> hard-reset (create branch if missing) -> reload sequence -> return result.
+- [x] 3.3 Wire MCP handler in `internal/mcp/handler_set_dogfood.go` and register in the handler registry.
+- [x] 3.4 Wire CLI subcommand `iris set-dogfood --sha <sha> --manifest <path-or-json>` in `cmd/`.
+- [x] 3.5 Ensure all tests green; update integration tests for the manifest-write-before-reset ordering.
 
 ## 4. Status integration
 
