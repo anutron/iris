@@ -54,16 +54,23 @@ const (
 )
 
 // IrisToml is the parsed `.iris.toml` document.
+//
+// Every top-level field carries a `kind` struct tag classifying it as
+// either "shared" (project-wide; lives in `.iris.toml`) or "local"
+// (per-developer; lives in `.iris.local.toml`). The FieldKind helper in
+// iris_toml_taxonomy.go reads these tags; a companion test asserts every
+// field has a valid classification so adding a new field without one
+// fails CI.
 type IrisToml struct {
-	SchemaVersion        int          `toml:"schema_version"          json:"schema_version"`
-	DefaultBranch        string       `toml:"default_branch"          json:"default_branch,omitempty"`
-	DogfoodBranch        string       `toml:"dogfood_branch"          json:"dogfood_branch,omitempty"`
-	ShipCITimeoutSeconds int          `toml:"ship_ci_timeout_seconds" json:"ship_ci_timeout_seconds,omitempty"`
-	Build                BuildBlock   `toml:"build"                   json:"build"`
-	Restart              RestartBlock `toml:"restart"                 json:"restart"`
-	PreFlight            *HookBlock   `toml:"pre_flight"              json:"pre_flight,omitempty"`
-	Verify               *HookBlock   `toml:"verify"                  json:"verify,omitempty"`
-	PostMerge            *HookBlock   `toml:"post_merge"              json:"post_merge,omitempty"`
+	SchemaVersion        int          `toml:"schema_version"          json:"schema_version"                  kind:"shared"`
+	DefaultBranch        string       `toml:"default_branch"          json:"default_branch,omitempty"        kind:"shared"`
+	DogfoodBranch        string       `toml:"dogfood_branch"          json:"dogfood_branch,omitempty"        kind:"local"`
+	ShipCITimeoutSeconds int          `toml:"ship_ci_timeout_seconds" json:"ship_ci_timeout_seconds,omitempty" kind:"local"`
+	Build                BuildBlock   `toml:"build"                   json:"build"                           kind:"shared"`
+	Restart              RestartBlock `toml:"restart"                 json:"restart"                         kind:"shared"`
+	PreFlight            *HookBlock   `toml:"pre_flight"              json:"pre_flight,omitempty"            kind:"shared"`
+	Verify               *HookBlock   `toml:"verify"                  json:"verify,omitempty"                kind:"shared"`
+	PostMerge            *HookBlock   `toml:"post_merge"              json:"post_merge,omitempty"            kind:"shared"`
 }
 
 // BuildBlock declares the build step.

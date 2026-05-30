@@ -1,8 +1,8 @@
 ## 1. Field taxonomy
 
-- [ ] 1.1 Add a `kind` (or equivalent) tag to each field in the `IrisToml` struct, classifying it as `shared` or `local`. Define an exhaustive helper enumerating which fields are which.
-- [ ] 1.2 Mark `dogfood_branch` and `ship_ci_timeout_seconds` as `local`; everything else (`schema_version`, `default_branch`, `[build]`, `[restart]`, `[pre_flight]`, `[verify]`, `[post_merge]`) as `shared`.
-- [ ] 1.3 Unit-test the taxonomy helper: every field is classified; no field is unclassified.
+- [x] 1.1 Add a `kind` (or equivalent) tag to each field in the `IrisToml` struct, classifying it as `shared` or `local`. Define an exhaustive helper enumerating which fields are which.
+- [x] 1.2 Mark `dogfood_branch` and `ship_ci_timeout_seconds` as `local`; everything else (`schema_version`, `default_branch`, `[build]`, `[restart]`, `[pre_flight]`, `[verify]`, `[post_merge]`) as `shared`.
+- [x] 1.3 Unit-test the taxonomy helper: every field is classified; no field is unclassified.
 
 ## 2. Overlay loader
 
