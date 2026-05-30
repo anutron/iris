@@ -91,12 +91,20 @@ func Publish(ctx context.Context, client *argus.Client, in PublishInput) (*Publi
 		})
 		return nil, err
 	}
-	// 2c. .iris.toml loaded + validated.
+	// 2c. .iris.toml loaded + validated — but the WORKTREE's, not the source
+	// repo's. Publish sets the source to the worktree HEAD, so the config that
+	// will run after the update is the worktree's .iris.toml (and the clean-
+	// worktree check above guarantees its working tree equals that HEAD). This
+	// validates the post-update truth without reordering past the (possibly
+	// destructive --reset) mutation. Forward-compatible mode tolerates an
+	// additive field the running daemon does not yet know; schema_version
+	// mismatch and malformed TOML stay hard refusals.
+	//
 	// Publish is always treated as cross-target for validation purposes: even if
 	// the source repo happens to be iris's own, publish does not invoke the
 	// self-exit choreography, so exit_code mechanism is refused here.
-	tomlPath := filepath.Join(src, config.IrisTomlFilename)
-	doc, verrs, err := config.LoadIrisToml(tomlPath, false)
+	tomlPath := filepath.Join(wt, config.IrisTomlFilename)
+	doc, verrs, tomlWarnings, err := config.LoadIrisTomlMode(tomlPath, false, config.LoadMode{TolerateUnknownFields: true})
 	if err != nil {
 		writeAudit(AuditEntry{
 			Caller: caller, TargetSourceRepo: src, Mode: "publish", Outcome: "failure",
@@ -268,7 +276,7 @@ func Publish(ctx context.Context, client *argus.Client, in PublishInput) (*Publi
 	// 7. Restart dispatch — delegate to reload's dispatchRestart with isSelf=false.
 	// (publish never invokes the self-exit choreography.)
 	restartOutput, restartWarn, err := dispatchRestart(ctx, doc.Restart, false)
-	warnings := []string{}
+	warnings := append([]string{}, tomlWarnings...)
 	if restartWarn != "" {
 		warnings = append(warnings, restartWarn)
 	}

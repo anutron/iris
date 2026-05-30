@@ -15,9 +15,9 @@
 
 ## 3. Publish: validate the worktree config
 
-- [ ] 3.1 Write/adjust failing tests in `internal/verbs/publish_test.go`: the worktree's `.iris.toml` is the one validated (worktree-ahead config decides pass/fail); an unknown field in the worktree config is tolerated (warning, publish proceeds); an invalid worktree config is refused before the lock and before any `merge --ff-only`/`reset --hard`; `schema_version` mismatch still hard-fails
-- [ ] 3.2 Change `Publish` to load+validate `filepath.Join(worktreePath, IrisTomlFilename)` via `LoadIrisTomlMode(..., LoadMode{TolerateUnknownFields: true})` instead of the source repo's `.iris.toml`; surface tolerated-field warnings into `PublishResult.Warnings` and the audit entry
-- [ ] 3.3 `go test ./internal/verbs/...` green for publish
+- [x] 3.1 Write/adjust failing tests in `internal/verbs/publish_test.go`: the worktree's `.iris.toml` is the one validated (worktree-ahead config decides pass/fail); an unknown field in the worktree config is tolerated (warning, publish proceeds); an invalid worktree config is refused before the lock and before any `merge --ff-only`/`reset --hard`; `schema_version` mismatch still hard-fails
+- [x] 3.2 Change `Publish` to load+validate `filepath.Join(worktreePath, IrisTomlFilename)` via `LoadIrisTomlMode(..., LoadMode{TolerateUnknownFields: true})` instead of the source repo's `.iris.toml`; surface tolerated-field warnings into `PublishResult.Warnings` and the audit entry
+- [x] 3.3 `go test ./internal/verbs/...` green for publish
 
 ## 4. Regression coverage + full validation
 
