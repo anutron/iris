@@ -121,6 +121,21 @@ func (e ValidationError) Error() string {
 	return fmt.Sprintf("%s: %s", e.Field, e.Message)
 }
 
+// LoadMode controls optional, caller-specific decoding leniency.
+//
+// The zero value preserves the strict behavior every authoring-time caller
+// relies on. Only reload/publish pre-flight opt into leniency.
+type LoadMode struct {
+	// TolerateUnknownFields downgrades unknown `.iris.toml` fields (top-level
+	// or nested) from validation errors to non-fatal warnings. Set by
+	// reload/publish pre-flight so an additive schema change that has already
+	// landed on disk does not block the very deploy that teaches the binary
+	// about the new field. All OTHER validation — schema_version, required
+	// fields, restart-mechanism rules — stays strict, and malformed TOML
+	// remains a hard error.
+	TolerateUnknownFields bool
+}
+
 // LoadIrisToml reads and parses the `.iris.toml` at the given path.
 //
 // Returns:
@@ -137,20 +152,44 @@ func (e ValidationError) Error() string {
 // Validation requires knowing whether the file is iris's own (`isSelf=true`):
 // the `exit_code` restart mechanism is only legal for the self-managed daemon.
 // Call ValidateConfig later if you do not know isSelf at load time.
+//
+// LoadIrisToml uses strict decoding (LoadMode{}). Callers that need the
+// forward-compatible mode (reload/publish pre-flight) use LoadIrisTomlMode.
 func LoadIrisToml(path string, isSelf bool) (*IrisToml, []ValidationError, error) {
+	doc, errs, _, err := LoadIrisTomlMode(path, isSelf, LoadMode{})
+	return doc, errs, err
+}
+
+// LoadIrisTomlMode is LoadIrisToml with an explicit LoadMode and an additional
+// return value carrying any non-fatal warnings (e.g. tolerated unknown fields).
+// The strict default (LoadMode{}) returns no warnings and behaves exactly like
+// LoadIrisToml.
+func LoadIrisTomlMode(path string, isSelf bool, mode LoadMode) (*IrisToml, []ValidationError, []string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			return nil, nil, nil
+			return nil, nil, nil, nil
 		}
-		return nil, nil, fmt.Errorf("read %s: %w", path, err)
+		return nil, nil, nil, fmt.Errorf("read %s: %w", path, err)
 	}
-	return DecodeIrisToml(data, path, isSelf)
+	return DecodeIrisTomlMode(data, path, isSelf, mode)
 }
 
-// DecodeIrisToml parses raw bytes into an IrisToml. Convenience for callers
-// that already have the bytes (tests).
+// DecodeIrisToml parses raw bytes into an IrisToml using strict decoding.
+// Convenience for callers that already have the bytes (tests).
 func DecodeIrisToml(data []byte, sourcePath string, isSelf bool) (*IrisToml, []ValidationError, error) {
+	doc, errs, _, err := DecodeIrisTomlMode(data, sourcePath, isSelf, LoadMode{})
+	return doc, errs, err
+}
+
+// DecodeIrisTomlMode parses raw bytes into an IrisToml under the given LoadMode.
+//
+// When mode.TolerateUnknownFields is true, unknown fields become warnings
+// (returned in the []string) instead of ValidationErrors; every other check
+// (schema_version, required fields, mechanism rules) is unchanged, and a TOML
+// syntax error is still a hard ValidationError. With the zero LoadMode the
+// behavior is byte-for-byte identical to the historical strict decoder.
+func DecodeIrisTomlMode(data []byte, sourcePath string, isSelf bool, mode LoadMode) (*IrisToml, []ValidationError, []string, error) {
 	var doc IrisToml
 	meta, err := toml.Decode(string(data), &doc)
 	if err != nil {
@@ -162,20 +201,28 @@ func DecodeIrisToml(data []byte, sourcePath string, isSelf bool) (*IrisToml, []V
 		if line := tomlErrorLine(err); line > 0 {
 			ve.Line = line
 		}
-		return nil, []ValidationError{ve}, nil
+		return nil, []ValidationError{ve}, nil, nil
 	}
 
 	var errs []ValidationError
+	var warnings []string
 	for _, key := range meta.Undecoded() {
+		field := key.String()
+		if mode.TolerateUnknownFields {
+			warnings = append(warnings, fmt.Sprintf(
+				"unknown field %q tolerated for forward compatibility (the running binary predates it; the rebuilt binary may understand it)",
+				field))
+			continue
+		}
 		errs = append(errs, ValidationError{
-			Field:   key.String(),
+			Field:   field,
 			Message: "unknown field",
 			Hint:    "remove the field or check for a typo against the .iris.toml schema",
 		})
 	}
 
 	errs = append(errs, doc.Validate(isSelf)...)
-	return &doc, errs, nil
+	return &doc, errs, warnings, nil
 }
 
 // tomlErrorLine extracts a line number from a github.com/BurntSushi/toml

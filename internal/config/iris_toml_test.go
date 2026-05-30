@@ -319,6 +319,118 @@ mechanism = "none"
 	}
 }
 
+// TestDecodeMode_TolerateUnknownFields verifies the forward-compatible decode
+// mode used by reload/publish pre-flight: unknown fields (top-level and nested)
+// become warnings, not validation errors, and the doc is still usable.
+func TestDecodeMode_TolerateUnknownFields(t *testing.T) {
+	data := `
+schema_version = 1
+future_top_level = "x"
+[build]
+command = ["make"]
+future_nested = 7
+[restart]
+mechanism = "none"
+`
+	doc, errs, warnings, err := DecodeIrisTomlMode([]byte(data), "stub.toml", false, LoadMode{TolerateUnknownFields: true})
+	if err != nil {
+		t.Fatalf("io error: %v", err)
+	}
+	if doc == nil {
+		t.Fatalf("expected a usable doc")
+	}
+	// No unknown-field errors when tolerating.
+	for _, e := range errs {
+		if strings.Contains(e.Message, "unknown field") {
+			t.Fatalf("unknown field should be a warning, not an error: %v", errs)
+		}
+	}
+	// Both unknown fields surface as warnings.
+	joined := strings.Join(warnings, "\n")
+	if !strings.Contains(joined, "future_top_level") {
+		t.Fatalf("expected warning naming future_top_level, got: %v", warnings)
+	}
+	if !strings.Contains(joined, "future_nested") {
+		t.Fatalf("expected warning naming future_nested (nested), got: %v", warnings)
+	}
+	// The known fields still decode.
+	if len(doc.Build.Command) != 1 || doc.Build.Command[0] != "make" {
+		t.Fatalf("build.command = %#v", doc.Build.Command)
+	}
+}
+
+// TestDecodeMode_StrictDefaultUnchanged verifies LoadMode{} (the zero value)
+// preserves today's strict behavior: unknown fields are errors, no warnings.
+func TestDecodeMode_StrictDefaultUnchanged(t *testing.T) {
+	data := `
+schema_version = 1
+bogus_field = "x"
+[build]
+command = ["make"]
+[restart]
+mechanism = "none"
+`
+	_, errs, warnings, err := DecodeIrisTomlMode([]byte(data), "stub.toml", false, LoadMode{})
+	if err != nil {
+		t.Fatalf("io error: %v", err)
+	}
+	if len(warnings) != 0 {
+		t.Fatalf("strict mode should emit no warnings, got: %v", warnings)
+	}
+	found := false
+	for _, e := range errs {
+		if strings.Contains(e.Field, "bogus_field") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("strict mode should still report unknown-field error: %v", errs)
+	}
+}
+
+// TestDecodeMode_SchemaVersionStillHardFails verifies an unsupported
+// schema_version remains a hard validation error EVEN when tolerating unknown
+// fields — a version bump deliberately signals "old binary, refuse."
+func TestDecodeMode_SchemaVersionStillHardFails(t *testing.T) {
+	data := `
+schema_version = 999
+future_field = "x"
+[build]
+command = ["make"]
+[restart]
+mechanism = "none"
+`
+	_, errs, _, err := DecodeIrisTomlMode([]byte(data), "stub.toml", false, LoadMode{TolerateUnknownFields: true})
+	if err != nil {
+		t.Fatalf("io error: %v", err)
+	}
+	found := false
+	for _, e := range errs {
+		if e.Field == "schema_version" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("schema_version mismatch must stay a hard error even in tolerant mode: %v", errs)
+	}
+}
+
+// TestDecodeMode_MalformedStillHardFails verifies a TOML syntax error remains a
+// hard error in tolerant mode (tolerance is for unknown fields, not syntax).
+func TestDecodeMode_MalformedStillHardFails(t *testing.T) {
+	data := `schema_version = = 1`
+	doc, errs, _, err := DecodeIrisTomlMode([]byte(data), "stub.toml", false, LoadMode{TolerateUnknownFields: true})
+	if err != nil {
+		t.Fatalf("io error: %v", err)
+	}
+	if doc != nil {
+		t.Fatalf("malformed TOML should yield a nil doc")
+	}
+	if len(errs) == 0 {
+		t.Fatalf("malformed TOML should still produce a parse error in tolerant mode")
+	}
+}
+
 func TestValidate_AbsoluteWorkingDirectoryRejected(t *testing.T) {
 	doc := &IrisToml{
 		SchemaVersion: 1,

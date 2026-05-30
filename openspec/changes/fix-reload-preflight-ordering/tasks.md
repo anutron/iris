@@ -1,9 +1,9 @@
 ## 1. Tolerant decode mode (config layer)
 
-- [ ] 1.1 Write failing tests in `internal/config/iris_toml_test.go`: `DecodeIrisTomlMode` with `LoadMode{TolerateUnknownFields: true}` turns an unknown top-level field and an unknown nested field into warnings (not `ValidationError`s) and returns a usable doc; with `LoadMode{}` (default) it still produces unknown-field `ValidationError`s (strict behavior unchanged); `schema_version` mismatch and malformed TOML remain hard errors even in tolerant mode
-- [ ] 1.2 Add `LoadMode` struct (`TolerateUnknownFields bool`) and `DecodeIrisTomlMode(data, sourcePath, isSelf, mode) (*IrisToml, []ValidationError, []string, error)` / `LoadIrisTomlMode(path, isSelf, mode) (...)` to `internal/config/iris_toml.go`; route `meta.Undecoded()` keys to warnings when tolerating, else to errors as today
-- [ ] 1.3 Reimplement existing `LoadIrisToml`/`DecodeIrisToml` as thin delegates passing `LoadMode{}`, preserving their current signatures and behavior exactly
-- [ ] 1.4 `go test ./internal/config/...` green; existing config + taxonomy + overlay tests still pass unchanged
+- [x] 1.1 Write failing tests in `internal/config/iris_toml_test.go`: `DecodeIrisTomlMode` with `LoadMode{TolerateUnknownFields: true}` turns an unknown top-level field and an unknown nested field into warnings (not `ValidationError`s) and returns a usable doc; with `LoadMode{}` (default) it still produces unknown-field `ValidationError`s (strict behavior unchanged); `schema_version` mismatch and malformed TOML remain hard errors even in tolerant mode
+- [x] 1.2 Add `LoadMode` struct (`TolerateUnknownFields bool`) and `DecodeIrisTomlMode(data, sourcePath, isSelf, mode) (*IrisToml, []ValidationError, []string, error)` / `LoadIrisTomlMode(path, isSelf, mode) (...)` to `internal/config/iris_toml.go`; route `meta.Undecoded()` keys to warnings when tolerating, else to errors as today
+- [x] 1.3 Reimplement existing `LoadIrisToml`/`DecodeIrisToml` as thin delegates passing `LoadMode{}`, preserving their current signatures and behavior exactly
+- [x] 1.4 `go test ./internal/config/...` green; existing config + taxonomy + overlay tests still pass unchanged
 
 ## 2. Reload: pull-then-validate
 
