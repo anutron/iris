@@ -60,6 +60,10 @@ iris checkout <task-id> <branch> [--force]
                                    Switch the source repo to a branch. --force aborts in-progress merge/cherry-pick/rebase and discards uncommitted changes first (recovery path).
 iris tag <task-id> --tag <name> [--message "..."]
                                    Create an annotated tag at origin/<default-branch> and push it to origin.
+iris set-dogfood --sha <sha> --manifest <path|json> [--task <id>]
+                                   Hard-reset .iris.toml's dogfood_branch to <sha>, record the manifest, then rebuild + restart. Refuses repos without dogfood_branch.
+iris ship-feature --branch <name> --via pr|pr-auto [--title T] [--body B] [--merge-method squash|merge|rebase]
+                                   Ship a feature branch to origin's default branch via a GitHub PR. pr-auto also waits for CI, approves, merges, fetches, and re-composes the dogfood branch.
 iris reload [target]               Live-upgrade an iris-managed daemon via .iris.toml (--no-pull, --timeout).
 iris validate-config [target]      Parse + cross-validate a .iris.toml; no side effects.
 iris ls                            List managed systems iris has reloaded (--limit, --since).
@@ -95,6 +99,8 @@ Required:
 Optional:
 
 - `default_branch = "main"` — overrides `git symbolic-ref refs/remotes/origin/HEAD`.
+- `dogfood_branch = "dev"` — opts the repo into `iris:set_dogfood` / `iris:ship_feature`. Unset = both verbs refuse. Must be a valid git branch name and must differ from `default_branch` (the origin-first model keeps the default branch read-only, so the dogfood branch needs a distinct ref to reset). See "Dogfood and ship" below.
+- `ship_ci_timeout_seconds = 600` — how long `iris:ship_feature`'s `pr-auto` mode waits for the PR's CI checks before giving up. Defaults to 600; must be non-negative.
 - `[build] timeout_seconds`, `working_directory`, `env` — knobs for the build step.
 - `[pre_flight] command = [...]` — runs after iris's built-in pre-flight refusals, before pull. Non-zero exit aborts.
 - `[verify] command = [...]` — runs after restart (cross-reload only). Non-zero exit reports failure but does NOT roll back.
@@ -152,3 +158,60 @@ The structured result includes:
 - `dry_run`, `would_succeed`, `files_changed`, `conflicts` — populated only when `dry_run: true`.
 
 `--dry-run` previews the merge: iris runs `git merge --no-commit --no-ff <branch>` under the same lock, captures `files_changed` and `conflicts`, then `merge --abort` unconditionally. No commit, no `[post_merge]` hook. `sha` is empty; `would_succeed` reports whether the real merge would land cleanly.
+
+## Dogfood and ship
+
+Two opt-in verbs cover the recurring "run a composed dev build locally" and "land a finished feature" motions. Both refuse any repo whose `.iris.toml` does not declare `dogfood_branch`.
+
+### Origin-first invariant
+
+Local `main` (the `default_branch`) is **read-only relative to `origin`** — it only moves via `iris:fetch`, never by being pushed. `iris:push`'s default-branch refusal is unchanged; there is no direct-push-to-main path. The dogfood branch is the mutable surface, and it lives at a distinct ref (hence `dogfood_branch != default_branch`). This keeps argus's fork-from-local-main behavior reproducible and eliminates the "unpushed main commits" failure mode.
+
+The division of labor is **iris is dumb, the agent is smart**: iris never composes branches. The agent builds the rollup (cherry-pick / merge / rebase, conflict resolution and all) somewhere it can write, then hands iris a finished SHA plus a manifest describing what's in it.
+
+### `iris:set_dogfood`
+
+Atomically points the configured `dogfood_branch` at a worker-supplied SHA, persists a structured manifest, then runs the same build/restart machinery as `iris:reload` (with `--no-pull`, since the SHA is already composed).
+
+Inputs:
+
+- `task_id` (optional) — standard resolution; omit for iris-on-iris.
+- `sha` (required) — a full commit SHA reachable in the source repo.
+- `manifest` (required) — what composes the SHA:
+
+```json
+{
+  "base":    { "ref": "main", "sha": "abc123..." },
+  "layered": [ { "name": "F2", "sha": "...", "applied": "cherry-pick" } ],
+  "note":    "optional free-text from the agent"
+}
+```
+
+`applied` is descriptive only — iris does not validate it. Iris stamps a `recorded_at` ISO-8601 timestamp at write time.
+
+Behavior and safety:
+
+- The manifest is written **before** the branch reset (durable-first). If the write fails, no git mutation occurs; if the reset then fails, the manifest is "ahead" of the branch and `iris:status` reports the drift.
+- The branch is created if it does not yet exist (`previous_sha: ""`), otherwise force-moved.
+- iris does NOT validate that `manifest.layered[i].sha` is reachable from `sha` — the manifest is for communication, not verification.
+
+The structured result includes `set`, `dogfood_branch`, `previous_sha`, `new_sha`, the embedded `reload` result, and `warnings`. The manifest persists as `dogfood-manifest.json` in the same per-source-repo state directory as the audit log, overwritten on each call.
+
+### `iris:ship_feature`
+
+Lands a feature branch on `origin`'s default branch through a GitHub PR. One motion, two modes selected by `via`:
+
+- **`pr`** — push the branch + open a PR targeting the default branch, then stop. It never merges, fetches, or touches the dogfood branch; the worker returns to it after review.
+- **`pr-auto`** — push + open PR + wait for the head commit's required CI checks + approve + merge (using `merge_method`) + fetch + re-compose the dogfood branch. If checks **fail** or **time out** (`ship_ci_timeout_seconds`, default 600), iris leaves the PR open, does NOT merge, and returns `shipped: false` with a `ci_failed` / `ci_timeout` warning. A head commit with zero checks proceeds immediately.
+
+Inputs: `task_id` (optional), `branch` (required, must exist locally and not be the default branch), `via` (required, `pr` or `pr-auto`), `pr_title` (defaults to the branch's last commit subject), `pr_body` (optional), `merge_method` (`squash` default / `merge` / `rebase`; `pr-auto` only).
+
+The structured result includes `shipped`, `branch`, `pr_number`, `pr_url`, `merged`, `merge_sha`, `fetched`, `recompose`, and `warnings`.
+
+**Post-ship re-compose** (`pr-auto` only): after the merge lands, iris drops the shipped feature from the dogfood manifest and replays the remaining `layered` entries against the freshly-fetched base, in a throwaway worktree so the source checkout is undisturbed. On success it atomically updates the dogfood branch + manifest. On conflict it leaves both untouched and returns `recompose: { attempted: true, succeeded: false, conflict: { branch, message } }` so the agent can drive resolution. If no manifest exists, or the shipped branch was not in it, re-compose is skipped. The merge has already landed, so a re-compose conflict never fails the ship.
+
+There is no `direct-merge` mode: the only "advantages" of skipping the PR are anti-features for serious work, and `pr-auto` gives the same outcome with an audit trail and a CI gate.
+
+### `iris:status` manifest
+
+When a `dogfood-manifest.json` exists for the source repo, `iris:status` includes it as a `dogfood` field (the full manifest, including `recorded_at`). When absent, `dogfood` is `null`. A malformed manifest does not fail the call — `dogfood` is `null` and a structured warning names the path and parse error. Reporting is side-effect-free.
