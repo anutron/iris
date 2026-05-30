@@ -494,6 +494,140 @@ func TestValidate_PostMergeMissingCommand(t *testing.T) {
 	}
 }
 
+// --- dogfood_branch / ship_ci_timeout_seconds (iris-validate-config spec) ---
+
+// Scenario: Missing dogfood_branch is valid.
+func TestValidate_DogfoodBranchMissingIsValid(t *testing.T) {
+	doc := &IrisToml{
+		SchemaVersion: 1,
+		DefaultBranch: "main",
+		Build:         BuildBlock{Command: []string{"make"}},
+		Restart:       RestartBlock{Mechanism: MechanismNone},
+	}
+	errs := doc.Validate(false)
+	for _, e := range errs {
+		if strings.Contains(e.Field, "dogfood") {
+			t.Fatalf("unexpected dogfood error for unset field: %v", e)
+		}
+	}
+}
+
+// Scenario: Valid dogfood_branch passes and is reflected in the resolved doc.
+func TestValidate_DogfoodBranchValid(t *testing.T) {
+	data := `
+schema_version = 1
+default_branch = "main"
+dogfood_branch = "dev"
+
+[build]
+command = ["make", "build"]
+
+[restart]
+mechanism = "none"
+`
+	doc, errs, err := DecodeIrisToml([]byte(data), "stub.toml", false)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(errs) != 0 {
+		t.Fatalf("expected no validation errors, got: %v", errs)
+	}
+	if doc.DogfoodBranch != "dev" {
+		t.Fatalf("dogfood_branch = %q, want %q", doc.DogfoodBranch, "dev")
+	}
+}
+
+// Scenario: Invalid branch name reports a remediation hint.
+func TestValidate_DogfoodBranchInvalidName(t *testing.T) {
+	doc := &IrisToml{
+		SchemaVersion: 1,
+		DefaultBranch: "main",
+		DogfoodBranch: "no spaces allowed",
+		Build:         BuildBlock{Command: []string{"make"}},
+		Restart:       RestartBlock{Mechanism: MechanismNone},
+	}
+	errs := doc.Validate(false)
+	var got *ValidationError
+	for i := range errs {
+		if errs[i].Field == "dogfood_branch" {
+			got = &errs[i]
+		}
+	}
+	if got == nil {
+		t.Fatalf("expected dogfood_branch error, got: %v", errs)
+	}
+	if got.Message != "invalid git branch name" {
+		t.Fatalf("message = %q, want %q", got.Message, "invalid git branch name")
+	}
+	if got.Hint == "" {
+		t.Fatalf("expected a remediation hint, got empty")
+	}
+}
+
+// Scenario: dogfood_branch equal to default_branch is invalid.
+func TestValidate_DogfoodBranchEqualsDefaultBranch(t *testing.T) {
+	doc := &IrisToml{
+		SchemaVersion: 1,
+		DefaultBranch: "main",
+		DogfoodBranch: "main",
+		Build:         BuildBlock{Command: []string{"make"}},
+		Restart:       RestartBlock{Mechanism: MechanismNone},
+	}
+	errs := doc.Validate(false)
+	var got *ValidationError
+	for i := range errs {
+		if errs[i].Field == "dogfood_branch" {
+			got = &errs[i]
+		}
+	}
+	if got == nil {
+		t.Fatalf("expected dogfood_branch error, got: %v", errs)
+	}
+	if !strings.Contains(got.Message, "default_branch") {
+		t.Fatalf("message should mention default_branch, got %q", got.Message)
+	}
+	if got.Hint == "" {
+		t.Fatalf("expected a hint recommending a distinct name")
+	}
+}
+
+// Scenario: Negative ship_ci_timeout_seconds is invalid.
+func TestValidate_NegativeShipCITimeout(t *testing.T) {
+	doc := &IrisToml{
+		SchemaVersion:        1,
+		DefaultBranch:        "main",
+		ShipCITimeoutSeconds: -1,
+		Build:                BuildBlock{Command: []string{"make"}},
+		Restart:              RestartBlock{Mechanism: MechanismNone},
+	}
+	errs := doc.Validate(false)
+	var got *ValidationError
+	for i := range errs {
+		if errs[i].Field == "ship_ci_timeout_seconds" {
+			got = &errs[i]
+		}
+	}
+	if got == nil {
+		t.Fatalf("expected ship_ci_timeout_seconds error, got: %v", errs)
+	}
+	if !strings.Contains(got.Message, "non-negative") {
+		t.Fatalf("message should state the non-negativity rule, got %q", got.Message)
+	}
+}
+
+// ship_ci_timeout_seconds defaults to 600 when unset, applied at resolution
+// time (mirrors the build/exec timeout resolver pattern).
+func TestResolvedShipCITimeout_DefaultsTo600(t *testing.T) {
+	doc := &IrisToml{SchemaVersion: 1}
+	if got := doc.ResolvedShipCITimeoutSeconds(); got != 600 {
+		t.Fatalf("default ship_ci_timeout_seconds = %d, want 600", got)
+	}
+	doc.ShipCITimeoutSeconds = 30
+	if got := doc.ResolvedShipCITimeoutSeconds(); got != 30 {
+		t.Fatalf("explicit ship_ci_timeout_seconds = %d, want 30", got)
+	}
+}
+
 func TestSignalByName_Aliases(t *testing.T) {
 	cases := []struct {
 		in   string
