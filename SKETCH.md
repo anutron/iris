@@ -61,6 +61,15 @@ Not in scope for v1, but documented as future verbs:
 - `iris:gh_release_create` – tagged releases
 - `iris:open_in_editor` – open a path in VSCode/Cursor on the host (a kindness verb for "I made changes you should look at")
 
+## Dogfood and ship (origin-first)
+
+Two later verbs – `iris:set_dogfood` and `iris:ship_feature` – cover the "run a composed dev build locally" and "land a finished feature" motions. They're opt-in per repo via a `dogfood_branch` field in `.iris.toml`; repos that don't set it are unaffected. The canonical design lives in [`openspec/changes/add-dogfood-and-ship-verbs/design.md`](./openspec/changes/add-dogfood-and-ship-verbs/design.md); this is just the shape.
+
+- **Origin-first invariant.** Local `main` is read-only relative to `origin` – it moves only via `iris:fetch`, never by being pushed. `iris:push`'s default-branch refusal stays; there's no direct-push-to-main path. The mutable surface is the `dogfood_branch` (a distinct ref, hence `dogfood_branch != default_branch`). This keeps argus's fork-from-local-main behavior reproducible and kills the "unpushed main commits" failure mode.
+- **Iris is dumb, the agent is smart.** Iris never composes branches. The agent builds the rollup (cherry-pick / merge / rebase, conflicts and all) where it can write, then hands iris a finished SHA plus a structured manifest of what's in it. `iris:set_dogfood` only repositions the dogfood ref, persists the manifest, and reloads.
+- **One ship motion, two modes.** `iris:ship_feature(branch, via)` goes through a GitHub PR always. `via: "pr"` pushes + opens the PR and stops; `via: "pr-auto"` also waits for CI, approves, merges, fetches, and re-composes the dogfood branch with the shipped feature dropped. No direct-merge mode – skipping the PR's audit trail and CI gate is an anti-feature.
+- **Status surfaces the manifest.** `iris:status` reports the active dogfood manifest (or `null`) so a human or downstream agent can see what's running.
+
 ## Build convention
 
 Iris doesn't know how a repo builds. The repo declares it:

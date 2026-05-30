@@ -50,7 +50,7 @@
 
 - [x] 8.1 Update `README.md` with the new verbs and the `dogfood_branch` config field.
 - [x] 8.2 Update `.iris.toml` at the repo root to set `dogfood_branch = "dev"` so iris itself uses the new feature.
-- [ ] 8.3 Add a short section to `SKETCH.md` or equivalent on the origin-first model and the dogfood/ship motions.
+- [x] 8.3 Add a short section to `SKETCH.md` or equivalent on the origin-first model and the dogfood/ship motions.
 
 ## 9. Final validation
 
