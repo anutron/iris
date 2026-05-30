@@ -123,8 +123,8 @@ Required:
 Optional:
 
 - `default_branch = "main"` — overrides `git symbolic-ref refs/remotes/origin/HEAD`.
-- `dogfood_branch = "dev"` — opts the repo into `iris:set_dogfood` / `iris:ship_feature`. Unset = both verbs refuse. Must be a valid git branch name and must differ from `default_branch` (the origin-first model keeps the default branch read-only, so the dogfood branch needs a distinct ref to reset). See "Dogfood and ship" below.
-- `ship_ci_timeout_seconds = 600` — how long `iris:ship_feature`'s `pr-auto` mode waits for the PR's CI checks before giving up. Defaults to 600; must be non-negative.
+- `dogfood_branch = "dev"` — opts the developer into `iris:set_dogfood` / `iris:ship_feature`. Unset = both verbs refuse. Must be a valid git branch name and must differ from `default_branch` (the origin-first model keeps the default branch read-only, so the dogfood branch needs a distinct ref to reset). **Lives in `.iris.local.toml`, not `.iris.toml`** — see "Local vs shared config" below.
+- `ship_ci_timeout_seconds = 600` — how long `iris:ship_feature`'s `pr-auto` mode waits for the PR's CI checks before giving up. Defaults to 600; must be non-negative. **Lives in `.iris.local.toml`.**
 - `[build] timeout_seconds`, `working_directory`, `env` — knobs for the build step.
 - `[pre_flight] command = [...]` — runs after iris's built-in pre-flight refusals, before pull. Non-zero exit aborts.
 - `[verify] command = [...]` — runs after restart (cross-reload only). Non-zero exit reports failure but does NOT roll back.
@@ -166,6 +166,31 @@ The `exit_code` mechanism respawns the process that exited. When `iris reload` r
 ### Iris's own `.iris.toml`
 
 Iris ships its own `.iris.toml` at the repo root. The same six-line example above is what iris itself uses when reloading. The argus project allowlist is not consulted for self-reloads.
+
+### Local vs shared config
+
+iris reads two TOML files at the source repo root:
+
+- `.iris.toml` — **checked in, project-wide**. Identical for every developer. The build command, restart mechanism, hook blocks, and default branch live here.
+- `.iris.local.toml` — **gitignored, per-developer**. Optional overlay where personal-workflow fields live. Local values override shared values for the same field.
+
+Field taxonomy:
+
+| Field | File | Why |
+|---|---|---|
+| `schema_version` | `.iris.toml` | Schema invariant; every developer must agree on it. |
+| `default_branch` | `.iris.toml` | A property of the repo, not the developer. |
+| `[build]` | `.iris.toml` | The repo defines how it builds. |
+| `[restart]` | `.iris.toml` | The repo defines how the daemon restarts. |
+| `[pre_flight]` | `.iris.toml` | Project-wide pre-pull guard. |
+| `[verify]` | `.iris.toml` | Project-wide post-restart check. |
+| `[post_merge]` | `.iris.toml` | Project-wide post-merge hook. |
+| `dogfood_branch` | `.iris.local.toml` | Each developer composes onto their own branch (or opts out entirely). |
+| `ship_ci_timeout_seconds` | `.iris.local.toml` | Personal patience threshold for `ship_feature --via pr-auto`. |
+
+Migration: if your existing `.iris.toml` has `dogfood_branch` or `ship_ci_timeout_seconds`, move those lines to `.iris.local.toml` at the repo root. iris still reads them from the shared file with a warning, so nothing breaks mid-flight, but the warning goes away once they live in the local file. `setup.sh` adds `.iris.local.toml` to your `.gitignore` and offers to scaffold a starter file.
+
+See [`openspec/changes/add-iris-local-toml-overlay/design.md`](./openspec/changes/add-iris-local-toml-overlay/design.md) for the rationale (merge order, why warnings instead of errors, why the taxonomy is enforced).
 
 ## `iris:merge_to_master`
 
