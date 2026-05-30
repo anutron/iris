@@ -2,7 +2,6 @@ package verbs
 
 import (
 	"context"
-	"path/filepath"
 	"strings"
 
 	"github.com/anutron/iris/internal/argus"
@@ -17,19 +16,25 @@ type StatusInput struct {
 
 // StatusResult is the structured result.
 type StatusResult struct {
-	SourceRepo       string           `json:"source_repo"`
-	HeadSha          string           `json:"head_sha"`
-	Branch           string           `json:"branch"`
-	DefaultBranch    string           `json:"default_branch"`
-	OriginDefaultSha string           `json:"origin_default_sha"`
-	WorkingTreeClean bool             `json:"working_tree_clean"`
-	Drift            bool             `json:"drift"`
-	UpToDate         bool             `json:"up_to_date"`
-	Config           *config.IrisToml `json:"config"`
-	ArgusTask        *argus.Task      `json:"argus_task"`
-	LastReload       *AuditEntry      `json:"last_reload"`
-	Dogfood          *DogfoodManifest `json:"dogfood"`
-	Warnings         []string         `json:"warnings"`
+	SourceRepo       string            `json:"source_repo"`
+	HeadSha          string            `json:"head_sha"`
+	Branch           string            `json:"branch"`
+	DefaultBranch    string            `json:"default_branch"`
+	OriginDefaultSha string            `json:"origin_default_sha"`
+	WorkingTreeClean bool              `json:"working_tree_clean"`
+	Drift            bool              `json:"drift"`
+	UpToDate         bool              `json:"up_to_date"`
+	Config           *config.IrisToml  `json:"config"`
+	// ConfigSources maps each top-level TOML field name that was set in at
+	// least one of `.iris.toml` / `.iris.local.toml` to its source — either
+	// "shared" or "local". Fields unset in both files are omitted (no "none"
+	// sentinel). When neither file exists, the field is an empty object
+	// `{}` rather than nil/absent so consumers can rely on the shape.
+	ConfigSources    map[string]string `json:"config_sources"`
+	ArgusTask        *argus.Task       `json:"argus_task"`
+	LastReload       *AuditEntry       `json:"last_reload"`
+	Dogfood          *DogfoodManifest  `json:"dogfood"`
+	Warnings         []string          `json:"warnings"`
 }
 
 // Status resolves the target, reads .iris.toml non-fatally, captures git
@@ -43,22 +48,38 @@ func Status(ctx context.Context, client *argus.Client, in StatusInput) (*StatusR
 
 	warnings := []string{}
 
-	// .iris.toml. A missing file is a non-event (silent null config). A
-	// malformed file or cross-validation errors still surface as warnings.
+	// .iris.toml + optional .iris.local.toml. A missing shared file is a
+	// non-event (silent null config). Parse errors and cross-validation
+	// errors still surface as warnings. The overlay loader tracks which
+	// file each top-level field came from so we can populate config_sources.
 	isSelf := false
 	if self, err := ResolveSelf(ctx); err == nil {
 		isSelf = EqualSourceRepos(target.SourceRepo, self.SourceRepo)
 	}
-	tomlPath := filepath.Join(target.SourceRepo, config.IrisTomlFilename)
-	doc, verrs, _ := config.LoadIrisToml(tomlPath, isSelf)
-	if len(verrs) > 0 {
-		for _, e := range verrs {
-			warnings = append(warnings, e.Error())
+	overlay, _ := config.LoadOverlay(target.SourceRepo, isSelf)
+	// configSources must be non-nil so it JSON-marshals as `{}` (not `null`)
+	// when no files exist — consumers rely on the field always being an
+	// object.
+	configSources := map[string]string{}
+	var verrs []config.ValidationError
+	var cfg *config.IrisToml
+	if overlay != nil {
+		verrs = append(verrs, overlay.ValidationErrors...)
+		if overlay.Doc != nil {
+			// Layer cross-validation on top of overlay parse errors so
+			// schema violations continue to surface in Status (matching
+			// the previous LoadIrisToml-based behavior).
+			verrs = append(verrs, overlay.Doc.Validate(isSelf)...)
+		}
+		for k, v := range overlay.Provenance {
+			configSources[k] = string(v)
+		}
+		if len(verrs) == 0 && overlay.Doc != nil {
+			cfg = overlay.Doc
 		}
 	}
-	var cfg *config.IrisToml
-	if len(verrs) == 0 && doc != nil {
-		cfg = doc
+	for _, e := range verrs {
+		warnings = append(warnings, e.Error())
 	}
 
 	// Default branch.
@@ -144,6 +165,7 @@ func Status(ctx context.Context, client *argus.Client, in StatusInput) (*StatusR
 		Drift:            drift,
 		UpToDate:         upToDate,
 		Config:           cfg,
+		ConfigSources:    configSources,
 		ArgusTask:        argusTask,
 		LastReload:       last,
 		Dogfood:          dogfood,

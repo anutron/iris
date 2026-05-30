@@ -503,6 +503,135 @@ func TestStatus_NoSideEffects(t *testing.T) {
 	}
 }
 
+// TestStatus_ConfigSourcesSharedAndLocalMix verifies the canonical overlay
+// scenario: shared file sets default_branch, [build], [restart]; local file
+// sets dogfood_branch. config_sources reports the right source for each.
+func TestStatus_ConfigSourcesSharedAndLocalMix(t *testing.T) {
+	const shared = `schema_version = 1
+default_branch = "main"
+[build]
+command = ["true"]
+[restart]
+mechanism = "none"
+`
+	src, client := statusFixture(t, shared)
+	// Add .iris.local.toml with dogfood_branch.
+	if err := os.WriteFile(filepath.Join(src, ".iris.local.toml"),
+		[]byte(`dogfood_branch = "dev"`+"\n"), 0o644); err != nil {
+		t.Fatalf("write local toml: %v", err)
+	}
+	res, err := Status(context.Background(), client, StatusInput{Path: src})
+	if err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	if res.ConfigSources == nil {
+		t.Fatal("expected ConfigSources non-nil")
+	}
+	want := map[string]string{
+		"schema_version": "shared",
+		"default_branch": "shared",
+		"build":          "shared",
+		"restart":        "shared",
+		"dogfood_branch": "local",
+	}
+	for k, v := range want {
+		got, ok := res.ConfigSources[k]
+		if !ok {
+			t.Errorf("missing config_sources[%q]", k)
+			continue
+		}
+		if got != v {
+			t.Errorf("config_sources[%q] = %q, want %q", k, got, v)
+		}
+	}
+	for k := range res.ConfigSources {
+		if _, ok := want[k]; !ok {
+			t.Errorf("unexpected config_sources[%q] = %q", k, res.ConfigSources[k])
+		}
+	}
+}
+
+// TestStatus_ConfigSourcesOmitsUnsetFields verifies that fields not set in
+// either file are absent from config_sources (no "none" sentinel).
+func TestStatus_ConfigSourcesOmitsUnsetFields(t *testing.T) {
+	src, client := statusFixture(t, tomlNone) // sets schema_version, build, restart only
+	res, err := Status(context.Background(), client, StatusInput{Path: src})
+	if err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	if _, ok := res.ConfigSources["ship_ci_timeout_seconds"]; ok {
+		t.Error("expected ship_ci_timeout_seconds absent from config_sources when unset")
+	}
+	if _, ok := res.ConfigSources["dogfood_branch"]; ok {
+		t.Error("expected dogfood_branch absent from config_sources when unset")
+	}
+	if _, ok := res.ConfigSources["default_branch"]; ok {
+		t.Error("expected default_branch absent from config_sources when unset")
+	}
+	if _, ok := res.ConfigSources["pre_flight"]; ok {
+		t.Error("expected pre_flight absent from config_sources when unset")
+	}
+}
+
+// TestStatus_ConfigSourcesReportsLegacyPlacement verifies that the legacy
+// placement (dogfood_branch in shared file, no local file) reports
+// dogfood_branch: "shared" so the un-migrated state is visible.
+func TestStatus_ConfigSourcesReportsLegacyPlacement(t *testing.T) {
+	const legacy = `schema_version = 1
+dogfood_branch = "dev"
+[build]
+command = ["true"]
+[restart]
+mechanism = "none"
+`
+	src, client := statusFixture(t, legacy)
+	res, err := Status(context.Background(), client, StatusInput{Path: src})
+	if err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	got, ok := res.ConfigSources["dogfood_branch"]
+	if !ok {
+		t.Fatal("expected config_sources[dogfood_branch] present (legacy placement)")
+	}
+	if got != "shared" {
+		t.Errorf("config_sources[dogfood_branch] = %q, want %q", got, "shared")
+	}
+}
+
+// TestStatus_ConfigSourcesEmptyWhenNoFiles verifies that with no `.iris.toml`
+// and no `.iris.local.toml`, config_sources is an empty object (not nil/null
+// or absent) and config is null, matching the consumer-ergonomics contract.
+func TestStatus_ConfigSourcesEmptyWhenNoFiles(t *testing.T) {
+	src, client := statusFixture(t, "") // no .iris.toml, no .iris.local.toml
+	res, err := Status(context.Background(), client, StatusInput{Path: src})
+	if err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	if res.Config != nil {
+		t.Fatal("expected config nil when no files present")
+	}
+	if res.ConfigSources == nil {
+		t.Fatal("expected ConfigSources non-nil (must be empty map, not nil) when no files present")
+	}
+	if len(res.ConfigSources) != 0 {
+		t.Fatalf("expected empty ConfigSources, got %+v", res.ConfigSources)
+	}
+	// Verify it JSON-marshals as `{}`, not `null`.
+	body, err := json.Marshal(res)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !strings.Contains(string(body), `"config_sources":{}`) {
+		t.Errorf("expected JSON to contain \"config_sources\":{}, got: %s", string(body))
+	}
+	// And the missing-config-is-silent contract still holds.
+	for _, w := range res.Warnings {
+		if strings.Contains(w, ".iris.toml") || strings.Contains(w, "file not found") {
+			t.Fatalf("expected no warning about missing .iris.toml, got: %q", w)
+		}
+	}
+}
+
 func TestStatus_SelfTargetWhenNoInputs(t *testing.T) {
 	// Build a fixture and point executable into it so ResolveSelf resolves
 	// to this repo. Status() with no inputs should target it.
