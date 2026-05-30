@@ -87,6 +87,32 @@ After enough time has passed, a future change can promote the warning to an erro
 - *Separate history file (`dogfood-history.jsonl`)* — proper memory but bigger scope; defer until the full memory feature lands.
 - *Audit log lookup* — already exists, but unstructured. The manifest's structured `layered` array is what we want; reconstructing it from commit messages would be brittle.
 
+### `iris:set_local_config` writes `.iris.local.toml` from a sandboxed worker
+
+**Decision:** Add a new verb `iris:set_local_config(fields)` that writes (or merges into) `.iris.local.toml` at the source repo root. Workers in argus sandboxes can't write outside their worktree, so without this verb a worker would have no way to bootstrap a dogfood workflow for itself. Read-side already covered by `iris:status` (returns merged config + provenance).
+
+**Signature:**
+
+```
+iris:set_local_config(task_id, fields, delete) -> { written, path, resolved, warnings }
+```
+
+- `fields` — partial object of local-tagged field names to set. Values are taken literally.
+- `delete` — optional array of field names to remove from `.iris.local.toml` (gives workers a way to unset without ambiguous sentinel values).
+- Merge semantics: read existing file (silently treat missing as empty), apply removals first, then apply sets. Write the result back atomically (tmp + rename).
+- Taxonomy enforcement: any field name in `fields` or `delete` whose `FieldKind(name) != "local"` is refused with `field_not_local` error. No writes occur.
+- Validation: each field's value runs through the same per-field validator the loader uses (`dogfood_branch` is a valid git ref name, `ship_ci_timeout_seconds >= 0`, etc.). Failures refuse with `invalid_value` error. No writes occur.
+- Concurrency: acquire the source-repo lock for the read-modify-write.
+- Idempotency: setting fields to the same values they already hold succeeds silently.
+
+**Rationale:** Workers should be able to set up their own dogfood end-to-end without escaping the sandbox. This is the symmetric write counterpart to `iris:status`'s read surface. Keeping the verb narrow (refuses shared fields, validates values) means it can never be used to corrupt the daemon's running state — only to set per-developer workflow knobs.
+
+**Alternatives considered:**
+
+- *Generic `iris:write_file(path, content)`* — too broad; lets a worker write arbitrary files outside its worktree. Rejected on principle.
+- *One verb per field (`iris:set_dogfood_branch`, `iris:set_ship_timeout`)* — verbose, doesn't scale as new local-tagged fields appear. Rejected.
+- *Have `set_dogfood` write `.iris.local.toml` as a side effect* — conflates two responsibilities (composing dev vs configuring iris). Rejected.
+
 ### `.gitignore` is owned by the consuming repo, not iris
 
 **Decision:** iris's `setup.sh` adds `.iris.local.toml` to the repo's `.gitignore` if missing. iris does NOT enforce the gitignore at runtime.

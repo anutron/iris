@@ -49,6 +49,15 @@
 - [x] 8.1 Update `README.md` with the two-file pattern: a small table showing which fields live where, why, and how to migrate.
 - [x] 8.2 Update `SKETCH.md` if it references `.iris.toml`'s contents.
 
+## 10. `iris:set_local_config` verb
+
+- [ ] 10.1 Write failing tests in `internal/verbs/set_local_config_test.go` matching every scenario in `specs/iris-set-local-config/spec.md`.
+- [ ] 10.2 Implement `verbs.SetLocalConfig(ctx, client, taskID, opts) (*SetLocalConfigResult, error)` in `internal/verbs/set_local_config.go`. Steps: resolve task -> validate every input field name is `local`-tagged (refuse `field_not_local` else) -> validate every input value against per-field rules (refuse `invalid_value` else) -> acquire source-repo lock -> read existing `.iris.local.toml` (treat absent as empty) -> apply deletes, apply sets -> atomic write (tmp + rename) -> return result.
+- [ ] 10.3 Wire MCP handler in `internal/mcp/handler_set_local_config.go` and register in the handler registry.
+- [ ] 10.4 Wire CLI subcommand `iris set-local-config --field <name>=<value> ... [--delete <name> ...]`. Accept repeated `--field` and `--delete` flags.
+- [ ] 10.5 Reuse cross-validation helpers from `internal/config/iris_toml.go` for per-field rules (so dogfood_branch validation stays in one place).
+- [ ] 10.6 Ensure all tests green; full `go test ./...` and `go vet ./...` clean.
+
 ## 9. Validation and ship
 
 - [x] 9.1 `openspec validate add-iris-local-toml-overlay --strict` green.

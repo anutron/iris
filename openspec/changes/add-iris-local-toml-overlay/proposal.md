@@ -11,11 +11,12 @@ The just-shipped `add-dogfood-and-ship-verbs` change put `dogfood_branch` (and t
 - `iris:validate_config` validates both files: structure-and-cross-checks for `.iris.toml`, plus a separate "shared file contains local-only fields" warning.
 - `iris:status` reports the merged config under `config`, plus a new `config_sources` field naming which file supplied each value (so `iris:status` can tell humans "dogfood_branch = dev from .iris.local.toml").
 - The dogfood manifest gains a `previous_manifest` field — a 1-deep snapshot of whatever was on the dogfood branch before the current `set_dogfood` overwrote it. Lightweight memory: lets a human or agent ask "what was I composing before?" without scanning the audit log. Not a full history feature; just one step back.
+- New `iris:set_local_config` verb — writes `.iris.local.toml` at the source repo root with the supplied per-developer fields, merging with existing contents. Sandboxed workers can use this to set up their own dogfood without leaving the sandbox. Refuses any shared-tagged field (taxonomy enforced).
 
 ## Capabilities
 
 ### New Capabilities
-- (none — this is a refactor of existing capabilities)
+- `iris-set-local-config`: write `.iris.local.toml` at the source repo root with worker-supplied per-developer fields. Merges with existing contents; refuses shared-tagged fields.
 
 ### Modified Capabilities
 - `iris-validate-config`: validate `.iris.local.toml` when present; classify per-developer fields; warn when local-only fields appear in shared `.iris.toml`.
