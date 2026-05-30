@@ -349,6 +349,111 @@ func TestReload_RefusesDivergentHistory(t *testing.T) {
 	}
 }
 
+// --- Pull-then-validate (forward-compatible ordering) -----------------------
+
+// advanceOriginToml pushes a new `.iris.toml` body onto origin/main via a
+// throwaway clone, so the fixture's source repo is one fast-forward behind a
+// changed config — the setup for post-pull validation tests.
+func advanceOriginToml(t *testing.T, src, body string) {
+	t.Helper()
+	g := gitRunner(t)
+	other := t.TempDir()
+	g("", "clone", filepath.Join(filepath.Dir(src), "origin.git"), other)
+	g(other, "config", "user.email", "x@y.z")
+	g(other, "config", "user.name", "x")
+	if err := os.WriteFile(filepath.Join(other, ".iris.toml"), []byte(body), 0o644); err != nil {
+		t.Fatalf("write advanced toml: %v", err)
+	}
+	g(other, "add", ".iris.toml")
+	g(other, "commit", "-m", "advance .iris.toml")
+	g(other, "push", "origin", "main")
+}
+
+// Headline regression: an additive field that only exists on origin is pulled
+// in, tolerated as a warning, and the reload proceeds to build/restart. This is
+// the one-shot additive-deploy property the change exists to provide.
+func TestReload_ToleratesUnknownFieldPostPull(t *testing.T) {
+	src, client := reloadFixture(t, tomlCrossNone, false)
+	advanceOriginToml(t, src, `schema_version = 1
+future_field = "x"
+[build]
+command = ["true"]
+[restart]
+mechanism = "none"
+`)
+	res, err := Reload(context.Background(), client, ReloadInput{Path: src, Caller: "cli"})
+	if err != nil {
+		t.Fatalf("reload should tolerate unknown post-pull field, got: %v", err)
+	}
+	if !res.Pulled {
+		t.Fatal("expected Pulled=true")
+	}
+	if !strings.Contains(strings.Join(res.Warnings, "\n"), "future_field") {
+		t.Fatalf("expected warning naming future_field, got: %v", res.Warnings)
+	}
+}
+
+// Validation runs against the POST-pull config: a config that is valid pre-pull
+// but invalid on origin must fail the reload (proving we validate the truth
+// that will run, not stale on-disk state).
+func TestReload_RefusesInvalidPostPullConfig(t *testing.T) {
+	src, client := reloadFixture(t, tomlCrossNone, false)
+	advanceOriginToml(t, src, `schema_version = 1
+[build]
+command = ["true"]
+[restart]
+mechanism = "launchagent"
+label = "com.example.x"
+pid_file = "/tmp/foo.pid"
+`)
+	_, err := Reload(context.Background(), client, ReloadInput{Path: src, Caller: "cli"})
+	if err == nil {
+		t.Fatal("expected post-pull validation refusal")
+	}
+	if !strings.Contains(err.Error(), "pid_file") {
+		t.Fatalf("expected pid_file error from post-pull config, got: %v", err)
+	}
+}
+
+// schema_version mismatch is NOT tolerated even with forward-compat decoding.
+func TestReload_SchemaVersionStillFailsPostPull(t *testing.T) {
+	src, client := reloadFixture(t, tomlCrossNone, false)
+	advanceOriginToml(t, src, `schema_version = 99
+future_field = "x"
+[build]
+command = ["true"]
+[restart]
+mechanism = "none"
+`)
+	_, err := Reload(context.Background(), client, ReloadInput{Path: src, Caller: "cli"})
+	if err == nil {
+		t.Fatal("expected schema_version refusal post-pull")
+	}
+	if !strings.Contains(err.Error(), "schema_version") {
+		t.Fatalf("expected schema_version error, got: %v", err)
+	}
+}
+
+// A malformed on-disk `.iris.toml` that origin fixes must NOT block the pull:
+// the lenient pre-pull peek falls back to git's origin/HEAD, the pull brings
+// the fix, and post-pull validation passes.
+func TestReload_MalformedPrePullDoesNotBlockPull(t *testing.T) {
+	src, client := reloadFixture(t, "schema_version = = 1\n", false)
+	advanceOriginToml(t, src, `schema_version = 1
+[build]
+command = ["true"]
+[restart]
+mechanism = "none"
+`)
+	res, err := Reload(context.Background(), client, ReloadInput{Path: src, Caller: "cli"})
+	if err != nil {
+		t.Fatalf("malformed-on-disk fixed-on-origin should deploy, got: %v", err)
+	}
+	if !res.Pulled {
+		t.Fatal("expected Pulled=true")
+	}
+}
+
 // --- Build step -------------------------------------------------------------
 
 func TestReload_BuildSuccessIncludesOutput(t *testing.T) {

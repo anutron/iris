@@ -7,11 +7,11 @@
 
 ## 2. Reload: pull-then-validate
 
-- [ ] 2.1 Write/adjust failing tests in `internal/verbs/reload_test.go`: validation runs against the post-pull `.iris.toml`; an additive unknown field present post-pull is tolerated (warning surfaced, reload proceeds to build); missing/malformed/schema/mechanism refusals now fire after the pull; a malformed pre-pull `.iris.toml` does not block the pull when origin fixes it; `schema_version` mismatch still hard-fails post-pull
-- [ ] 2.2 Add a lenient pre-pull `default_branch` peek helper (decode-and-swallow-errors, returns the override or `""`); replace the pre-pull full load used for branch resolution with it
-- [ ] 2.3 Reorder `Reload`: move the `.iris.toml` load+validate to after the fetch+ff-merge, using `LoadIrisTomlMode(..., LoadMode{TolerateUnknownFields: true})`; keep dirty-tree / non-default-branch / origin-reachable checks pre-pull; move the `[pre_flight]` hook to after the post-pull validation and before the build
-- [ ] 2.4 Thread tolerated-unknown-field warnings into `ReloadResult.Warnings` and the audit entry; ensure `pre_pull_sha`/`post_pull_sha` and the post-pull validation outcome are recorded in both success and failure audit paths
-- [ ] 2.5 `go test ./internal/verbs/...` green for reload
+- [x] 2.1 Write/adjust failing tests in `internal/verbs/reload_test.go`: validation runs against the post-pull `.iris.toml`; an additive unknown field present post-pull is tolerated (warning surfaced, reload proceeds to build); missing/malformed/schema/mechanism refusals now fire after the pull; a malformed pre-pull `.iris.toml` does not block the pull when origin fixes it; `schema_version` mismatch still hard-fails post-pull
+- [x] 2.2 Add a lenient pre-pull `default_branch` peek helper (decode-and-swallow-errors, returns the override or `""`); replace the pre-pull full load used for branch resolution with it
+- [x] 2.3 Reorder `Reload`: move the `.iris.toml` load+validate to after the fetch+ff-merge, using `LoadIrisTomlMode(..., LoadMode{TolerateUnknownFields: true})`; keep dirty-tree / non-default-branch / origin-reachable checks pre-pull; move the `[pre_flight]` hook to after the post-pull validation and before the build
+- [x] 2.4 Thread tolerated-unknown-field warnings into `ReloadResult.Warnings` and the audit entry; ensure `pre_pull_sha`/`post_pull_sha` and the post-pull validation outcome are recorded in both success and failure audit paths
+- [x] 2.5 `go test ./internal/verbs/...` green for reload
 
 ## 3. Publish: validate the worktree config
 

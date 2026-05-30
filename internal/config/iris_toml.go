@@ -175,6 +175,25 @@ func LoadIrisTomlMode(path string, isSelf bool, mode LoadMode) (*IrisToml, []Val
 	return DecodeIrisTomlMode(data, path, isSelf, mode)
 }
 
+// PeekDefaultBranch leniently reads ONLY the default_branch override from the
+// .iris.toml at path. It exists for reload pre-flight, which must choose a
+// fetch target BEFORE pulling the authoritative config but cannot afford to
+// refuse on the pre-pull file (that file may be stale, malformed, or carry a
+// field this binary predates). It performs no validation and returns "" on any
+// problem — missing file, malformed TOML, unknown fields — letting the caller
+// fall back to git's origin/HEAD.
+func PeekDefaultBranch(path string) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	var doc IrisToml
+	if _, err := toml.Decode(string(data), &doc); err != nil {
+		return ""
+	}
+	return doc.DefaultBranch
+}
+
 // DecodeIrisToml parses raw bytes into an IrisToml using strict decoding.
 // Convenience for callers that already have the bytes (tests).
 func DecodeIrisToml(data []byte, sourcePath string, isSelf bool) (*IrisToml, []ValidationError, error) {

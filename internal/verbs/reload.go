@@ -126,34 +126,15 @@ func Reload(ctx context.Context, client *argus.Client, in ReloadInput) (*ReloadR
 		return nil, ErrCLISelfReloadUnsupported
 	}
 
-	// 3. Pre-flight refusals (clean tree, .iris.toml, schema)
+	// 3. Pre-pull tree-state refusals.
+	//
+	// IMPORTANT: `.iris.toml` content refusals (missing file, malformed TOML,
+	// schema/mechanism validation) do NOT run here. They run AFTER the pull,
+	// against the post-pull config the rebuilt-and-restarted binary will
+	// actually consume — see step 6. Validating the pre-pull file would judge
+	// stale state and, fatally, would reject an additive field that the very
+	// pull is about to deliver (the old binary's decoder treats it as unknown).
 	tomlPath := filepath.Join(target.SourceRepo, config.IrisTomlFilename)
-	doc, verrs, err := config.LoadIrisToml(tomlPath, isSelf)
-	if err != nil {
-		writeAudit(AuditEntry{
-			Caller: caller, TargetSourceRepo: target.SourceRepo, Mode: mode,
-			Outcome: "failure", FailureReason: err.Error(),
-		})
-		return nil, err
-	}
-	// reload requires .iris.toml to declare build + restart; ENOENT is no
-	// longer a ValidationError, so synthesize a clear refusal here.
-	if doc == nil {
-		reason := fmt.Sprintf("%s not found at %s", config.IrisTomlFilename, tomlPath)
-		writeAudit(AuditEntry{
-			Caller: caller, TargetSourceRepo: target.SourceRepo, Mode: mode,
-			Outcome: "failure", FailureReason: reason,
-		})
-		return nil, fmt.Errorf("%s", reason)
-	}
-	if len(verrs) > 0 {
-		reason := joinValidationErrors(verrs)
-		writeAudit(AuditEntry{
-			Caller: caller, TargetSourceRepo: target.SourceRepo, Mode: mode,
-			Outcome: "failure", FailureReason: reason,
-		})
-		return nil, fmt.Errorf("%s invalid: %s", config.IrisTomlFilename, reason)
-	}
 
 	// Working tree clean?
 	if err := checkCleanTree(ctx, target.SourceRepo); err != nil {
@@ -164,9 +145,12 @@ func Reload(ctx context.Context, client *argus.Client, in ReloadInput) (*ReloadR
 		return nil, err
 	}
 
-	// Resolve default branch (priority: .iris.toml override → git → "main" + warning).
+	// Resolve default branch for the fetch target. The override comes from a
+	// LENIENT pre-pull peek of `.iris.toml` (override only, never refuses); on
+	// a missing/malformed/forward-compatible file the peek yields "" and the
+	// git origin/HEAD → "main" fallback applies.
 	warnings := []string{}
-	defaultBranch, dbWarn, err := resolveDefaultBranch(ctx, target.SourceRepo, doc.DefaultBranch)
+	defaultBranch, dbWarn, err := resolveDefaultBranch(ctx, target.SourceRepo, config.PeekDefaultBranch(tomlPath))
 	if err != nil {
 		writeAudit(AuditEntry{
 			Caller: caller, TargetSourceRepo: target.SourceRepo, Mode: mode,
@@ -217,23 +201,7 @@ func Reload(ctx context.Context, client *argus.Client, in ReloadInput) (*ReloadR
 	}
 	defer releaseLock()
 
-	// 5. [pre_flight] hook
-	var preFlightOutput string
-	if doc.PreFlight != nil {
-		out, err := runHook(ctx, target.SourceRepo, *doc.PreFlight, config.DefaultHookTimeoutSeconds)
-		preFlightOutput = out
-		if err != nil {
-			err = fmt.Errorf("pre_flight hook failed: %w; output:\n%s", err, out)
-			writeAudit(AuditEntry{
-				Caller: caller, TargetSourceRepo: target.SourceRepo, Mode: mode,
-				PreFlightOutput: preFlightOutput,
-				Outcome:         "failure", FailureReason: err.Error(),
-			})
-			return nil, err
-		}
-	}
-
-	// 6. Pull (fetch + ff-only merge) unless no_pull
+	// 5. Pull (fetch + ff-only merge) unless no_pull
 	prePullSha, err := runGit(ctx, target.SourceRepo, "rev-parse", "HEAD")
 	if err != nil {
 		writeAudit(AuditEntry{
@@ -279,7 +247,62 @@ func Reload(ctx context.Context, client *argus.Client, in ReloadInput) (*ReloadR
 		pulled = true
 	}
 
-	// 7. Build
+	// 6. Load + validate the POST-pull `.iris.toml` — the config the rebuilt
+	// binary will consume. Forward-compatible mode: an additive field freshly
+	// arrived from origin is tolerated as a warning (the old decoder would
+	// otherwise reject it as unknown); schema_version mismatch and malformed
+	// TOML remain hard refusals. This is where the missing-file and validation
+	// refusals fire — after the pull, not before it.
+	doc, verrs, tomlWarnings, err := config.LoadIrisTomlMode(tomlPath, isSelf, config.LoadMode{TolerateUnknownFields: true})
+	if err != nil {
+		writeAudit(AuditEntry{
+			Caller: caller, TargetSourceRepo: target.SourceRepo, Mode: mode,
+			Pulled: pulled, PrePullSha: prePullSha, PostPullSha: postPullSha,
+			Outcome: "failure", FailureReason: err.Error(),
+		})
+		return nil, err
+	}
+	if doc == nil {
+		reason := fmt.Sprintf("%s not found at %s", config.IrisTomlFilename, tomlPath)
+		writeAudit(AuditEntry{
+			Caller: caller, TargetSourceRepo: target.SourceRepo, Mode: mode,
+			Pulled: pulled, PrePullSha: prePullSha, PostPullSha: postPullSha,
+			Outcome: "failure", FailureReason: reason,
+		})
+		return nil, fmt.Errorf("%s", reason)
+	}
+	if len(verrs) > 0 {
+		reason := joinValidationErrors(verrs)
+		writeAudit(AuditEntry{
+			Caller: caller, TargetSourceRepo: target.SourceRepo, Mode: mode,
+			Pulled: pulled, PrePullSha: prePullSha, PostPullSha: postPullSha,
+			Outcome: "failure", FailureReason: reason,
+		})
+		return nil, fmt.Errorf("%s invalid: %s", config.IrisTomlFilename, reason)
+	}
+	warnings = append(warnings, tomlWarnings...)
+
+	// 7. [pre_flight] hook — runs against the freshly-pulled tree (reading the
+	// hook definition from the post-pull config), after validation and before
+	// the build. On failure nothing is built or restarted.
+	var preFlightOutput string
+	if doc.PreFlight != nil {
+		out, err := runHook(ctx, target.SourceRepo, *doc.PreFlight, config.DefaultHookTimeoutSeconds)
+		preFlightOutput = out
+		if err != nil {
+			err = fmt.Errorf("pre_flight hook failed: %w; output:\n%s", err, out)
+			writeAudit(AuditEntry{
+				Caller: caller, TargetSourceRepo: target.SourceRepo, Mode: mode,
+				Pulled: pulled, PrePullSha: prePullSha, PostPullSha: postPullSha,
+				PreFlightOutput: preFlightOutput,
+				Outcome:         "failure", FailureReason: err.Error(),
+				Warnings:        warnings,
+			})
+			return nil, err
+		}
+	}
+
+	// 8. Build
 	buildOutput, err := runBuildBlock(ctx, target.SourceRepo, doc.Build)
 	if err != nil {
 		writeAudit(AuditEntry{

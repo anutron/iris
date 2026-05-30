@@ -431,6 +431,33 @@ func TestDecodeMode_MalformedStillHardFails(t *testing.T) {
 	}
 }
 
+// TestPeekDefaultBranch covers the lenient pre-pull peek used by reload.
+func TestPeekDefaultBranch(t *testing.T) {
+	dir := t.TempDir()
+	// Valid file with an override.
+	p := filepath.Join(dir, "ok.toml")
+	writeFile(t, p, "schema_version = 1\ndefault_branch = \"trunk\"\n[build]\ncommand=[\"x\"]\n[restart]\nmechanism=\"none\"\n")
+	if got := PeekDefaultBranch(p); got != "trunk" {
+		t.Fatalf("override: got %q want trunk", got)
+	}
+	// Malformed file → "" (no panic, no error surfaced).
+	bad := filepath.Join(dir, "bad.toml")
+	writeFile(t, bad, "schema_version = = 1")
+	if got := PeekDefaultBranch(bad); got != "" {
+		t.Fatalf("malformed: got %q want empty", got)
+	}
+	// Unknown field present → still returns the override leniently.
+	fwd := filepath.Join(dir, "fwd.toml")
+	writeFile(t, fwd, "schema_version = 1\ndefault_branch = \"trunk\"\nfuture = 1\n")
+	if got := PeekDefaultBranch(fwd); got != "trunk" {
+		t.Fatalf("forward-compat: got %q want trunk", got)
+	}
+	// Missing file → "".
+	if got := PeekDefaultBranch(filepath.Join(dir, "nope.toml")); got != "" {
+		t.Fatalf("missing: got %q want empty", got)
+	}
+}
+
 func TestValidate_AbsoluteWorkingDirectoryRejected(t *testing.T) {
 	doc := &IrisToml{
 		SchemaVersion: 1,
