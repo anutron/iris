@@ -377,6 +377,115 @@ func TestStatus_BranchEmptyOnDetachedHead(t *testing.T) {
 	}
 }
 
+// TestStatus_DogfoodManifestPresent verifies a valid manifest surfaces in
+// the Dogfood field, round-tripped with RecordedAt populated, no warning.
+func TestStatus_DogfoodManifestPresent(t *testing.T) {
+	src, client := statusFixture(t, tomlNone)
+	canon, err := filepath.EvalSymlinks(src)
+	if err != nil {
+		t.Fatalf("EvalSymlinks: %v", err)
+	}
+	dir, err := SourceRepoStateDir(canon)
+	if err != nil {
+		t.Fatalf("SourceRepoStateDir: %v", err)
+	}
+	in := sampleManifest()
+	if err := WriteManifest(dir, in); err != nil {
+		t.Fatalf("WriteManifest: %v", err)
+	}
+
+	res, err := Status(context.Background(), client, StatusInput{Path: src})
+	if err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	if res.Dogfood == nil {
+		t.Fatal("expected Dogfood populated when a valid manifest exists")
+	}
+	if res.Dogfood.Base != in.Base {
+		t.Errorf("base mismatch: got %+v want %+v", res.Dogfood.Base, in.Base)
+	}
+	if len(res.Dogfood.Layered) != len(in.Layered) {
+		t.Fatalf("layered len: got %d want %d", len(res.Dogfood.Layered), len(in.Layered))
+	}
+	for i := range in.Layered {
+		if res.Dogfood.Layered[i] != in.Layered[i] {
+			t.Errorf("layered[%d] mismatch: got %+v want %+v", i, res.Dogfood.Layered[i], in.Layered[i])
+		}
+	}
+	if res.Dogfood.Note != in.Note {
+		t.Errorf("note mismatch: got %q want %q", res.Dogfood.Note, in.Note)
+	}
+	if res.Dogfood.RecordedAt == "" {
+		t.Error("expected RecordedAt populated (stamped by WriteManifest)")
+	}
+	for _, w := range res.Warnings {
+		if strings.Contains(w, "manifest") {
+			t.Fatalf("expected no manifest warning on a valid manifest, got: %q", w)
+		}
+	}
+}
+
+// TestStatus_DogfoodManifestAbsent verifies the absence path is silent:
+// Dogfood nil, no manifest warning.
+func TestStatus_DogfoodManifestAbsent(t *testing.T) {
+	src, client := statusFixture(t, tomlNone) // fixture writes no manifest
+	res, err := Status(context.Background(), client, StatusInput{Path: src})
+	if err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	if res.Dogfood != nil {
+		t.Fatalf("expected Dogfood nil when no manifest exists, got: %+v", res.Dogfood)
+	}
+	for _, w := range res.Warnings {
+		if strings.Contains(w, "manifest") {
+			t.Fatalf("expected no manifest warning when manifest absent, got: %q", w)
+		}
+	}
+}
+
+// TestStatus_DogfoodManifestMalformedWarns verifies a malformed manifest
+// yields Dogfood nil plus exactly one warning naming the manifest path and a
+// parse error — Status never fails on it.
+func TestStatus_DogfoodManifestMalformedWarns(t *testing.T) {
+	src, client := statusFixture(t, tomlNone)
+	canon, err := filepath.EvalSymlinks(src)
+	if err != nil {
+		t.Fatalf("EvalSymlinks: %v", err)
+	}
+	dir, err := SourceRepoStateDir(canon)
+	if err != nil {
+		t.Fatalf("SourceRepoStateDir: %v", err)
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatalf("mkdir state dir: %v", err)
+	}
+	mpath := filepath.Join(dir, DogfoodManifestFilename)
+	if err := os.WriteFile(mpath, []byte("{not valid json"), 0o600); err != nil {
+		t.Fatalf("seed garbage manifest: %v", err)
+	}
+
+	res, err := Status(context.Background(), client, StatusInput{Path: src})
+	if err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	if res.Dogfood != nil {
+		t.Fatalf("expected Dogfood nil on malformed manifest, got: %+v", res.Dogfood)
+	}
+	count := 0
+	for _, w := range res.Warnings {
+		if strings.Contains(w, DogfoodManifestFilename) {
+			count++
+			if !strings.Contains(w, "parse") {
+				t.Errorf("manifest warning should name a parse error, got: %q", w)
+			}
+		}
+	}
+	if count != 1 {
+		t.Fatalf("expected exactly one manifest warning naming %s, got %d: %+v",
+			DogfoodManifestFilename, count, res.Warnings)
+	}
+}
+
 func TestStatus_NoSideEffects(t *testing.T) {
 	src, client := statusFixture(t, tomlNone)
 	dir := os.Getenv(AuditDirEnv)

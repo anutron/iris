@@ -78,6 +78,8 @@ func Start(ctx context.Context, cfg *config.Config, log *slog.Logger) (*Daemon, 
 	mcpSrv.RegisterHandler("iris_gh_pr_comment", mcp.NewGHPRCommentHandler(client))
 	mcpSrv.RegisterHandler("iris_gh_pr_close", mcp.NewGHPRCloseHandler(client))
 	mcpSrv.RegisterHandler("iris_run_build", mcp.NewRunBuildHandler(client))
+	mcpSrv.RegisterHandler("iris_set_dogfood", mcp.NewSetDogfoodHandler(client))
+	mcpSrv.RegisterHandler("iris_ship_feature", mcp.NewShipFeatureHandler(client))
 	mcpSrv.RegisterHandler("iris_complete_task", mcp.NewCompleteTaskHandler(client))
 	mcpSrv.RegisterHandler("iris_fetch", mcp.NewFetchHandler(client))
 	mcpSrv.RegisterHandler("iris_branch_delete_remote", mcp.NewBranchDeleteRemoteHandler(client))
@@ -298,6 +300,64 @@ func toolDefinitions() []mcp.ToolDefinition {
 					"target":  map[string]any{"type": "string", "description": "(optional) Build target/argument passed verbatim to the script or as `make build <target>`."},
 				},
 				"required": []string{"task_id"},
+			},
+		},
+		{
+			Name:        "iris_set_dogfood",
+			Description: "Atomically point the configured dogfood branch at a worker-composed commit SHA, persist a structured manifest of what that SHA contains, and rebuild/restart the service via the existing reload machinery. Iris does NOT compose — the agent builds the SHA (cherry-pick/merge/rebase, conflict resolution) and hands iris the finished commit. Refuses any repo whose .iris.toml does not declare `dogfood_branch`. Writes the manifest before moving the ref (durable-first); a reset failure leaves the manifest ahead, surfaced as drift by iris_status. Returns previous_sha (\"\" when the branch was newly created), new_sha, and the reload result.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"task_id": map[string]any{"type": "string", "description": "(optional) Argus task ID. Iris resolves the source repo from this; omit for self-target (iris-on-iris)."},
+					"sha":     map[string]any{"type": "string", "description": "Full commit SHA to point the dogfood branch at. MUST be reachable in the source repo's object database."},
+					"manifest": map[string]any{
+						"type":        "object",
+						"description": "Structured record of what composes the SHA. Descriptive only — iris does not validate that layered SHAs are reachable from `sha`.",
+						"properties": map[string]any{
+							"base": map[string]any{
+								"type":        "object",
+								"description": "The upstream base the SHA was composed on top of.",
+								"properties": map[string]any{
+									"ref": map[string]any{"type": "string", "description": "Base ref name, e.g. \"main\"."},
+									"sha": map[string]any{"type": "string", "description": "Base SHA at compose time."},
+								},
+								"required": []string{"ref", "sha"},
+							},
+							"layered": map[string]any{
+								"type":        "array",
+								"description": "Ordered list of branches composed in.",
+								"items": map[string]any{
+									"type": "object",
+									"properties": map[string]any{
+										"name":    map[string]any{"type": "string", "description": "Feature/branch name."},
+										"sha":     map[string]any{"type": "string", "description": "The branch SHA composed in."},
+										"applied": map[string]any{"type": "string", "description": "(optional) How it was applied, e.g. \"cherry-pick\", \"merge\". Descriptive only."},
+									},
+									"required": []string{"name", "sha"},
+								},
+							},
+							"note": map[string]any{"type": "string", "description": "(optional) Free-text from the agent."},
+						},
+						"required": []string{"base"},
+					},
+				},
+				"required": []string{"sha", "manifest"},
+			},
+		},
+		{
+			Name:        "iris_ship_feature",
+			Description: "Ship a feature branch to origin's default branch via a GitHub pull request. via=\"pr\" pushes the branch and opens a PR targeting the default branch, then stops — the worker returns after review. It never merges, fetches, or touches the dogfood branch/manifest. Refuses the default branch, a branch that does not exist locally, and any via other than \"pr\" (pr-auto is a later stage). pr_title defaults to the branch's last commit subject when omitted. Returns shipped, pr_number, pr_url, and (for pr mode) merged=false / fetched=false.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"task_id":      map[string]any{"type": "string", "description": "(optional) Argus task ID. Iris resolves the source repo from this; omit for self-target."},
+					"branch":       map[string]any{"type": "string", "description": "Local feature branch to ship. MUST exist locally and MUST NOT be the default branch."},
+					"via":          map[string]any{"type": "string", "enum": []string{"pr"}, "description": "Ship mode. Only \"pr\" is supported in this stage (push + open PR, then stop)."},
+					"pr_title":     map[string]any{"type": "string", "description": "(optional) PR title. Defaults to the branch's last commit subject."},
+					"pr_body":      map[string]any{"type": "string", "description": "(optional) PR body."},
+					"merge_method": map[string]any{"type": "string", "enum": []string{"squash", "merge", "rebase"}, "description": "(optional) Merge method; defaults to \"squash\". Unused in pr mode."},
+				},
+				"required": []string{"branch", "via"},
 			},
 		},
 		{

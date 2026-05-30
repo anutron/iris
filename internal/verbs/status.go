@@ -28,6 +28,7 @@ type StatusResult struct {
 	Config           *config.IrisToml `json:"config"`
 	ArgusTask        *argus.Task      `json:"argus_task"`
 	LastReload       *AuditEntry      `json:"last_reload"`
+	Dogfood          *DogfoodManifest `json:"dogfood"`
 	Warnings         []string         `json:"warnings"`
 }
 
@@ -123,6 +124,16 @@ func Status(ctx context.Context, client *argus.Client, in StatusInput) (*StatusR
 		warnings = append(warnings, "no reload recorded for this system yet")
 	}
 
+	var dogfood *DogfoodManifest
+	if stateDir, err := SourceRepoStateDir(target.SourceRepo); err == nil {
+		manifest, merr := ReadManifest(stateDir)
+		if merr != nil {
+			warnings = append(warnings, merr.Error())
+		} else if manifest != nil {
+			dogfood = manifest
+		}
+	}
+
 	return &StatusResult{
 		SourceRepo:       target.SourceRepo,
 		HeadSha:          headSha,
@@ -135,6 +146,7 @@ func Status(ctx context.Context, client *argus.Client, in StatusInput) (*StatusR
 		Config:           cfg,
 		ArgusTask:        argusTask,
 		LastReload:       last,
+		Dogfood:          dogfood,
 		Warnings:         warnings,
 	}, nil
 }
