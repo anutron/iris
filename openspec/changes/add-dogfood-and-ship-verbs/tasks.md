@@ -7,10 +7,10 @@
 
 ## 2. Manifest storage
 
-- [ ] 2.1 Define `DogfoodManifest` struct in `internal/verbs/dogfood_manifest.go` with `Base{Ref,SHA}`, `Layered[]LayeredEntry`, `Note`, `RecordedAt`.
-- [ ] 2.2 Implement `WriteManifest(stateDir string, m *DogfoodManifest) error` — writes to `dogfood-manifest.json` atomically (tmp + rename).
-- [ ] 2.3 Implement `ReadManifest(stateDir string) (*DogfoodManifest, error)` — returns nil-no-error when file absent.
-- [ ] 2.4 Unit tests for write/read round-trip, atomic-write behavior on simulated mid-write failure, and the recorded_at stamping.
+- [x] 2.1 Define `DogfoodManifest` struct in `internal/verbs/dogfood_manifest.go` with `Base{Ref,SHA}`, `Layered[]LayeredEntry`, `Note`, `RecordedAt`.
+- [x] 2.2 Implement `WriteManifest(stateDir string, m *DogfoodManifest) error` — writes to `dogfood-manifest.json` atomically (tmp + rename).
+- [x] 2.3 Implement `ReadManifest(stateDir string) (*DogfoodManifest, error)` — returns nil-no-error when file absent.
+- [x] 2.4 Unit tests for write/read round-trip, atomic-write behavior on simulated mid-write failure, and the recorded_at stamping.
 
 ## 3. `iris:set_dogfood` verb
 
