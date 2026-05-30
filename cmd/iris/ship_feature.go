@@ -24,8 +24,12 @@ GitHub pull request.
 
 --via pr pushes the branch and opens a PR targeting the default branch, then
 stops; the worker returns to it after review. pr mode never merges, fetches, or
-touches the dogfood branch. (--via pr-auto is a later stage and is not yet
-supported.)
+touches the dogfood branch.
+
+--via pr-auto goes further: it waits for the PR's required CI checks to pass,
+then approves, merges (using --merge-method), and fetches origin. If CI fails or
+times out, the PR is left open and the command reports shipped=false with a
+ci_failed / ci_timeout warning.
 
 --title defaults to the branch's last commit subject when omitted.`,
 		Args: cobra.NoArgs,
@@ -50,10 +54,10 @@ supported.)
 	}
 	cmd.Flags().StringVar(&taskID, "task", "", "(optional) argus task ID; omit for self-target")
 	cmd.Flags().StringVar(&branch, "branch", "", "feature branch to ship (required)")
-	cmd.Flags().StringVar(&via, "via", "", "ship mode: pr (pr-auto is a later stage) (required)")
+	cmd.Flags().StringVar(&via, "via", "", "ship mode: pr or pr-auto (required)")
 	cmd.Flags().StringVar(&title, "title", "", "PR title (defaults to the branch's last commit subject)")
 	cmd.Flags().StringVar(&body, "body", "", "PR body")
-	cmd.Flags().StringVar(&mergeMethod, "merge-method", "squash", "merge method: squash, merge, or rebase (unused in pr mode)")
+	cmd.Flags().StringVar(&mergeMethod, "merge-method", "squash", "merge method: squash, merge, or rebase (pr-auto only)")
 	_ = cmd.MarkFlagRequired("branch")
 	_ = cmd.MarkFlagRequired("via")
 	return cmd

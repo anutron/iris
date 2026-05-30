@@ -35,10 +35,10 @@
 
 ## 6. `iris:ship_feature` verb — pr-auto mode
 
-- [ ] 6.1 Add failing tests for `via: "pr-auto"` happy path and the CI-failure, CI-timeout, and no-checks scenarios. Use a fake GitHub client (extend the existing test harness) for check status.
-- [ ] 6.2 Implement check-waiting: poll PR's combined status / check runs every N seconds up to `ship_ci_timeout_seconds`. Skip wait when zero checks are configured.
-- [ ] 6.3 On checks passing, approve the PR (via GitHub API) then merge using the configured `merge_method`.
-- [ ] 6.4 Run `iris_fetch` semantics on the source repo after merge.
+- [x] 6.1 Add failing tests for `via: "pr-auto"` happy path and the CI-failure, CI-timeout, and no-checks scenarios. Use a fake GitHub client (extend the existing test harness) for check status.
+- [x] 6.2 Implement check-waiting: poll PR's combined status / check runs every N seconds up to `ship_ci_timeout_seconds`. Skip wait when zero checks are configured.
+- [x] 6.3 On checks passing, approve the PR (via GitHub API) then merge using the configured `merge_method`.
+- [x] 6.4 Run `iris_fetch` semantics on the source repo after merge.
 
 ## 7. Post-ship dogfood re-compose
 
