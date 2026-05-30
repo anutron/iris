@@ -124,12 +124,8 @@ func Status(ctx context.Context, client *argus.Client, in StatusInput) (*StatusR
 		warnings = append(warnings, "no reload recorded for this system yet")
 	}
 
-	// Dogfood manifest. Absent => nil (silent, like a missing .iris.toml).
-	// Malformed => nil plus a structured warning; Status never fails on it.
-	// Read-only: ReadManifest opens the file but writes nothing, preserving
-	// the no-side-effects contract.
 	var dogfood *DogfoodManifest
-	if stateDir, err := AuditDir(); err == nil {
+	if stateDir, err := SourceRepoStateDir(target.SourceRepo); err == nil {
 		manifest, merr := ReadManifest(stateDir)
 		if merr != nil {
 			warnings = append(warnings, merr.Error())

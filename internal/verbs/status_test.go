@@ -381,7 +381,14 @@ func TestStatus_BranchEmptyOnDetachedHead(t *testing.T) {
 // the Dogfood field, round-tripped with RecordedAt populated, no warning.
 func TestStatus_DogfoodManifestPresent(t *testing.T) {
 	src, client := statusFixture(t, tomlNone)
-	dir := os.Getenv(AuditDirEnv)
+	canon, err := filepath.EvalSymlinks(src)
+	if err != nil {
+		t.Fatalf("EvalSymlinks: %v", err)
+	}
+	dir, err := SourceRepoStateDir(canon)
+	if err != nil {
+		t.Fatalf("SourceRepoStateDir: %v", err)
+	}
 	in := sampleManifest()
 	if err := WriteManifest(dir, in); err != nil {
 		t.Fatalf("WriteManifest: %v", err)
@@ -441,9 +448,16 @@ func TestStatus_DogfoodManifestAbsent(t *testing.T) {
 // parse error — Status never fails on it.
 func TestStatus_DogfoodManifestMalformedWarns(t *testing.T) {
 	src, client := statusFixture(t, tomlNone)
-	dir := os.Getenv(AuditDirEnv)
+	canon, err := filepath.EvalSymlinks(src)
+	if err != nil {
+		t.Fatalf("EvalSymlinks: %v", err)
+	}
+	dir, err := SourceRepoStateDir(canon)
+	if err != nil {
+		t.Fatalf("SourceRepoStateDir: %v", err)
+	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		t.Fatalf("mkdir audit dir: %v", err)
+		t.Fatalf("mkdir state dir: %v", err)
 	}
 	mpath := filepath.Join(dir, DogfoodManifestFilename)
 	if err := os.WriteFile(mpath, []byte("{not valid json"), 0o600); err != nil {
