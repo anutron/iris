@@ -239,7 +239,7 @@ func (c *IrisToml) validateDogfood() []ValidationError {
 
 	if c.DogfoodBranch != "" {
 		switch {
-		case !validGitBranchName(c.DogfoodBranch):
+		case !ValidGitBranchName(c.DogfoodBranch):
 			errs = append(errs, ValidationError{
 				Field:   "dogfood_branch",
 				Message: "invalid git branch name",
@@ -265,12 +265,15 @@ func (c *IrisToml) validateDogfood() []ValidationError {
 	return errs
 }
 
-// validGitBranchName reports whether name is a syntactically valid git branch
+// ValidGitBranchName reports whether name is a syntactically valid git branch
 // name. It mirrors the rules `git check-ref-format --branch <name>` enforces,
 // implemented in pure Go so the cross-validator stays free of a git dependency
 // (the branch_create verb shells out to the real git for the authoritative
 // check at mutation time). Keep the two in agreement.
-func validGitBranchName(name string) bool {
+//
+// Exported so other packages (notably the set_local_config verb) can reuse
+// the same rule without duplicating it.
+func ValidGitBranchName(name string) bool {
 	if name == "" || name == "@" {
 		return false
 	}

@@ -79,6 +79,7 @@ func Start(ctx context.Context, cfg *config.Config, log *slog.Logger) (*Daemon, 
 	mcpSrv.RegisterHandler("iris_gh_pr_close", mcp.NewGHPRCloseHandler(client))
 	mcpSrv.RegisterHandler("iris_run_build", mcp.NewRunBuildHandler(client))
 	mcpSrv.RegisterHandler("iris_set_dogfood", mcp.NewSetDogfoodHandler(client))
+	mcpSrv.RegisterHandler("iris_set_local_config", mcp.NewSetLocalConfigHandler(client))
 	mcpSrv.RegisterHandler("iris_ship_feature", mcp.NewShipFeatureHandler(client))
 	mcpSrv.RegisterHandler("iris_complete_task", mcp.NewCompleteTaskHandler(client))
 	mcpSrv.RegisterHandler("iris_fetch", mcp.NewFetchHandler(client))
@@ -482,6 +483,26 @@ func toolDefinitions() []mcp.ToolDefinition {
 				"properties": map[string]any{
 					"task_id": map[string]any{"type": "string", "description": "(optional) Argus task ID. Omit for self-target."},
 					"path":    map[string]any{"type": "string", "description": "(optional) Absolute filesystem path. Omit for self-target."},
+				},
+			},
+		},
+		{
+			Name:        "iris_set_local_config",
+			Description: "Write (or merge into) `.iris.local.toml` at the resolved source repo's root with worker-supplied per-developer fields (dogfood_branch, ship_ci_timeout_seconds). Refuses any field whose taxonomy classification is not `local` (shared fields belong in `.iris.toml`). Validates per-field rules (git ref syntax, dogfood_branch != default_branch, non-negative timeout). Acquires the source-repo lock for the atomic read-modify-write (tmp + rename). Idempotent: re-setting an existing value is a no-op write that still returns written=true. Does NOT trigger reload — config takes effect on the next reload/status.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"task_id": map[string]any{"type": "string", "description": "(optional) Argus task ID. Iris resolves the source repo from this; omit for self-target."},
+					"fields": map[string]any{
+						"type":        "object",
+						"description": "Map of local-tagged field name to value. Valid names: dogfood_branch (string, valid git ref, != default_branch), ship_ci_timeout_seconds (non-negative integer).",
+						"additionalProperties": true,
+					},
+					"delete": map[string]any{
+						"type":        "array",
+						"description": "Local-tagged field names to remove from the file. Names not present are silently ignored. Refused if any name is shared-tagged or unknown.",
+						"items":       map[string]any{"type": "string"},
+					},
 				},
 			},
 		},
