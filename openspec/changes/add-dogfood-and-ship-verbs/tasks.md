@@ -1,9 +1,9 @@
 ## 1. Config schema
 
-- [ ] 1.1 Add `DogfoodBranch string` field to `IrisToml` in `internal/config/iris_toml.go` with TOML tag `dogfood_branch` and `omitempty` JSON tag.
-- [ ] 1.2 Add `ShipCITimeoutSeconds int` field with TOML tag `ship_ci_timeout_seconds`, defaulting to 600 when unset.
-- [ ] 1.3 Extend the existing cross-validator to enforce: dogfood_branch is a valid git ref name, dogfood_branch != default_branch, ship_ci_timeout_seconds >= 0.
-- [ ] 1.4 Update `iris_toml_test.go` and `config_test.go` with golden cases per the `iris-validate-config` spec scenarios.
+- [x] 1.1 Add `DogfoodBranch string` field to `IrisToml` in `internal/config/iris_toml.go` with TOML tag `dogfood_branch` and `omitempty` JSON tag.
+- [x] 1.2 Add `ShipCITimeoutSeconds int` field with TOML tag `ship_ci_timeout_seconds`, defaulting to 600 when unset.
+- [x] 1.3 Extend the existing cross-validator to enforce: dogfood_branch is a valid git ref name, dogfood_branch != default_branch, ship_ci_timeout_seconds >= 0.
+- [x] 1.4 Update `iris_toml_test.go` and `config_test.go` with golden cases per the `iris-validate-config` spec scenarios.
 
 ## 2. Manifest storage
 

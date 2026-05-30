@@ -37,6 +37,10 @@ const DefaultExecTimeoutSeconds = 30
 // DefaultVerifyTimeoutSeconds is the default for the `[verify]` hook.
 const DefaultVerifyTimeoutSeconds = 30
 
+// DefaultShipCITimeoutSeconds is the default for `ship_ci_timeout_seconds` —
+// how long iris:ship_feature (pr-auto) waits for CI checks before giving up.
+const DefaultShipCITimeoutSeconds = 600
+
 // RestartMechanism enumerates the supported `[restart] mechanism` values.
 type RestartMechanism string
 
@@ -51,13 +55,15 @@ const (
 
 // IrisToml is the parsed `.iris.toml` document.
 type IrisToml struct {
-	SchemaVersion int          `toml:"schema_version" json:"schema_version"`
-	DefaultBranch string       `toml:"default_branch" json:"default_branch,omitempty"`
-	Build         BuildBlock   `toml:"build"          json:"build"`
-	Restart       RestartBlock `toml:"restart"        json:"restart"`
-	PreFlight     *HookBlock   `toml:"pre_flight"     json:"pre_flight,omitempty"`
-	Verify        *HookBlock   `toml:"verify"         json:"verify,omitempty"`
-	PostMerge     *HookBlock   `toml:"post_merge"     json:"post_merge,omitempty"`
+	SchemaVersion        int          `toml:"schema_version"          json:"schema_version"`
+	DefaultBranch        string       `toml:"default_branch"          json:"default_branch,omitempty"`
+	DogfoodBranch        string       `toml:"dogfood_branch"          json:"dogfood_branch,omitempty"`
+	ShipCITimeoutSeconds int          `toml:"ship_ci_timeout_seconds" json:"ship_ci_timeout_seconds,omitempty"`
+	Build                BuildBlock   `toml:"build"                   json:"build"`
+	Restart              RestartBlock `toml:"restart"                 json:"restart"`
+	PreFlight            *HookBlock   `toml:"pre_flight"              json:"pre_flight,omitempty"`
+	Verify               *HookBlock   `toml:"verify"                  json:"verify,omitempty"`
+	PostMerge            *HookBlock   `toml:"post_merge"              json:"post_merge,omitempty"`
 }
 
 // BuildBlock declares the build step.
@@ -196,6 +202,7 @@ func (c *IrisToml) Validate(isSelf bool) []ValidationError {
 		})
 	}
 
+	errs = append(errs, c.validateDogfood()...)
 	errs = append(errs, c.Build.validate()...)
 	errs = append(errs, c.Restart.validate(isSelf)...)
 	if c.PreFlight != nil {
@@ -209,6 +216,88 @@ func (c *IrisToml) Validate(isSelf bool) []ValidationError {
 	}
 
 	return errs
+}
+
+// validateDogfood cross-validates the opt-in dogfood/ship fields.
+//
+//   - dogfood_branch, when non-empty, MUST be a syntactically valid git branch
+//     name (per `git check-ref-format --branch`, mirrored in pure Go by
+//     validGitBranchName) and MUST NOT equal default_branch — the origin-first
+//     model keeps local main read-only, so the dogfood branch needs a distinct
+//     name to reset.
+//   - ship_ci_timeout_seconds, when set, MUST be non-negative. Unset (0)
+//     resolves to DefaultShipCITimeoutSeconds at use time.
+func (c *IrisToml) validateDogfood() []ValidationError {
+	var errs []ValidationError
+
+	if c.DogfoodBranch != "" {
+		switch {
+		case !validGitBranchName(c.DogfoodBranch):
+			errs = append(errs, ValidationError{
+				Field:   "dogfood_branch",
+				Message: "invalid git branch name",
+				Hint:    "use a single ref name without spaces or invalid characters",
+			})
+		case c.DefaultBranch != "" && c.DogfoodBranch == c.DefaultBranch:
+			errs = append(errs, ValidationError{
+				Field:   "dogfood_branch",
+				Message: "must not equal default_branch",
+				Hint:    `choose a distinct branch name like "dev"; the origin-first model keeps the default branch read-only`,
+			})
+		}
+	}
+
+	if c.ShipCITimeoutSeconds < 0 {
+		errs = append(errs, ValidationError{
+			Field:   "ship_ci_timeout_seconds",
+			Message: "must be non-negative",
+			Hint:    "use a non-negative number of seconds, or omit the field to use the default of 600",
+		})
+	}
+
+	return errs
+}
+
+// validGitBranchName reports whether name is a syntactically valid git branch
+// name. It mirrors the rules `git check-ref-format --branch <name>` enforces,
+// implemented in pure Go so the cross-validator stays free of a git dependency
+// (the branch_create verb shells out to the real git for the authoritative
+// check at mutation time). Keep the two in agreement.
+func validGitBranchName(name string) bool {
+	if name == "" || name == "@" {
+		return false
+	}
+	// `--branch` mode rejects names beginning with a dash (would be parsed as
+	// a flag), and refnames may not start or end with "/" or contain "//".
+	if strings.HasPrefix(name, "-") {
+		return false
+	}
+	if strings.HasPrefix(name, "/") || strings.HasSuffix(name, "/") || strings.Contains(name, "//") {
+		return false
+	}
+	if strings.HasSuffix(name, ".") || strings.HasSuffix(name, ".lock") {
+		return false
+	}
+	if strings.Contains(name, "..") || strings.Contains(name, "@{") {
+		return false
+	}
+	for _, r := range name {
+		// ASCII control characters and DEL are never allowed.
+		if r < 0x20 || r == 0x7f {
+			return false
+		}
+		switch r {
+		case ' ', '~', '^', ':', '?', '*', '[', '\\':
+			return false
+		}
+	}
+	// No slash-separated component may begin with "." or end with ".lock".
+	for _, comp := range strings.Split(name, "/") {
+		if comp == "" || strings.HasPrefix(comp, ".") || strings.HasSuffix(comp, ".lock") {
+			return false
+		}
+	}
+	return true
 }
 
 func (b *BuildBlock) validate() []ValidationError {
@@ -459,6 +548,17 @@ func (h HookBlock) ResolvedTimeoutSeconds(defaultSec int) int {
 		return defaultSec
 	}
 	return h.TimeoutSeconds
+}
+
+// ResolvedShipCITimeoutSeconds returns the configured ship_ci_timeout_seconds
+// or DefaultShipCITimeoutSeconds (600) when unset. The default is applied here
+// at resolution time rather than stamped onto the field, matching the
+// build/exec/hook timeout resolvers.
+func (c IrisToml) ResolvedShipCITimeoutSeconds() int {
+	if c.ShipCITimeoutSeconds == 0 {
+		return DefaultShipCITimeoutSeconds
+	}
+	return c.ShipCITimeoutSeconds
 }
 
 // ResolvedExecTimeoutSeconds for the exec mechanism; defaults to 30.
