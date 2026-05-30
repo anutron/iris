@@ -51,12 +51,12 @@
 
 ## 10. `iris:set_local_config` verb
 
-- [ ] 10.1 Write failing tests in `internal/verbs/set_local_config_test.go` matching every scenario in `specs/iris-set-local-config/spec.md`.
-- [ ] 10.2 Implement `verbs.SetLocalConfig(ctx, client, taskID, opts) (*SetLocalConfigResult, error)` in `internal/verbs/set_local_config.go`. Steps: resolve task -> validate every input field name is `local`-tagged (refuse `field_not_local` else) -> validate every input value against per-field rules (refuse `invalid_value` else) -> acquire source-repo lock -> read existing `.iris.local.toml` (treat absent as empty) -> apply deletes, apply sets -> atomic write (tmp + rename) -> return result.
-- [ ] 10.3 Wire MCP handler in `internal/mcp/handler_set_local_config.go` and register in the handler registry.
-- [ ] 10.4 Wire CLI subcommand `iris set-local-config --field <name>=<value> ... [--delete <name> ...]`. Accept repeated `--field` and `--delete` flags.
-- [ ] 10.5 Reuse cross-validation helpers from `internal/config/iris_toml.go` for per-field rules (so dogfood_branch validation stays in one place).
-- [ ] 10.6 Ensure all tests green; full `go test ./...` and `go vet ./...` clean.
+- [x] 10.1 Write failing tests in `internal/verbs/set_local_config_test.go` matching every scenario in `specs/iris-set-local-config/spec.md`.
+- [x] 10.2 Implement `verbs.SetLocalConfig(ctx, client, taskID, opts) (*SetLocalConfigResult, error)` in `internal/verbs/set_local_config.go`. Steps: resolve task -> validate every input field name is `local`-tagged (refuse `field_not_local` else) -> validate every input value against per-field rules (refuse `invalid_value` else) -> acquire source-repo lock -> read existing `.iris.local.toml` (treat absent as empty) -> apply deletes, apply sets -> atomic write (tmp + rename) -> return result.
+- [x] 10.3 Wire MCP handler in `internal/mcp/handler_set_local_config.go` and register in the handler registry.
+- [x] 10.4 Wire CLI subcommand `iris set-local-config --field <name>=<value> ... [--delete <name> ...]`. Accept repeated `--field` and `--delete` flags.
+- [x] 10.5 Reuse cross-validation helpers from `internal/config/iris_toml.go` for per-field rules (so dogfood_branch validation stays in one place).
+- [x] 10.6 Ensure all tests green; full `go test ./...` and `go vet ./...` clean.
 
 ## 9. Validation and ship
 
