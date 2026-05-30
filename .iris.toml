@@ -1,6 +1,5 @@
 schema_version = 1
 default_branch = "main"
-dogfood_branch = "dev"
 
 [build]
 command = ["make", "build"]
