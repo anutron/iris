@@ -17,11 +17,20 @@ const DogfoodManifestFilename = "dogfood-manifest.json"
 // DogfoodManifest is the structured record of what composes the dogfood
 // branch's current SHA. The agent supplies base + layered + note; iris stamps
 // RecordedAt at write time so the manifest is self-describing.
+//
+// PreviousManifest carries a 1-deep snapshot of the prior on-disk manifest so
+// "what was on dev before this compose?" is answerable without trawling the
+// audit log. WriteManifest populates this field by reading the existing
+// manifest before the new one is written, stripping its own PreviousManifest
+// (preventing unbounded recursion), and embedding the result. On first write
+// PreviousManifest is nil and serializes as absent (not null) thanks to
+// `omitempty` on a pointer.
 type DogfoodManifest struct {
-	Base       ManifestBase   `json:"base"`
-	Layered    []LayeredEntry `json:"layered"`
-	Note       string         `json:"note,omitempty"`
-	RecordedAt string         `json:"recorded_at"` // ISO-8601 UTC, stamped by WriteManifest
+	Base             ManifestBase     `json:"base"`
+	Layered          []LayeredEntry   `json:"layered"`
+	Note             string           `json:"note,omitempty"`
+	RecordedAt       string           `json:"recorded_at"` // ISO-8601 UTC, stamped by WriteManifest
+	PreviousManifest *DogfoodManifest `json:"previous_manifest,omitempty"`
 }
 
 // ManifestBase names the upstream base the dogfood SHA was composed on top of.
@@ -75,12 +84,38 @@ func repoStateSlug(sourceRepo string) string {
 // RFC3339Nano, overwriting whatever the caller passed in, and reflects that
 // value back on the passed-in struct so the caller can echo it without
 // re-reading. Layered serializes as [] (never null) when empty.
+//
+// WriteManifest also reads any existing on-disk manifest before writing,
+// strips ITS own PreviousManifest field, and embeds the result on m as
+// PreviousManifest. This gives the persisted file one level of history —
+// "current + one step back" — with no unbounded recursion. Concurrent writes
+// against the same stateDir must be serialized by the caller (set_dogfood
+// holds the per-source-repo lock across this call); the prior-read here is
+// not a TOCTOU concern under that contract.
 func WriteManifest(stateDir string, m *DogfoodManifest) error {
 	if m == nil {
 		return fmt.Errorf("manifest: nil manifest")
 	}
 	if err := os.MkdirAll(stateDir, 0o700); err != nil {
 		return fmt.Errorf("manifest: mkdir %s: %w", stateDir, err)
+	}
+
+	// Read the prior manifest (if any) and embed a stripped copy on m. We do
+	// this BEFORE stamping RecordedAt / normalizing Layered on m so the prior's
+	// own timestamps stay intact. A read error here surfaces — better to fail
+	// the write than silently lose the prior's memory.
+	prior, err := ReadManifest(stateDir)
+	if err != nil {
+		return fmt.Errorf("manifest: read prior: %w", err)
+	}
+	if prior != nil {
+		// Strip the prior's own PreviousManifest — one level of history only.
+		prior.PreviousManifest = nil
+		m.PreviousManifest = prior
+	} else {
+		// First write: ensure no stale value leaks from the caller's struct
+		// into the persisted JSON.
+		m.PreviousManifest = nil
 	}
 
 	m.RecordedAt = time.Now().UTC().Format(time.RFC3339Nano)

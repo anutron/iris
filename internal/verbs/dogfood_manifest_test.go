@@ -147,6 +147,173 @@ func TestDogfoodManifestReadMalformedReturnsError(t *testing.T) {
 	}
 }
 
+// TestDogfoodManifestPreviousManifestAbsentOnFirstWrite verifies that the
+// first write of a manifest produces a JSON file with NO `previous_manifest`
+// key at all — absent, not null, not present-but-empty. This is the
+// omitempty-on-pointer contract: a nil *DogfoodManifest marshals as missing.
+func TestDogfoodManifestPreviousManifestAbsentOnFirstWrite(t *testing.T) {
+	dir := t.TempDir()
+	in := sampleManifest()
+	if err := WriteManifest(dir, in); err != nil {
+		t.Fatalf("WriteManifest: %v", err)
+	}
+
+	raw, err := os.ReadFile(filepath.Join(dir, DogfoodManifestFilename))
+	if err != nil {
+		t.Fatalf("read raw file: %v", err)
+	}
+	// Decode into a generic map so we can assert key absence (vs presence-with-null).
+	var generic map[string]any
+	if err := json.Unmarshal(raw, &generic); err != nil {
+		t.Fatalf("unmarshal generic: %v", err)
+	}
+	if _, present := generic["previous_manifest"]; present {
+		t.Errorf("first write must NOT include previous_manifest key (absent, not null). raw: %s", raw)
+	}
+
+	// And the in-memory round-trip should also report nil.
+	got, err := ReadManifest(dir)
+	if err != nil {
+		t.Fatalf("ReadManifest: %v", err)
+	}
+	if got.PreviousManifest != nil {
+		t.Errorf("PreviousManifest should be nil on first write, got: %+v", got.PreviousManifest)
+	}
+}
+
+// TestDogfoodManifestPreviousManifestEmbedsPriorOnSecondWrite verifies that
+// the second write of a manifest embeds the first manifest's full contents
+// under previous_manifest.
+func TestDogfoodManifestPreviousManifestEmbedsPriorOnSecondWrite(t *testing.T) {
+	dir := t.TempDir()
+
+	// First manifest: A.
+	a := &DogfoodManifest{
+		Base:    ManifestBase{Ref: "main", SHA: "aaa111"},
+		Layered: []LayeredEntry{{Name: "F1", SHA: "fff111", Applied: "cherry-pick"}},
+		Note:    "first compose",
+	}
+	if err := WriteManifest(dir, a); err != nil {
+		t.Fatalf("WriteManifest A: %v", err)
+	}
+	aRecordedAt := a.RecordedAt
+	if aRecordedAt == "" {
+		t.Fatal("expected A.RecordedAt populated after first write")
+	}
+
+	// Second manifest: B.
+	b := &DogfoodManifest{
+		Base:    ManifestBase{Ref: "main", SHA: "bbb222"},
+		Layered: []LayeredEntry{{Name: "F2", SHA: "fff222", Applied: "merge"}},
+		Note:    "second compose",
+	}
+	if err := WriteManifest(dir, b); err != nil {
+		t.Fatalf("WriteManifest B: %v", err)
+	}
+
+	got, err := ReadManifest(dir)
+	if err != nil {
+		t.Fatalf("ReadManifest: %v", err)
+	}
+	if got.PreviousManifest == nil {
+		t.Fatal("PreviousManifest should be populated after second write")
+	}
+	if got.PreviousManifest.Base != a.Base {
+		t.Errorf("prior base mismatch: got %+v want %+v", got.PreviousManifest.Base, a.Base)
+	}
+	if len(got.PreviousManifest.Layered) != 1 || got.PreviousManifest.Layered[0] != a.Layered[0] {
+		t.Errorf("prior layered mismatch: got %+v want %+v", got.PreviousManifest.Layered, a.Layered)
+	}
+	if got.PreviousManifest.Note != a.Note {
+		t.Errorf("prior note mismatch: got %q want %q", got.PreviousManifest.Note, a.Note)
+	}
+	// The embedded prior keeps its own original RecordedAt — it is NOT overwritten
+	// with the second manifest's timestamp.
+	if got.PreviousManifest.RecordedAt != aRecordedAt {
+		t.Errorf("embedded prior RecordedAt should equal A's original %q, got %q", aRecordedAt, got.PreviousManifest.RecordedAt)
+	}
+	// The embedded prior must NOT itself carry a previous_manifest (one-deep only).
+	if got.PreviousManifest.PreviousManifest != nil {
+		t.Errorf("embedded prior must have PreviousManifest nil, got: %+v", got.PreviousManifest.PreviousManifest)
+	}
+
+	// Raw-JSON assertion: the embedded prior has no `previous_manifest` key.
+	raw, err := os.ReadFile(filepath.Join(dir, DogfoodManifestFilename))
+	if err != nil {
+		t.Fatalf("read raw file: %v", err)
+	}
+	var generic map[string]any
+	if err := json.Unmarshal(raw, &generic); err != nil {
+		t.Fatalf("unmarshal generic: %v", err)
+	}
+	prev, ok := generic["previous_manifest"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected previous_manifest object in raw JSON, got: %v", generic["previous_manifest"])
+	}
+	if _, present := prev["previous_manifest"]; present {
+		t.Errorf("embedded previous_manifest must not itself contain a previous_manifest key. raw: %s", raw)
+	}
+}
+
+// TestDogfoodManifestPreviousManifestDepthBoundedAtOne verifies the
+// strip-then-embed sequence: after three sequential writes A → B → C, the
+// on-disk manifest is C with previous_manifest=B, and B's own
+// previous_manifest is nil (not nested A).
+func TestDogfoodManifestPreviousManifestDepthBoundedAtOne(t *testing.T) {
+	dir := t.TempDir()
+
+	a := &DogfoodManifest{
+		Base: ManifestBase{Ref: "main", SHA: "aaa"},
+		Note: "A",
+	}
+	if err := WriteManifest(dir, a); err != nil {
+		t.Fatalf("WriteManifest A: %v", err)
+	}
+
+	b := &DogfoodManifest{
+		Base: ManifestBase{Ref: "main", SHA: "bbb"},
+		Note: "B",
+	}
+	if err := WriteManifest(dir, b); err != nil {
+		t.Fatalf("WriteManifest B: %v", err)
+	}
+	bRecordedAt := b.RecordedAt
+
+	c := &DogfoodManifest{
+		Base: ManifestBase{Ref: "main", SHA: "ccc"},
+		Note: "C",
+	}
+	if err := WriteManifest(dir, c); err != nil {
+		t.Fatalf("WriteManifest C: %v", err)
+	}
+
+	got, err := ReadManifest(dir)
+	if err != nil {
+		t.Fatalf("ReadManifest: %v", err)
+	}
+	// Top level is C.
+	if got.Note != "C" || got.Base.SHA != "ccc" {
+		t.Errorf("top level should be C, got: note=%q base.sha=%q", got.Note, got.Base.SHA)
+	}
+	// One step back is B.
+	if got.PreviousManifest == nil {
+		t.Fatal("PreviousManifest should be B after third write")
+	}
+	if got.PreviousManifest.Note != "B" || got.PreviousManifest.Base.SHA != "bbb" {
+		t.Errorf("PreviousManifest should be B, got: note=%q base.sha=%q",
+			got.PreviousManifest.Note, got.PreviousManifest.Base.SHA)
+	}
+	if got.PreviousManifest.RecordedAt != bRecordedAt {
+		t.Errorf("PreviousManifest.RecordedAt should equal B's original %q, got %q",
+			bRecordedAt, got.PreviousManifest.RecordedAt)
+	}
+	// CRITICAL: B's own PreviousManifest must be nil, not A. One-deep only.
+	if got.PreviousManifest.PreviousManifest != nil {
+		t.Errorf("PreviousManifest.PreviousManifest must be nil (one-deep), got: %+v",
+			got.PreviousManifest.PreviousManifest)
+	}
+}
+
 func TestDogfoodManifestNoTempFileRemains(t *testing.T) {
 	dir := t.TempDir()
 	if err := WriteManifest(dir, sampleManifest()); err != nil {

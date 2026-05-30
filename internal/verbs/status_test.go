@@ -486,6 +486,64 @@ func TestStatus_DogfoodManifestMalformedWarns(t *testing.T) {
 	}
 }
 
+// TestStatus_DogfoodManifestPreviousManifestSurvivesRead verifies the
+// "previous_manifest survives manifest read" scenario from the spec: when an
+// on-disk manifest has a previous_manifest, iris:status returns the full
+// manifest including the embedded prior.
+func TestStatus_DogfoodManifestPreviousManifestSurvivesRead(t *testing.T) {
+	src, client := statusFixture(t, tomlNone)
+	canon, err := filepath.EvalSymlinks(src)
+	if err != nil {
+		t.Fatalf("EvalSymlinks: %v", err)
+	}
+	dir, err := SourceRepoStateDir(canon)
+	if err != nil {
+		t.Fatalf("SourceRepoStateDir: %v", err)
+	}
+
+	// First manifest establishes a prior; second manifest's WriteManifest
+	// embeds it under previous_manifest.
+	a := &DogfoodManifest{
+		Base:    ManifestBase{Ref: "main", SHA: "aaa111"},
+		Layered: []LayeredEntry{{Name: "F1", SHA: "fff111", Applied: "cherry-pick"}},
+		Note:    "prior compose",
+	}
+	if err := WriteManifest(dir, a); err != nil {
+		t.Fatalf("WriteManifest A: %v", err)
+	}
+	aRecordedAt := a.RecordedAt
+
+	b := &DogfoodManifest{
+		Base:    ManifestBase{Ref: "main", SHA: "bbb222"},
+		Layered: []LayeredEntry{{Name: "F2", SHA: "fff222", Applied: "merge"}},
+		Note:    "current compose",
+	}
+	if err := WriteManifest(dir, b); err != nil {
+		t.Fatalf("WriteManifest B: %v", err)
+	}
+
+	res, err := Status(context.Background(), client, StatusInput{Path: src})
+	if err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	if res.Dogfood == nil {
+		t.Fatal("expected Dogfood populated")
+	}
+	if res.Dogfood.PreviousManifest == nil {
+		t.Fatal("expected Dogfood.PreviousManifest populated after a second write")
+	}
+	if res.Dogfood.PreviousManifest.Base != a.Base {
+		t.Errorf("prior base mismatch: got %+v want %+v", res.Dogfood.PreviousManifest.Base, a.Base)
+	}
+	if res.Dogfood.PreviousManifest.Note != a.Note {
+		t.Errorf("prior note mismatch: got %q want %q", res.Dogfood.PreviousManifest.Note, a.Note)
+	}
+	if res.Dogfood.PreviousManifest.RecordedAt != aRecordedAt {
+		t.Errorf("prior RecordedAt should equal A's original %q, got %q",
+			aRecordedAt, res.Dogfood.PreviousManifest.RecordedAt)
+	}
+}
+
 func TestStatus_NoSideEffects(t *testing.T) {
 	src, client := statusFixture(t, tomlNone)
 	dir := os.Getenv(AuditDirEnv)
