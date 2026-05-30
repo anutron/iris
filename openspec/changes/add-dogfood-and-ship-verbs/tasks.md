@@ -28,10 +28,10 @@
 
 ## 5. `iris:ship_feature` verb — pr mode
 
-- [ ] 5.1 Write failing tests in `internal/verbs/ship_feature_test.go` for the `via: "pr"` scenarios (push + open PR, refuse default branch, refuse missing branch, refuse unknown via).
-- [ ] 5.2 Implement `verbs.ShipFeature` for `via: "pr"` only: resolve task -> validate branch != default -> push branch -> open PR via existing `verbs.GhPrCreate` plumbing -> return.
-- [ ] 5.3 Wire MCP handler in `internal/mcp/handler_ship_feature.go`.
-- [ ] 5.4 Wire CLI subcommand.
+- [x] 5.1 Write failing tests in `internal/verbs/ship_feature_test.go` for the `via: "pr"` scenarios (push + open PR, refuse default branch, refuse missing branch, refuse unknown via).
+- [x] 5.2 Implement `verbs.ShipFeature` for `via: "pr"` only: resolve task -> validate branch != default -> push branch -> open PR via existing `verbs.GhPrCreate` plumbing -> return.
+- [x] 5.3 Wire MCP handler in `internal/mcp/handler_ship_feature.go`.
+- [x] 5.4 Wire CLI subcommand.
 
 ## 6. `iris:ship_feature` verb — pr-auto mode
 

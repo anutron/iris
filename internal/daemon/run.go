@@ -79,6 +79,7 @@ func Start(ctx context.Context, cfg *config.Config, log *slog.Logger) (*Daemon, 
 	mcpSrv.RegisterHandler("iris_gh_pr_close", mcp.NewGHPRCloseHandler(client))
 	mcpSrv.RegisterHandler("iris_run_build", mcp.NewRunBuildHandler(client))
 	mcpSrv.RegisterHandler("iris_set_dogfood", mcp.NewSetDogfoodHandler(client))
+	mcpSrv.RegisterHandler("iris_ship_feature", mcp.NewShipFeatureHandler(client))
 	mcpSrv.RegisterHandler("iris_complete_task", mcp.NewCompleteTaskHandler(client))
 	mcpSrv.RegisterHandler("iris_fetch", mcp.NewFetchHandler(client))
 	mcpSrv.RegisterHandler("iris_branch_delete_remote", mcp.NewBranchDeleteRemoteHandler(client))
@@ -341,6 +342,22 @@ func toolDefinitions() []mcp.ToolDefinition {
 					},
 				},
 				"required": []string{"sha", "manifest"},
+			},
+		},
+		{
+			Name:        "iris_ship_feature",
+			Description: "Ship a feature branch to origin's default branch via a GitHub pull request. via=\"pr\" pushes the branch and opens a PR targeting the default branch, then stops — the worker returns after review. It never merges, fetches, or touches the dogfood branch/manifest. Refuses the default branch, a branch that does not exist locally, and any via other than \"pr\" (pr-auto is a later stage). pr_title defaults to the branch's last commit subject when omitted. Returns shipped, pr_number, pr_url, and (for pr mode) merged=false / fetched=false.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"task_id":      map[string]any{"type": "string", "description": "(optional) Argus task ID. Iris resolves the source repo from this; omit for self-target."},
+					"branch":       map[string]any{"type": "string", "description": "Local feature branch to ship. MUST exist locally and MUST NOT be the default branch."},
+					"via":          map[string]any{"type": "string", "enum": []string{"pr"}, "description": "Ship mode. Only \"pr\" is supported in this stage (push + open PR, then stop)."},
+					"pr_title":     map[string]any{"type": "string", "description": "(optional) PR title. Defaults to the branch's last commit subject."},
+					"pr_body":      map[string]any{"type": "string", "description": "(optional) PR body."},
+					"merge_method": map[string]any{"type": "string", "enum": []string{"squash", "merge", "rebase"}, "description": "(optional) Merge method; defaults to \"squash\". Unused in pr mode."},
+				},
+				"required": []string{"branch", "via"},
 			},
 		},
 		{
