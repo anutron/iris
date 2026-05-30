@@ -30,6 +30,9 @@ PLIST_LABEL="com.anutron.iris"
 PLIST_PATH="${HOME}/Library/LaunchAgents/${PLIST_LABEL}.plist"
 LAUNCH_TARGET="gui/$(id -u)/${PLIST_LABEL}"
 LOG_PATH="${STATE_DIR}/launchd.log"
+GITIGNORE_PATH="${SCRIPT_DIR}/.gitignore"
+LOCAL_TOML_PATH="${SCRIPT_DIR}/.iris.local.toml"
+LOCAL_TOML_NAME=".iris.local.toml"
 
 PLATFORM="$(uname)"
 
@@ -265,7 +268,7 @@ echo
 
 # --- 5. LaunchAgent ---------------------------------------------------------
 
-bold "5/5  LaunchAgent (runs at login, restarts on crash)"
+bold "5/6  LaunchAgent (runs at login, restarts on crash)"
 if [[ "${PLATFORM}" != "Darwin" ]]; then
   warn "  skipping LaunchAgent install (not macOS: ${PLATFORM})"
 elif ! confirm "  Install ~/Library/LaunchAgents/${PLIST_LABEL}.plist?"; then
@@ -287,6 +290,49 @@ else
   echo "  Verify with:"
   echo "    launchctl print ${LAUNCH_TARGET} | head"
   echo "    tail -f ${LOG_PATH}"
+fi
+echo
+
+# --- 6. local config overlay ------------------------------------------------
+
+bold "6/6  Local config overlay (${LOCAL_TOML_NAME})"
+
+# 6a. idempotently add .iris.local.toml to .gitignore.
+if [[ -f "${GITIGNORE_PATH}" ]]; then
+  if grep -qxF "${LOCAL_TOML_NAME}" "${GITIGNORE_PATH}"; then
+    green "  ✓ ${LOCAL_TOML_NAME} already in .gitignore"
+  else
+    # Ensure we start on a fresh line; some .gitignores don't end in a newline.
+    if [[ -s "${GITIGNORE_PATH}" ]] && [[ -n "$(tail -c1 "${GITIGNORE_PATH}")" ]]; then
+      printf '\n' >> "${GITIGNORE_PATH}"
+    fi
+    printf '%s\n' "${LOCAL_TOML_NAME}" >> "${GITIGNORE_PATH}"
+    green "  ✓ added ${LOCAL_TOML_NAME} to .gitignore"
+  fi
+else
+  printf '%s\n' "${LOCAL_TOML_NAME}" > "${GITIGNORE_PATH}"
+  green "  ✓ created .gitignore with ${LOCAL_TOML_NAME}"
+fi
+
+# 6b. interactive starter for .iris.local.toml. Skipped in --yes mode and when
+# the file already exists (never overwrite).
+if [[ -f "${LOCAL_TOML_PATH}" ]]; then
+  green "  ✓ ${LOCAL_TOML_NAME} already exists; leaving alone"
+elif $NON_INTERACTIVE; then
+  warn "  --yes: skipping starter ${LOCAL_TOML_NAME} prompt (write one manually if you want a dogfood branch)"
+else
+  read -r -p "  What branch do you use for dogfooding? (default: dev; empty to skip) " dogfood_branch_reply
+  if [[ -z "${dogfood_branch_reply}" ]]; then
+    warn "  skipped ${LOCAL_TOML_NAME}; create one later to enable dogfood workflows"
+  else
+    cat > "${LOCAL_TOML_PATH}" <<EOF
+# iris per-developer overlay. Gitignored — never commit this file.
+# Fields here override the shared .iris.toml for your local workflow.
+
+dogfood_branch = "${dogfood_branch_reply}"
+EOF
+    green "  ✓ wrote ${LOCAL_TOML_PATH} with dogfood_branch = \"${dogfood_branch_reply}\""
+  fi
 fi
 echo
 
