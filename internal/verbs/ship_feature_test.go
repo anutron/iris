@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/anutron/iris/internal/argus"
 )
@@ -34,6 +35,157 @@ echo ""
 echo "https://github.com/anutron/iris/pull/77"
 exit 0
 `
+
+// check-runs API response fixtures used by the pr-auto tests.
+const (
+	checksAllPass = `{"total_count":2,"check_runs":[{"name":"build","status":"completed","conclusion":"success"},{"name":"test","status":"completed","conclusion":"success"}]}`
+	checksOneFail = `{"total_count":2,"check_runs":[{"name":"build","status":"completed","conclusion":"success"},{"name":"test","status":"completed","conclusion":"failure"}]}`
+	checksPending = `{"total_count":1,"check_runs":[{"name":"test","status":"in_progress","conclusion":null}]}`
+	checksNone    = `{"total_count":0,"check_runs":[]}`
+)
+
+// shrinkShipPolling shrinks the pr-auto poll interval to 1ms and pins the CI
+// wait timeout to the given duration for the remainder of the test, restoring
+// both afterward. Keeps the timeout scenario fast and deterministic.
+func shrinkShipPolling(t *testing.T, timeout time.Duration) {
+	t.Helper()
+	prevInterval := shipCheckPollInterval
+	prevOverride := shipCITimeoutOverride
+	shipCheckPollInterval = time.Millisecond
+	to := timeout
+	shipCITimeoutOverride = &to
+	t.Cleanup(func() {
+		shipCheckPollInterval = prevInterval
+		shipCITimeoutOverride = prevOverride
+	})
+}
+
+func TestShipFeature_PRAutoHappyPath(t *testing.T) {
+	_, _, _, _, client := setupShipRepo(t, "ship-auto-happy", "feature/F2")
+	dir := writeFakeGH(t, fakeGHPRAutoBody(checksAllPass))
+
+	result, err := ShipFeature(context.Background(), client, "task-ship", ShipFeatureOpts{
+		Branch: "feature/F2",
+		Via:    "pr-auto",
+	})
+	if err != nil {
+		t.Fatalf("ShipFeature: %v", err)
+	}
+	if !result.Shipped {
+		t.Fatal("expected Shipped=true")
+	}
+	if !result.Merged {
+		t.Fatal("expected Merged=true")
+	}
+	if !result.Fetched {
+		t.Fatal("expected Fetched=true")
+	}
+	if result.MergeSHA == "" {
+		t.Fatal("expected non-empty MergeSHA")
+	}
+	if result.Recompose != nil {
+		t.Fatalf("Stage 6 must leave Recompose nil; got %+v", result.Recompose)
+	}
+	if len(result.Warnings) != 0 {
+		t.Fatalf("happy path must have no warnings; got %+v", result.Warnings)
+	}
+	// The full sequence ran: PR create, check-runs poll, approve, merge, view.
+	calls := readFakeGHCalls(t, dir)
+	for _, want := range []string{"pr create", "api repos", "check-runs", "--approve", "pr merge --squash", "pr view"} {
+		if !strings.Contains(calls, want) {
+			t.Fatalf("expected gh calls to include %q; calls:\n%s", want, calls)
+		}
+	}
+}
+
+func TestShipFeature_PRAutoCIFail(t *testing.T) {
+	_, _, _, _, client := setupShipRepo(t, "ship-auto-cifail", "feature/F2")
+	dir := writeFakeGH(t, fakeGHPRAutoBody(checksOneFail))
+
+	result, err := ShipFeature(context.Background(), client, "task-ship", ShipFeatureOpts{
+		Branch: "feature/F2",
+		Via:    "pr-auto",
+	})
+	if err != nil {
+		t.Fatalf("ShipFeature returned a hard error; CI failure should be a warning: %v", err)
+	}
+	if result.Shipped {
+		t.Fatal("CI failure must leave Shipped=false")
+	}
+	if result.Merged {
+		t.Fatal("CI failure must leave Merged=false")
+	}
+	if len(result.Warnings) != 1 || result.Warnings[0].Code != "ci_failed" {
+		t.Fatalf("expected a single ci_failed warning; got %+v", result.Warnings)
+	}
+	// The PR is still addressable so the agent can revisit it.
+	if result.PRNumber == 0 || result.PRURL == "" {
+		t.Fatalf("expected PR identity preserved on CI failure; got #%d %q", result.PRNumber, result.PRURL)
+	}
+	// No approve, no merge.
+	calls := readFakeGHCalls(t, dir)
+	if strings.Contains(calls, "review") {
+		t.Fatalf("CI failure must NOT approve the PR; calls:\n%s", calls)
+	}
+	if strings.Contains(calls, "merge") {
+		t.Fatalf("CI failure must NOT merge the PR; calls:\n%s", calls)
+	}
+}
+
+func TestShipFeature_PRAutoCITimeout(t *testing.T) {
+	_, _, _, _, client := setupShipRepo(t, "ship-auto-timeout", "feature/F2")
+	dir := writeFakeGH(t, fakeGHPRAutoBody(checksPending))
+	shrinkShipPolling(t, 200*time.Millisecond)
+
+	result, err := ShipFeature(context.Background(), client, "task-ship", ShipFeatureOpts{
+		Branch: "feature/F2",
+		Via:    "pr-auto",
+	})
+	if err != nil {
+		t.Fatalf("ShipFeature returned a hard error; a CI timeout should be a warning: %v", err)
+	}
+	if result.Shipped {
+		t.Fatal("CI timeout must leave Shipped=false")
+	}
+	if result.Merged {
+		t.Fatal("CI timeout must leave Merged=false")
+	}
+	if len(result.Warnings) != 1 || result.Warnings[0].Code != "ci_timeout" {
+		t.Fatalf("expected a single ci_timeout warning; got %+v", result.Warnings)
+	}
+	calls := readFakeGHCalls(t, dir)
+	if strings.Contains(calls, "merge") {
+		t.Fatalf("CI timeout must NOT merge the PR; calls:\n%s", calls)
+	}
+	if strings.Contains(calls, "review") {
+		t.Fatalf("CI timeout must NOT approve the PR; calls:\n%s", calls)
+	}
+}
+
+func TestShipFeature_PRAutoNoChecks(t *testing.T) {
+	_, _, _, _, client := setupShipRepo(t, "ship-auto-nochecks", "feature/F2")
+	dir := writeFakeGH(t, fakeGHPRAutoBody(checksNone))
+	// A tiny poll interval guards against accidental waiting; with zero checks
+	// the wait step should be skipped entirely regardless.
+	shrinkShipPolling(t, 50*time.Millisecond)
+
+	result, err := ShipFeature(context.Background(), client, "task-ship", ShipFeatureOpts{
+		Branch:      "feature/F2",
+		Via:         "pr-auto",
+		MergeMethod: "merge",
+	})
+	if err != nil {
+		t.Fatalf("ShipFeature: %v", err)
+	}
+	if !result.Shipped || !result.Merged {
+		t.Fatalf("zero checks must proceed to merge: shipped=%v merged=%v", result.Shipped, result.Merged)
+	}
+	// Merge proceeded with the requested method.
+	calls := readFakeGHCalls(t, dir)
+	if !strings.Contains(calls, "pr merge --merge") {
+		t.Fatalf("expected merge with --merge method; calls:\n%s", calls)
+	}
+}
 
 func TestShipFeature_PRModePushesAndOpensPR(t *testing.T) {
 	_, _, bare, featureSHA, client := setupShipRepo(t, "ship-pr-happy", "feature/F2")
