@@ -10,10 +10,10 @@
 //	pr-auto — push + open + wait-for-CI + approve + merge + fetch + re-compose.
 //
 // `pr` stops after opening the PR. `pr-auto` continues: it waits for the PR's
-// required CI checks to pass, then approves, merges (using merge_method), and
-// fetches origin. The post-ship dogfood re-compose is a later stage; pr-auto
-// leaves the Recompose field nil for now. An unknown/unsupported via is refused
-// naming the modes iris currently supports.
+// required CI checks to pass, then approves, merges (using merge_method),
+// fetches origin, and re-composes the dogfood branch with the shipped feature
+// dropped. An unknown/unsupported via is refused naming the modes iris
+// currently supports.
 //
 // See openspec/changes/add-dogfood-and-ship-verbs/design.md
 // ("Ship is an orchestrator, not a primitive" + "Two via modes" + the
@@ -26,6 +26,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
@@ -112,10 +113,10 @@ var shipCITimeoutOverride *time.Duration
 // dogfood branch/manifest.
 //
 // pr-auto mode continues past the open PR: wait for the head commit's required
-// CI checks -> on pass, approve -> merge (merge_method) -> fetch origin. If CI
-// fails or times out, it leaves the PR open and returns shipped=false with a
-// ci_failed / ci_timeout warning, never approving or merging. The post-ship
-// dogfood re-compose (Recompose) is Stage 7 and stays nil here.
+// CI checks -> on pass, approve -> merge (merge_method) -> fetch origin ->
+// re-compose the dogfood branch (recomposeAfterShip). If CI fails or times out,
+// it leaves the PR open and returns shipped=false with a ci_failed / ci_timeout
+// warning, never approving or merging.
 //
 // All refusals happen before any mutation: an unknown via (and a bad pr-auto
 // merge_method) is rejected before resolution, and the default-branch /
@@ -257,17 +258,35 @@ func ShipFeature(ctx context.Context, client *argus.Client, taskID string, opts 
 		fetched = fr.Fetched
 	}
 
-	// Recompose is left nil here: the post-ship dogfood re-compose is Stage 7.
-	return &ShipFeatureResult{
-		Shipped:   true,
-		Branch:    opts.Branch,
-		PRNumber:  pr.Number,
-		PRURL:     pr.URL,
-		Merged:    true,
-		MergeSHA:  mergeSHA,
-		Fetched:   fetched,
-		Recompose: nil,
-	}, nil
+	result := &ShipFeatureResult{
+		Shipped:  true,
+		Branch:   opts.Branch,
+		PRNumber: pr.Number,
+		PRURL:    pr.URL,
+		Merged:   true,
+		MergeSHA: mergeSHA,
+		Fetched:  fetched,
+	}
+
+	// Post-ship dogfood re-compose: drop the just-shipped feature from the
+	// manifest and replay the rest against the freshly-fetched base. The merge
+	// already landed, so a conflict or infrastructure error never fails the
+	// ship — it surfaces as Recompose state or a structured warning so the
+	// agent can drive resolution.
+	recompose, warn, rerr := recomposeAfterShip(ctx, client, taskID, target, opts.Branch)
+	if rerr != nil {
+		result.Warnings = append(result.Warnings, Warning{
+			Code:    "recompose_error",
+			Message: rerr.Error(),
+		})
+	} else {
+		result.Recompose = recompose
+		if warn != nil {
+			result.Warnings = append(result.Warnings, *warn)
+		}
+	}
+
+	return result, nil
 }
 
 // shipCITimeout resolves how long pr-auto waits for CI checks. It reads
@@ -449,4 +468,153 @@ func createPRForBranch(ctx context.Context, sourceRepo, base, head, title, body 
 		return nil, fmt.Errorf("parse PR number %q: %w", m[1], err)
 	}
 	return &GHPRCreateResult{Number: num, URL: url}, nil
+}
+
+// recomposeAfterShip re-composes the dogfood branch after a successful pr-auto
+// ship: it drops the shipped feature from the persisted manifest and replays
+// the remaining layered features against the freshly-fetched base.
+//
+// "Iris is dumb" still holds — it only mechanically re-applies the manifest the
+// agent already recorded. The common case (other features still apply cleanly
+// to new main) is handled here to save a round-trip; conflicts are surfaced for
+// the agent to resolve.
+//
+// Return contract (the caller maps these onto ShipFeatureResult.Recompose +
+// warnings):
+//   - (&{Attempted:false}, nil, nil)            no manifest exists — silent skip.
+//   - (&{Attempted:false}, &Warning, nil)       shipped branch is not in the
+//     manifest's layered list; the dogfood branch + manifest are left untouched
+//     and the caller surfaces the warning.
+//   - (&{Attempted:true, Succeeded:false, Conflict}, nil, nil)  a remaining
+//     feature failed to re-apply; the dogfood branch + manifest are untouched.
+//   - (&{Attempted:true, Succeeded:true, NewSHA}, nil, nil)  clean re-compose;
+//     the dogfood branch + manifest were atomically updated via SetDogfood.
+//   - (nil, nil, err)                            an infrastructure error (manifest
+//     parse, missing base ref, SetDogfood failure); the caller turns it into a
+//     warning and leaves Recompose nil.
+func recomposeAfterShip(ctx context.Context, client *argus.Client, taskID string, target *ResolvedRepo, shippedBranch string) (*RecomposeResult, *Warning, error) {
+	stateDir, err := SourceRepoStateDir(target.SourceRepo)
+	if err != nil {
+		return nil, nil, fmt.Errorf("resolve state dir: %w", err)
+	}
+	manifest, err := ReadManifest(stateDir)
+	if err != nil {
+		return nil, nil, fmt.Errorf("read dogfood manifest: %w", err)
+	}
+	if manifest == nil {
+		// No dogfood manifest: nothing to re-compose. Silent skip (spec).
+		return &RecomposeResult{Attempted: false}, nil, nil
+	}
+
+	// Locate the shipped branch in the layered list.
+	dropIdx := -1
+	for i, e := range manifest.Layered {
+		if e.Name == shippedBranch {
+			dropIdx = i
+			break
+		}
+	}
+	if dropIdx < 0 {
+		// The shipped branch was not part of the dogfood composition. Leave the
+		// dogfood branch + manifest untouched; surface a structured warning.
+		return &RecomposeResult{Attempted: false}, &Warning{
+			Code:    "recompose_skipped",
+			Message: fmt.Sprintf("shipped branch %q is not in the dogfood manifest; dogfood branch left unchanged", shippedBranch),
+		}, nil
+	}
+
+	// Remaining layered entries, in order, with the shipped feature removed.
+	remaining := make([]LayeredEntry, 0, len(manifest.Layered)-1)
+	remaining = append(remaining, manifest.Layered[:dropIdx]...)
+	remaining = append(remaining, manifest.Layered[dropIdx+1:]...)
+
+	// New base SHA from the freshly-fetched remote-tracking ref.
+	baseRef := manifest.Base.Ref
+	if baseRef == "" {
+		return nil, nil, fmt.Errorf("manifest base ref is empty; cannot determine re-compose base")
+	}
+	out, err := runGit(ctx, target.SourceRepo, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/"+baseRef)
+	if err != nil {
+		return nil, nil, fmt.Errorf("resolve re-compose base origin/%s: %w", baseRef, err)
+	}
+	newBaseSHA := strings.TrimSpace(out)
+
+	// Build the new dogfood SHA in a throwaway worktree so the source repo's
+	// own checkout is undisturbed.
+	newTip, conflict, err := replayLayered(ctx, target.SourceRepo, newBaseSHA, remaining)
+	if err != nil {
+		return nil, nil, err
+	}
+	if conflict != nil {
+		// A feature failed to re-apply. Leave the dogfood branch + manifest
+		// exactly as they were; the agent drives resolution.
+		return &RecomposeResult{Attempted: true, Succeeded: false, Conflict: conflict}, nil, nil
+	}
+
+	// Clean re-compose. Atomically swap branch + manifest via SetDogfood, which
+	// writes the manifest before resetting the ref and reloads with NoPull
+	// (origin-first). The supplied SHA + manifest are real, so SetDogfood's
+	// validation (reachability, dogfood_branch config) applies as intended.
+	newManifest := &DogfoodManifest{
+		Base:    ManifestBase{Ref: baseRef, SHA: newBaseSHA},
+		Layered: remaining,
+		Note:    manifest.Note,
+	}
+	if _, err := SetDogfood(ctx, client, taskID, SetDogfoodOpts{
+		Sha:      newTip,
+		Manifest: newManifest,
+	}); err != nil {
+		return nil, nil, fmt.Errorf("apply re-composed dogfood: %w", err)
+	}
+
+	return &RecomposeResult{Attempted: true, Succeeded: true, NewSHA: newTip}, nil, nil
+}
+
+// replayLayered builds a new dogfood tip by cherry-picking each layered entry,
+// in order, onto baseSHA inside a throwaway detached worktree. It returns the
+// resulting tip SHA on success, or a non-nil *RecomposeConflict naming the first
+// entry that fails to apply (after aborting the cherry-pick). The source repo's
+// own working tree and the dogfood branch are never touched. The scratch
+// worktree is always removed.
+//
+// An empty layered list yields baseSHA itself (dogfood becomes plain new base).
+func replayLayered(ctx context.Context, sourceRepo, baseSHA string, layered []LayeredEntry) (string, *RecomposeConflict, error) {
+	parent, err := os.MkdirTemp("", "iris-recompose-")
+	if err != nil {
+		return "", nil, fmt.Errorf("create scratch dir: %w", err)
+	}
+	scratch := filepath.Join(parent, "wt")
+	defer func() {
+		// Detach git's worktree registry first, then remove the temp tree.
+		_, _ = runGit(ctx, sourceRepo, "worktree", "remove", "--force", scratch)
+		_ = os.RemoveAll(parent)
+	}()
+
+	if out, err := runGit(ctx, sourceRepo, "worktree", "add", "--detach", scratch, baseSHA); err != nil {
+		return "", nil, fmt.Errorf("create scratch worktree at %s: %w; log:\n%s", baseSHA, err, out)
+	}
+
+	for _, e := range layered {
+		if strings.TrimSpace(e.SHA) == "" {
+			return "", nil, fmt.Errorf("layered entry %q has no sha to re-apply", e.Name)
+		}
+		if strings.HasPrefix(e.SHA, "-") {
+			return "", nil, fmt.Errorf("invalid sha %q for layered entry %q (must not begin with '-')", e.SHA, e.Name)
+		}
+		if out, err := runGit(ctx, scratch, "cherry-pick", e.SHA); err != nil {
+			conflicts := listGitPaths(ctx, scratch, "diff", "--name-only", "--diff-filter=U")
+			_, _ = runGit(ctx, scratch, "cherry-pick", "--abort")
+			msg := strings.TrimSpace(out)
+			if len(conflicts) > 0 {
+				msg = fmt.Sprintf("%s (conflicts: %s)", msg, strings.Join(conflicts, ", "))
+			}
+			return "", &RecomposeConflict{Branch: e.Name, Message: msg}, nil
+		}
+	}
+
+	tip, err := runGit(ctx, scratch, "rev-parse", "HEAD")
+	if err != nil {
+		return "", nil, fmt.Errorf("read re-composed tip: %w", err)
+	}
+	return strings.TrimSpace(tip), nil, nil
 }

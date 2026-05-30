@@ -83,8 +83,10 @@ func TestShipFeature_PRAutoHappyPath(t *testing.T) {
 	if result.MergeSHA == "" {
 		t.Fatal("expected non-empty MergeSHA")
 	}
-	if result.Recompose != nil {
-		t.Fatalf("Stage 6 must leave Recompose nil; got %+v", result.Recompose)
+	// This fixture has no dogfood manifest, so the post-ship re-compose is
+	// skipped: per spec it reports attempted=false (not nil) and touches nothing.
+	if result.Recompose == nil || result.Recompose.Attempted {
+		t.Fatalf("no-manifest re-compose must report attempted=false; got %+v", result.Recompose)
 	}
 	if len(result.Warnings) != 0 {
 		t.Fatalf("happy path must have no warnings; got %+v", result.Warnings)
