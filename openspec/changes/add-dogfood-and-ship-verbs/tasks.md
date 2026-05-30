@@ -42,9 +42,9 @@
 
 ## 7. Post-ship dogfood re-compose
 
-- [ ] 7.1 Add failing tests for the re-compose scenarios: shipped feature present in manifest (drops + re-applies), not in manifest (skip), no manifest at all (skip), conflict during re-apply (preserve prior dogfood state).
-- [ ] 7.2 Implement `recomposeAfterShip(ctx, source, shippedBranch) (*RecomposeResult, error)`: read manifest -> if shippedBranch in `layered`, drop -> fetch new base -> re-apply remaining `layered` entries via cherry-pick in a scratch worktree or branch -> on success, call into the shared `set_dogfood` core to atomically update branch + manifest -> on conflict, return structured error without mutating dogfood state.
-- [ ] 7.3 Ensure the conflict path leaves the dogfood branch and manifest untouched (verified by post-test assertions on SHA and file mtime).
+- [x] 7.1 Add failing tests for the re-compose scenarios: shipped feature present in manifest (drops + re-applies), not in manifest (skip), no manifest at all (skip), conflict during re-apply (preserve prior dogfood state).
+- [x] 7.2 Implement `recomposeAfterShip(ctx, source, shippedBranch) (*RecomposeResult, error)`: read manifest -> if shippedBranch in `layered`, drop -> fetch new base -> re-apply remaining `layered` entries via cherry-pick in a scratch worktree or branch -> on success, call into the shared `set_dogfood` core to atomically update branch + manifest -> on conflict, return structured error without mutating dogfood state.
+- [x] 7.3 Ensure the conflict path leaves the dogfood branch and manifest untouched (verified by post-test assertions on SHA and file mtime).
 
 ## 8. Documentation and self-config
 
