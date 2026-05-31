@@ -218,8 +218,13 @@ committed work; let `iris_set_dogfood` validate it at build time.
    was on. **This is the validation step** — a malformed `.iris.toml` fails here with
    the structured error; there is no sandbox path to validate it earlier.
 
-Two things to keep straight:
+Things to keep straight:
 
+- **You run `set_dogfood` while the source repo is on the default branch** — not on
+  `dev`. `set_dogfood` reads `dogfood_branch` from `.iris.local.toml` even when the
+  default branch has no `.iris.toml` yet (that file lives on `dev`), then its reload
+  checks `dev` out to build. Do NOT pre-check-out `dev` yourself: reload's pre-flight
+  requires HEAD to be on the default branch, so entering on `dev` is refused.
 - **`dev` does not stay checked out.** `set_dogfood`'s reload checks it out only to
   build, then restores the entry branch, so your active working state on the source
   repo is preserved. The *binary* is dev; the *repo* returns to your branch.

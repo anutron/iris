@@ -18,6 +18,26 @@ import (
 // its absence is silent.
 const IrisLocalTomlFilename = ".iris.local.toml"
 
+// PeekLocalDogfoodBranch leniently reads ONLY dogfood_branch from the
+// .iris.local.toml at repoRoot. It exists for iris:set_dogfood's bootstrap
+// path: dogfood_branch is the pointer to the branch that carries .iris.toml, so
+// it must be readable even when .iris.toml is ABSENT at the source root — the
+// LoadOverlay path returns no doc in that case (the local file is an overlay on
+// a required shared base, not a standalone config). This performs no
+// validation and returns "" on any problem — missing file, malformed TOML,
+// unset field.
+func PeekLocalDogfoodBranch(repoRoot string) string {
+	data, err := os.ReadFile(filepath.Join(repoRoot, IrisLocalTomlFilename))
+	if err != nil {
+		return ""
+	}
+	var doc IrisToml
+	if _, err := toml.Decode(string(data), &doc); err != nil {
+		return ""
+	}
+	return doc.DogfoodBranch
+}
+
 // Source identifies which on-disk file a particular field's value came from
 // in the merged result. Reported by LoadOverlay's Provenance map so that
 // `iris:status` (and a human reading validate-config output) can tell a
