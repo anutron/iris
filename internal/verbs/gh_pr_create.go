@@ -2,6 +2,7 @@ package verbs
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os/exec"
 	"regexp"
@@ -52,11 +53,15 @@ func GHPRCreate(ctx context.Context, client *argus.Client, taskID string, opts G
 		return nil, fmt.Errorf("refusing to open PR from default branch %q", resolved.Branch)
 	}
 
-	args := []string{
-		"pr", "create",
-		"--base", defaultBranch,
-		"--head", resolved.Branch,
-		"--title", opts.Title,
+	args := []string{"pr", "create", "--title", opts.Title}
+	if fu := detectForkUpstream(ctx, resolved.SourceRepo); fu != nil {
+		// Cross-fork: origin is a fork, so target the upstream parent and
+		// qualify the head with the fork owner. Omit --base; gh defaults it to
+		// the upstream repository's default branch.
+		args = append(args, "--repo", fu.UpstreamRepo, "--head", fu.ForkOwner+":"+resolved.Branch)
+	} else {
+		// Same-repo: origin is the target.
+		args = append(args, "--base", defaultBranch, "--head", resolved.Branch)
 	}
 	if opts.Body != "" {
 		args = append(args, "--body", opts.Body)
@@ -87,6 +92,55 @@ func GHPRCreate(ctx context.Context, client *argus.Client, taskID string, opts G
 	}
 
 	return &GHPRCreateResult{Number: num, URL: url}, nil
+}
+
+// forkUpstream describes a fork → upstream relationship discovered for the
+// source repo's origin.
+type forkUpstream struct {
+	ForkOwner    string // owner of origin (the fork), e.g. "anutron"
+	UpstreamRepo string // "<owner>/<repo>" of the upstream parent, e.g. "drn/argus"
+}
+
+// detectForkUpstream best-effort inspects the source repo's origin via gh and
+// reports the fork → upstream relationship when origin is a GitHub fork.
+//
+// It returns nil — and callers fall back to a same-repo PR — when origin is not
+// a fork OR when the relationship cannot be determined (gh unavailable, offline,
+// unexpected JSON). Detection must never break the common same-repo case, so
+// every failure path is a silent nil rather than an error.
+func detectForkUpstream(ctx context.Context, sourceRepo string) *forkUpstream {
+	cmd := exec.CommandContext(ctx, "gh", "repo", "view", "--json", "nameWithOwner,parent")
+	cmd.Dir = sourceRepo
+	out, err := cmd.Output()
+	if err != nil {
+		return nil
+	}
+	var v struct {
+		NameWithOwner string `json:"nameWithOwner"`
+		Parent        *struct {
+			Name  string `json:"name"`
+			Owner struct {
+				Login string `json:"login"`
+			} `json:"owner"`
+		} `json:"parent"`
+	}
+	if err := json.Unmarshal(out, &v); err != nil {
+		return nil
+	}
+	if v.Parent == nil || v.Parent.Name == "" || v.Parent.Owner.Login == "" {
+		return nil // origin is not a fork
+	}
+	forkOwner := v.NameWithOwner
+	if i := strings.IndexByte(forkOwner, '/'); i >= 0 {
+		forkOwner = forkOwner[:i]
+	}
+	if forkOwner == "" {
+		return nil
+	}
+	return &forkUpstream{
+		ForkOwner:    forkOwner,
+		UpstreamRepo: v.Parent.Owner.Login + "/" + v.Parent.Name,
+	}
 }
 
 // lastNonEmptyLine returns the trailing non-empty line of s with surrounding
