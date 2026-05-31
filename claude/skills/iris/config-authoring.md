@@ -182,6 +182,52 @@ Equivalent, written through the verb instead of by hand:
 iris_set_local_config(task_id, fields={ dogfood_branch: "dev", ship_ci_timeout_seconds: 900 })
 ```
 
+## Bootstrapping dogfood when the default branch has no `.iris.toml`
+
+The from-scratch case: you want to dogfood a daemon (build a composed branch and run
+it) but its default branch does not carry an `.iris.toml` yet. You are an agent in an
+argus sandbox worktree of the target repo.
+
+**The trap to avoid:** do NOT try to make `iris_validate_config` go green from the
+sandbox first. It reads the **source repo's checked-out working tree**, never your
+worktree — so a config you have only authored locally is invisible to it, and the
+sandbox cannot write the source-root file. Authoring the config is just ordinary
+committed work; let `iris_set_dogfood` validate it at build time.
+
+1. **Author `.iris.toml`** in your worktree per the schema above, and add
+   `.iris.local.toml` to `.gitignore`. Commit both as a single commit on your task
+   branch — plain git in your own worktree, no special iris verb.
+
+2. **Open the adoption PR (non-blocking).** `iris_push(task_id)` your branch and
+   `iris_gh_pr_create(task_id, title="Add .iris.toml")` against the default branch.
+   This is the permanent home for the shared config; its review and merge happen on
+   their own timeline and MUST NOT gate dogfooding.
+
+3. **Declare the dogfood branch.** `iris_set_local_config(task_id, fields={dogfood_branch: "dev"})`
+   writes the gitignored `.iris.local.toml` to the source repo root. (`dogfood_branch`
+   must differ from the default branch.)
+
+4. **Compose the SHA to dogfood.** In your worktree, build the commit you want to run:
+   `default branch + your .iris.toml commit + the feature branch(es) you are testing`
+   (merge or cherry-pick; resolve conflicts yourself). Iris is dumb, the agent is
+   smart — you compose, iris deploys.
+
+5. **Deploy.** `iris_set_dogfood(task_id, sha=<composed SHA>, manifest={...})`. Iris
+   points `dev` at that SHA, checks `dev` out to build it (its tree now carries
+   `.iris.toml`), restarts the daemon, and restores your source repo to the branch it
+   was on. **This is the validation step** — a malformed `.iris.toml` fails here with
+   the structured error; there is no sandbox path to validate it earlier.
+
+Two things to keep straight:
+
+- **`dev` does not stay checked out.** `set_dogfood`'s reload checks it out only to
+  build, then restores the entry branch, so your active working state on the source
+  repo is preserved. The *binary* is dev; the *repo* returns to your branch.
+- **The adoption PR and dogfooding are independent.** You dogfood `dev` immediately;
+  the PR adding `.iris.toml` to the default branch waits for review without blocking
+  anything. Once it merges, `dev` (composed from the default branch) inherits the
+  config the normal way and this bootstrap is no longer needed.
+
 ## Common authoring mistakes
 
 - **Shell strings in `command`.** `command = "make build"` is wrong — it must be an
