@@ -5,7 +5,9 @@ TBD - created by archiving change add-dogfood-and-ship-verbs. Update Purpose aft
 ## Requirements
 ### Requirement: `iris:set_dogfood` verb
 
-The plugin SHALL expose `iris:set_dogfood` as an MCP tool and CLI subcommand that, for one managed system, atomically hard-resets the configured dogfood branch to a worker-supplied commit SHA, persists a structured manifest describing what that SHA contains, and triggers the existing reload/build/restart machinery. The verb SHALL refuse to operate on any repo whose `.iris.toml` does not declare `dogfood_branch`.
+The plugin SHALL expose `iris:set_dogfood` as an MCP tool and CLI subcommand that, for one managed system, atomically hard-resets the configured dogfood branch to a worker-supplied commit SHA, persists a structured manifest describing what that SHA contains, and triggers the existing reload/build/restart machinery against the composed SHA. The verb SHALL resolve `dogfood_branch` from the MERGED configuration — `.iris.toml` overlaid with the optional `.iris.local.toml` (`dogfood_branch` is a `local`-tagged field). The verb SHALL refuse to operate on any repo whose merged configuration does not declare `dogfood_branch`. Overlay taxonomy warnings (for example, a `local`-tagged field left in `.iris.toml`) SHALL be propagated into the result's `warnings`.
+
+The reload the verb triggers SHALL build and restart against the composed SHA — that is, the dogfood branch's tree, not the default branch's tree (see `iris-reload`'s caller-supplied build-branch requirement). Because the build runs against the composed SHA, the `[build]` and `[restart]` configuration consumed for the reload comes from that SHA's `.iris.toml`.
 
 Inputs:
 
@@ -19,31 +21,44 @@ Inputs:
 Result shape:
 
 - `set` (bool) — `true` on success.
-- `dogfood_branch` (string) — the branch name from config.
+- `dogfood_branch` (string) — the branch name from the merged config.
 - `previous_sha` (string) — the dogfood branch's SHA before the reset.
 - `new_sha` (string) — the SHA passed in.
 - `reload` (object) — the same reload result the existing reload verb returns.
-- `warnings` (array) — structured non-fatal warnings.
+- `warnings` (array) — structured non-fatal warnings, including any overlay taxonomy warnings and any from the reload.
 
 #### Scenario: Sets dogfood branch and triggers reload on a valid request
 
-- **GIVEN** a source repo with `.iris.toml` declaring `dogfood_branch = "dev"` and a valid `[build]`/`[restart]` block
+- **GIVEN** a source repo whose merged config declares `dogfood_branch = "dev"` and a valid `[build]`/`[restart]` block
 - **AND** the worker has produced a commit SHA `abc123` reachable in the source repo
 - **WHEN** `iris:set_dogfood` is invoked with `sha = "abc123"` and a well-formed manifest
-- **THEN** iris persists the manifest to the iris state directory, hard-resets the `dev` branch to `abc123`, and runs the same reload sequence used by `iris:reload`
+- **THEN** iris persists the manifest to the iris state directory, hard-resets the `dev` branch to `abc123`, and runs the same reload sequence used by `iris:reload` against the `dev` branch's tree
 - **AND** returns `{ set: true, dogfood_branch: "dev", previous_sha: "<prior>", new_sha: "abc123", reload: { ... } }`
 
-#### Scenario: Refuses when dogfood_branch is unset
+#### Scenario: Resolves dogfood_branch from .iris.local.toml
 
-- **GIVEN** a source repo with `.iris.toml` that does not declare `dogfood_branch`
+- **GIVEN** a source repo whose `.iris.toml` does NOT declare `dogfood_branch` but whose gitignored `.iris.local.toml` declares `dogfood_branch = "dev"`
+- **WHEN** `iris:set_dogfood` is invoked with a reachable SHA and a well-formed manifest
+- **THEN** iris resolves `dogfood_branch = "dev"` from the overlay, sets the branch, and runs the reload — it does NOT refuse as "not configured"
+
+#### Scenario: Refuses when dogfood_branch is unset in both files
+
+- **GIVEN** a source repo whose merged config (`.iris.toml` plus any `.iris.local.toml`) does not declare `dogfood_branch`
 - **WHEN** `iris:set_dogfood` is invoked
-- **THEN** iris returns an error of the form `dogfood_branch not configured for this repo (add dogfood_branch = "..." to .iris.toml)` and performs no git mutations, no manifest writes, and no reload
+- **THEN** iris returns an error of the form `dogfood_branch not configured for this repo (add dogfood_branch = "..." to .iris.local.toml)` and performs no git mutations, no manifest writes, and no reload
 
 #### Scenario: Refuses when SHA is not reachable
 
 - **GIVEN** a source repo with `dogfood_branch = "dev"` configured
 - **WHEN** `iris:set_dogfood` is invoked with a `sha` that `git rev-parse --verify <sha>^{commit}` cannot resolve
 - **THEN** iris returns an error naming the unreachable SHA and performs no mutations
+
+#### Scenario: Build deploys the composed SHA, not the default branch
+
+- **GIVEN** a source repo on its default branch whose `dev` dogfood branch is reset to a composed SHA whose tree differs from the default branch's tree
+- **WHEN** `iris:set_dogfood` runs the reload
+- **THEN** the `[build] command` executes against the `dev` branch's tree (the composed SHA), not the default branch's tree
+- **AND** after the reload completes, the source repo is checked back out on its default branch
 
 #### Scenario: Manifest is persisted alongside the audit log
 
