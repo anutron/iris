@@ -205,14 +205,16 @@ func TestPublish_RefusesDirtySourceRepo(t *testing.T) {
 }
 
 func TestPublish_RefusesMissingIrisToml(t *testing.T) {
-	src, _, client := publishFixture(t, "no-toml", "")
-	// Delete .iris.toml and commit the deletion so the tree is clean.
+	// Publish validates the config it is about to publish — the WORKTREE's
+	// .iris.toml. Removing it from the worktree (the thing being published) is
+	// what should refuse; a stale source-repo copy is irrelevant.
+	_, wt, client := publishFixture(t, "no-toml", "")
 	g := gitRunner(t)
-	if err := os.Remove(filepath.Join(src, ".iris.toml")); err != nil {
+	if err := os.Remove(filepath.Join(wt, ".iris.toml")); err != nil {
 		t.Fatalf("remove .iris.toml: %v", err)
 	}
-	g(src, "add", "-A")
-	g(src, "commit", "-m", "remove .iris.toml")
+	g(wt, "add", "-A")
+	g(wt, "commit", "-m", "remove .iris.toml")
 
 	_, err := Publish(context.Background(), client, PublishInput{TaskID: "task-no-toml"})
 	if err == nil {
@@ -220,6 +222,64 @@ func TestPublish_RefusesMissingIrisToml(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), ".iris.toml") {
 		t.Fatalf("expected error to mention .iris.toml, got: %v", err)
+	}
+}
+
+// --- Validate the published (worktree) configuration ------------------------
+
+// An additive field present in the worktree config (unknown to the running
+// daemon) is tolerated as a warning so publishing it succeeds in one call.
+func TestPublish_ToleratesUnknownFieldInWorktree(t *testing.T) {
+	_, wt, client := publishFixture(t, "fwd-field", "")
+	g := gitRunner(t)
+	if err := os.WriteFile(filepath.Join(wt, ".iris.toml"), []byte(`schema_version = 1
+future_field = "x"
+[build]
+command = ["true"]
+[restart]
+mechanism = "none"
+`), 0o644); err != nil {
+		t.Fatalf("write worktree toml: %v", err)
+	}
+	g(wt, "add", ".iris.toml")
+	g(wt, "commit", "-m", "add future field")
+
+	res, err := Publish(context.Background(), client, PublishInput{TaskID: "task-fwd", Caller: "test"})
+	if err != nil {
+		t.Fatalf("publish should tolerate unknown field in worktree config, got: %v", err)
+	}
+	if !strings.Contains(strings.Join(res.Warnings, "\n"), "future_field") {
+		t.Fatalf("expected warning naming future_field, got: %v", res.Warnings)
+	}
+}
+
+// An invalid worktree config is refused BEFORE the lock and before any
+// merge/reset — the source repo HEAD must be untouched. Also proves
+// schema_version mismatch is not tolerated.
+func TestPublish_RefusesInvalidWorktreeConfigBeforeMutation(t *testing.T) {
+	src, wt, client := publishFixture(t, "bad-wt", "")
+	preSrcSHA := headSHA(t, src)
+	g := gitRunner(t)
+	if err := os.WriteFile(filepath.Join(wt, ".iris.toml"), []byte(`schema_version = 99
+[build]
+command = ["true"]
+[restart]
+mechanism = "none"
+`), 0o644); err != nil {
+		t.Fatalf("write worktree toml: %v", err)
+	}
+	g(wt, "add", ".iris.toml")
+	g(wt, "commit", "-m", "bad schema")
+
+	_, err := Publish(context.Background(), client, PublishInput{TaskID: "task-bad", Caller: "test"})
+	if err == nil {
+		t.Fatal("expected refusal on invalid worktree config")
+	}
+	if !strings.Contains(err.Error(), "schema_version") {
+		t.Fatalf("expected schema_version error, got: %v", err)
+	}
+	if got := headSHA(t, src); got != preSrcSHA {
+		t.Fatalf("source repo HEAD must be untouched on refusal: got %q want %q", got, preSrcSHA)
 	}
 }
 
