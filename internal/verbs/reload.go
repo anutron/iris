@@ -468,10 +468,46 @@ func checkCleanTree(ctx context.Context, sourceRepo string) error {
 	if err != nil {
 		return fmt.Errorf("working tree status: %w", err)
 	}
-	if strings.TrimSpace(out) != "" {
-		return fmt.Errorf("working tree is dirty:\n%s", strings.TrimSpace(out))
+	dirty := filterIrisManagedStatus(out)
+	if dirty != "" {
+		return fmt.Errorf("working tree is dirty:\n%s", dirty)
 	}
 	return nil
+}
+
+// filterIrisManagedStatus drops iris's own managed working-tree files from
+// `git status --porcelain=v1` output and returns the remaining (genuinely
+// dirtying) lines joined by newlines ("" when none remain).
+//
+// `.iris.local.toml` is the per-developer overlay iris itself writes via
+// iris:set_local_config; it lives at the source-repo root and is gitignored
+// once the default branch adopts iris. A clean-tree pre-flight (reload, publish)
+// must not refuse to operate because of it — otherwise the documented dogfood
+// bootstrap (set_local_config then set_dogfood) refuses on the very file it just
+// wrote, before the gitignore entry has reached the default branch.
+func filterIrisManagedStatus(porcelain string) string {
+	var kept []string
+	for _, line := range strings.Split(porcelain, "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		if porcelainStatusPath(line) == config.IrisLocalTomlFilename {
+			continue
+		}
+		kept = append(kept, line)
+	}
+	return strings.Join(kept, "\n")
+}
+
+// porcelainStatusPath extracts the path from a `git status --porcelain=v1`
+// line. The format is two status columns plus a space, then the path
+// ("XY path"); rename entries use "XY old -> new" but iris's managed files are
+// never renamed, so the leading-path read is sufficient for matching them.
+func porcelainStatusPath(line string) string {
+	if len(line) < 4 {
+		return ""
+	}
+	return line[3:]
 }
 
 func runHook(ctx context.Context, sourceRepo string, hook config.HookBlock, defaultSec int) (string, error) {
