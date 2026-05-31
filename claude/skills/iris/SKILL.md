@@ -51,7 +51,7 @@ All tools are registered as `mcp__argus__<name>`. Names below omit the prefix. U
 
 ### PR lifecycle (host `gh` CLI)
 
-- **`iris_gh_pr_create`** — open a PR for the task's branch (`title` required; `body`, `draft` optional). Refuses to open from the default branch. Returns PR number + URL.
+- **`iris_gh_pr_create`** — open a PR for the task's branch (`title` required; `body`, `draft` optional). Refuses to open from the default branch. Returns PR number + URL. Handles a **fork → upstream** PR automatically: when `origin` is a fork, it targets the upstream parent (`--repo <upstream> --head <fork-owner>:<branch>`) — you don't need a host `gh` for cross-fork PRs.
 - **`iris_gh_pr_view`** — read a PR's state (`pr_number`); returns `gh`'s JSON (state, checks, reviews, mergeable, isDraft, statusCheckRollup, …). This is your polling tool for "is this PR green / ready to merge?".
 - **`iris_gh_pr_ready`** — take a draft PR out of draft (idempotent; reports whether it changed state).
 - **`iris_gh_pr_comment`** — post a comment to a PR (`body`). Returns the comment URL.
