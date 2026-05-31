@@ -38,6 +38,7 @@ func setupCherryPickRepo(t *testing.T, slug string) (src, wt, bare, workCommit, 
 }
 
 func TestCherryPick_HappyPath(t *testing.T) {
+	t.Parallel()
 	src, wt, _, commit, hotfix := setupCherryPickRepo(t, "cp-happy")
 	client := stubArgus(t, src, wt)
 
@@ -76,6 +77,7 @@ func TestCherryPick_HappyPath(t *testing.T) {
 }
 
 func TestCherryPick_RefusesEmptyCommit(t *testing.T) {
+	t.Parallel()
 	src, wt, _, _, hotfix := setupCherryPickRepo(t, "cp-empty-commit")
 	client := stubArgus(t, src, wt)
 	_, err := CherryPick(context.Background(), CherryPickInput{
@@ -87,6 +89,7 @@ func TestCherryPick_RefusesEmptyCommit(t *testing.T) {
 }
 
 func TestCherryPick_RefusesEmptyTargetBranch(t *testing.T) {
+	t.Parallel()
 	src, wt, _, commit, _ := setupCherryPickRepo(t, "cp-empty-target")
 	client := stubArgus(t, src, wt)
 	_, err := CherryPick(context.Background(), CherryPickInput{
@@ -98,6 +101,7 @@ func TestCherryPick_RefusesEmptyTargetBranch(t *testing.T) {
 }
 
 func TestCherryPick_RefusesLeadingDashCommit(t *testing.T) {
+	t.Parallel()
 	src, wt, _, _, hotfix := setupCherryPickRepo(t, "cp-dash-commit")
 	client := stubArgus(t, src, wt)
 	_, err := CherryPick(context.Background(), CherryPickInput{
@@ -109,6 +113,7 @@ func TestCherryPick_RefusesLeadingDashCommit(t *testing.T) {
 }
 
 func TestCherryPick_RefusesLeadingDashTargetBranch(t *testing.T) {
+	t.Parallel()
 	src, wt, _, commit, _ := setupCherryPickRepo(t, "cp-dash-target")
 	client := stubArgus(t, src, wt)
 	_, err := CherryPick(context.Background(), CherryPickInput{
@@ -120,6 +125,7 @@ func TestCherryPick_RefusesLeadingDashTargetBranch(t *testing.T) {
 }
 
 func TestCherryPick_RefusesDefaultBranchTarget(t *testing.T) {
+	t.Parallel()
 	src, wt, _, commit, _ := setupCherryPickRepo(t, "cp-default")
 	client := stubArgus(t, src, wt)
 
@@ -147,6 +153,7 @@ func TestCherryPick_RefusesDefaultBranchTarget(t *testing.T) {
 }
 
 func TestCherryPick_RefusesUnknownTargetBranch(t *testing.T) {
+	t.Parallel()
 	src, wt, _, commit, _ := setupCherryPickRepo(t, "cp-unknown-target")
 	client := stubArgus(t, src, wt)
 	_, err := CherryPick(context.Background(), CherryPickInput{
@@ -158,6 +165,7 @@ func TestCherryPick_RefusesUnknownTargetBranch(t *testing.T) {
 }
 
 func TestCherryPick_RefusesUnresolvableCommit(t *testing.T) {
+	t.Parallel()
 	src, wt, _, _, hotfix := setupCherryPickRepo(t, "cp-unresolvable")
 	client := stubArgus(t, src, wt)
 	_, err := CherryPick(context.Background(), CherryPickInput{
@@ -169,6 +177,7 @@ func TestCherryPick_RefusesUnresolvableCommit(t *testing.T) {
 }
 
 func TestCherryPick_AbortsOnConflict(t *testing.T) {
+	t.Parallel()
 	src, wt, _, _, hotfix := setupCherryPickRepo(t, "cp-conflict")
 	g := gitRunner(t)
 	client := stubArgus(t, src, wt)
@@ -215,6 +224,7 @@ func TestCherryPick_AbortsOnConflict(t *testing.T) {
 }
 
 func TestCherryPick_RefusesUnknownTask(t *testing.T) {
+	t.Parallel()
 	client := stubArgusTaskNotFound(t)
 	_, err := CherryPick(context.Background(), CherryPickInput{
 		Client: client, TaskID: "ghost", Commit: "abc", TargetBranch: "feature/x",
@@ -225,6 +235,7 @@ func TestCherryPick_RefusesUnknownTask(t *testing.T) {
 }
 
 func TestCherryPick_LockSerializesConcurrentCalls(t *testing.T) {
+	t.Parallel()
 	src, wt, _, commit, hotfix := setupCherryPickRepo(t, "cp-lock")
 	client := stubArgus(t, src, wt)
 

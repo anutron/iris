@@ -126,6 +126,7 @@ exit 1
 }
 
 func TestGHPRComment_RefusesUnknownTaskID(t *testing.T) {
+	t.Parallel()
 	client := stubArgusTaskNotFound(t)
 	_, err := GHPRComment(context.Background(), client, "ghost-task", GHPRCommentOptions{PRNumber: 1, Body: "x"})
 	if err == nil {
@@ -137,6 +138,7 @@ func TestGHPRComment_RefusesUnknownTaskID(t *testing.T) {
 }
 
 func TestGHPRComment_RefusesNonAllowlistedRepo(t *testing.T) {
+	t.Parallel()
 	src, wt, _ := setupRepoWithBareAndWorktree(t, "ghcomment-denied")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -168,6 +170,7 @@ func TestGHPRComment_RefusesNonAllowlistedRepo(t *testing.T) {
 }
 
 func TestGHPRComment_RejectsNonPositivePR(t *testing.T) {
+	t.Parallel()
 	client := stubArgusTaskNotFound(t)
 	_, err := GHPRComment(context.Background(), client, "task-x", GHPRCommentOptions{PRNumber: 0, Body: "x"})
 	if err == nil {

@@ -792,6 +792,7 @@ func TestReload_CLICrossUnaffected(t *testing.T) {
 }
 
 func TestJoinValidationErrors(t *testing.T) {
+	t.Parallel()
 	t.Run("empty input", func(t *testing.T) {
 		if got := joinValidationErrors(nil); got != "" {
 			t.Fatalf("expected empty string for nil input, got %q", got)

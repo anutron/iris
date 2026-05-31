@@ -15,6 +15,7 @@ import (
 )
 
 func TestBranchDeleteRemote_HappyPath(t *testing.T) {
+	t.Parallel()
 	src, wt, bare := setupRepoWithBareAndWorktree(t, "bdr-happy")
 	client := stubArgus(t, src, wt)
 
@@ -48,6 +49,7 @@ func TestBranchDeleteRemote_HappyPath(t *testing.T) {
 }
 
 func TestBranchDeleteRemote_RefusesDefaultBranch(t *testing.T) {
+	t.Parallel()
 	src, wt, bare := setupRepoWithBareAndWorktree(t, "bdr-default")
 	client := stubArgus(t, src, wt)
 
@@ -67,6 +69,7 @@ func TestBranchDeleteRemote_RefusesDefaultBranch(t *testing.T) {
 }
 
 func TestBranchDeleteRemote_RefusesEmptyBranch(t *testing.T) {
+	t.Parallel()
 	src, wt, _ := setupRepoWithBareAndWorktree(t, "bdr-empty")
 	client := stubArgus(t, src, wt)
 
@@ -82,6 +85,7 @@ func TestBranchDeleteRemote_RefusesEmptyBranch(t *testing.T) {
 }
 
 func TestBranchDeleteRemote_RefusesArgvFlagSmuggling(t *testing.T) {
+	t.Parallel()
 	src, wt, bare := setupRepoWithBareAndWorktree(t, "bdr-flagsmuggle")
 	client := stubArgus(t, src, wt)
 
@@ -101,6 +105,7 @@ func TestBranchDeleteRemote_RefusesArgvFlagSmuggling(t *testing.T) {
 }
 
 func TestBranchDeleteRemote_RefusesNonExistentBranch(t *testing.T) {
+	t.Parallel()
 	src, wt, _ := setupRepoWithBareAndWorktree(t, "bdr-missing")
 	client := stubArgus(t, src, wt)
 
@@ -121,6 +126,7 @@ func TestBranchDeleteRemote_RefusesNonExistentBranch(t *testing.T) {
 // receive.denyDeletes=true on the bare repo — ls-remote still succeeds so
 // the pre-check passes, but the deletion push is rejected.
 func TestBranchDeleteRemote_NonZeroGitExitReturnsError(t *testing.T) {
+	t.Parallel()
 	src, wt, bare := setupRepoWithBareAndWorktree(t, "bdr-gitfail")
 	client := stubArgus(t, src, wt)
 
@@ -143,6 +149,7 @@ func TestBranchDeleteRemote_NonZeroGitExitReturnsError(t *testing.T) {
 }
 
 func TestBranchDeleteRemote_RefusesUnknownTaskID(t *testing.T) {
+	t.Parallel()
 	client := stubArgusTaskNotFound(t)
 	_, err := BranchDeleteRemote(context.Background(), BranchDeleteRemoteInput{
 		Client: client, TaskID: "ghost-task", Branch: "argus/something",
@@ -156,6 +163,7 @@ func TestBranchDeleteRemote_RefusesUnknownTaskID(t *testing.T) {
 }
 
 func TestBranchDeleteRemote_RefusesNonAllowlistedRepo(t *testing.T) {
+	t.Parallel()
 	src, wt, _ := setupRepoWithBareAndWorktree(t, "bdr-denied")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -193,6 +201,7 @@ func TestBranchDeleteRemote_RefusesNonAllowlistedRepo(t *testing.T) {
 // branch so both can succeed; the test passes only when -race sees no
 // concurrent git invocations stomping on the index lock.
 func TestBranchDeleteRemote_LockSerializesCalls(t *testing.T) {
+	t.Parallel()
 	src, wt, bare := setupRepoWithBareAndWorktree(t, "bdr-lock-a")
 	g := gitRunner(t)
 	g(src, "branch", "argus/bdr-lock-b")

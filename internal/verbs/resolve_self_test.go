@@ -114,6 +114,7 @@ func TestResolveSelf_NoGitDirReturnsError(t *testing.T) {
 }
 
 func TestResolveTarget_BothInputsAmbiguous(t *testing.T) {
+	t.Parallel()
 	_, err := ResolveTarget(context.Background(), nil, "tid", "/path")
 	if err == nil {
 		t.Fatal("expected ambiguous error")
@@ -144,6 +145,7 @@ func TestResolveTarget_NoInputsResolvesSelf(t *testing.T) {
 }
 
 func TestResolvePath_AllowlistEnforced(t *testing.T) {
+	t.Parallel()
 	src, _ := setupRepoWithWorktree(t, "rp-allow")
 
 	// Stub argus with the wrong allowlist.
@@ -170,6 +172,7 @@ func TestResolvePath_AllowlistEnforced(t *testing.T) {
 }
 
 func TestResolvePath_HappyPath(t *testing.T) {
+	t.Parallel()
 	src, _ := setupRepoWithWorktree(t, "rp-happy")
 	canon, _ := filepath.EvalSymlinks(src)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -195,6 +198,7 @@ func TestResolvePath_HappyPath(t *testing.T) {
 }
 
 func TestEqualSourceRepos(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	canon, _ := filepath.EvalSymlinks(dir)
 	if !EqualSourceRepos(dir, canon) {

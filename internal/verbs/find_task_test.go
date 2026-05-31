@@ -32,6 +32,7 @@ func stubArgusTaskList(t *testing.T, tasks []map[string]any) *argus.Client {
 }
 
 func TestFindTaskBySourceRepo_Match(t *testing.T) {
+	t.Parallel()
 	src := setupRepoOnly(t)
 	canon, _ := filepath.EvalSymlinks(src)
 	client := stubArgusTaskList(t, []map[string]any{
@@ -51,6 +52,7 @@ func TestFindTaskBySourceRepo_Match(t *testing.T) {
 }
 
 func TestFindTaskBySourceRepo_NoMatchReturnsNilNil(t *testing.T) {
+	t.Parallel()
 	src := setupRepoOnly(t)
 	client := stubArgusTaskList(t, []map[string]any{
 		{"id": "elsewhere", "worktree_path": "/nope/elsewhere"},
@@ -65,6 +67,7 @@ func TestFindTaskBySourceRepo_NoMatchReturnsNilNil(t *testing.T) {
 }
 
 func TestFindTaskBySourceRepo_EmptyList(t *testing.T) {
+	t.Parallel()
 	src := setupRepoOnly(t)
 	client := stubArgusTaskList(t, []map[string]any{})
 	got, err := FindTaskBySourceRepo(context.Background(), client, src)
@@ -77,6 +80,7 @@ func TestFindTaskBySourceRepo_EmptyList(t *testing.T) {
 }
 
 func TestFindTaskBySourceRepo_ArgusError(t *testing.T) {
+	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "boom", http.StatusInternalServerError)
 	}))
@@ -92,6 +96,7 @@ func TestFindTaskBySourceRepo_ArgusError(t *testing.T) {
 }
 
 func TestFindTaskBySourceRepo_NilClient(t *testing.T) {
+	t.Parallel()
 	got, err := FindTaskBySourceRepo(context.Background(), nil, "/some/path")
 	if err != nil {
 		t.Fatalf("expected no error for nil client, got %v", err)
@@ -102,6 +107,7 @@ func TestFindTaskBySourceRepo_NilClient(t *testing.T) {
 }
 
 func TestFindTaskBySourceRepo_SkipsEmptyWorktreePath(t *testing.T) {
+	t.Parallel()
 	src := setupRepoOnly(t)
 	canon, _ := filepath.EvalSymlinks(src)
 	client := stubArgusTaskList(t, []map[string]any{

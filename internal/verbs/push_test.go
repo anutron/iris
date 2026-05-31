@@ -52,6 +52,7 @@ func setupRepoWithBareAndWorktree(t *testing.T, slug string) (sourceRepo, worktr
 }
 
 func TestPush_HappyPath(t *testing.T) {
+	t.Parallel()
 	src, wt, bare := setupRepoWithBareAndWorktree(t, "push-happy")
 	client := stubArgus(t, src, wt)
 
@@ -76,6 +77,7 @@ func TestPush_HappyPath(t *testing.T) {
 }
 
 func TestPush_RefusesDefaultBranch(t *testing.T) {
+	t.Parallel()
 	tmp := t.TempDir()
 	bare := filepath.Join(tmp, "origin.git")
 	src := filepath.Join(tmp, "src")
@@ -108,6 +110,7 @@ func TestPush_RefusesDefaultBranch(t *testing.T) {
 }
 
 func TestPush_RefusesUnknownTaskID(t *testing.T) {
+	t.Parallel()
 	client := stubArgusTaskNotFound(t)
 	_, err := Push(context.Background(), client, "ghost-task", PushOptions{})
 	if err == nil {
@@ -119,6 +122,7 @@ func TestPush_RefusesUnknownTaskID(t *testing.T) {
 }
 
 func TestPush_ForceWithLeaseSucceeds(t *testing.T) {
+	t.Parallel()
 	src, wt, bare := setupRepoWithBareAndWorktree(t, "push-lease")
 	client := stubArgus(t, src, wt)
 
@@ -148,6 +152,7 @@ func TestPush_ForceWithLeaseSucceeds(t *testing.T) {
 }
 
 func TestPush_NonFastForwardErrorsWithoutForce(t *testing.T) {
+	t.Parallel()
 	src, wt, bare := setupRepoWithBareAndWorktree(t, "push-nonff")
 	client := stubArgus(t, src, wt)
 
@@ -195,6 +200,7 @@ func TestPush_NonFastForwardErrorsWithoutForce(t *testing.T) {
 // validates the lock map; this is a coverage check that Push compiles
 // against it.
 func TestPush_AllowlistRejection(t *testing.T) {
+	t.Parallel()
 	src, wt, _ := setupRepoWithBareAndWorktree(t, "push-denied")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

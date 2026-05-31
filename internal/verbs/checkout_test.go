@@ -12,6 +12,7 @@ import (
 )
 
 func TestCheckout_HappyPath(t *testing.T) {
+	t.Parallel()
 	src, wt, _ := setupRepoWithBareAndWorktree(t, "co-happy")
 	g := gitRunner(t)
 	g(src, "branch", "feature/x", "origin/main")
@@ -44,6 +45,7 @@ func TestCheckout_HappyPath(t *testing.T) {
 }
 
 func TestCheckout_RefusesEmptyBranch(t *testing.T) {
+	t.Parallel()
 	src, wt, _ := setupRepoWithBareAndWorktree(t, "co-empty")
 	client := stubArgus(t, src, wt)
 	_, err := Checkout(context.Background(), CheckoutInput{
@@ -55,6 +57,7 @@ func TestCheckout_RefusesEmptyBranch(t *testing.T) {
 }
 
 func TestCheckout_RefusesLeadingDashBranch(t *testing.T) {
+	t.Parallel()
 	src, wt, _ := setupRepoWithBareAndWorktree(t, "co-dash")
 	client := stubArgus(t, src, wt)
 	_, err := Checkout(context.Background(), CheckoutInput{
@@ -66,6 +69,7 @@ func TestCheckout_RefusesLeadingDashBranch(t *testing.T) {
 }
 
 func TestCheckout_RefusesUnknownBranch(t *testing.T) {
+	t.Parallel()
 	src, wt, _ := setupRepoWithBareAndWorktree(t, "co-unknown")
 	client := stubArgus(t, src, wt)
 	priorBranch := currentBranchOrFail(t, src)
@@ -81,6 +85,7 @@ func TestCheckout_RefusesUnknownBranch(t *testing.T) {
 }
 
 func TestCheckout_PropagatesDirtyTreeRefusal(t *testing.T) {
+	t.Parallel()
 	src, wt, _ := setupRepoWithBareAndWorktree(t, "co-dirty")
 	g := gitRunner(t)
 	g(src, "branch", "other", "origin/main")
@@ -121,6 +126,7 @@ func TestCheckout_PropagatesDirtyTreeRefusal(t *testing.T) {
 }
 
 func TestCheckout_ForceDiscardsUncommittedChanges(t *testing.T) {
+	t.Parallel()
 	src, wt, _ := setupRepoWithBareAndWorktree(t, "co-force-dirty")
 	g := gitRunner(t)
 	if err := os.WriteFile(filepath.Join(src, "tracked.txt"), []byte("v1\n"), 0o644); err != nil {
@@ -164,6 +170,7 @@ func TestCheckout_ForceDiscardsUncommittedChanges(t *testing.T) {
 }
 
 func TestCheckout_ForceRecoversFromInProgressMerge(t *testing.T) {
+	t.Parallel()
 	src, wt, _ := setupRepoWithBareAndWorktree(t, "co-force-merge")
 	g := gitRunner(t)
 	// Build two divergent branches that conflict on the same file.
@@ -214,6 +221,7 @@ func TestCheckout_ForceRecoversFromInProgressMerge(t *testing.T) {
 }
 
 func TestCheckout_ForceRecoversFromInProgressCherryPick(t *testing.T) {
+	t.Parallel()
 	src, wt, _ := setupRepoWithBareAndWorktree(t, "co-force-cp")
 	g := gitRunner(t)
 	// Two branches that conflict on the same file.
@@ -258,6 +266,7 @@ func TestCheckout_ForceRecoversFromInProgressCherryPick(t *testing.T) {
 }
 
 func TestCheckout_RefusesInProgressOpWhenForceFalse(t *testing.T) {
+	t.Parallel()
 	src, wt, _ := setupRepoWithBareAndWorktree(t, "co-refuses-inprogress")
 	g := gitRunner(t)
 	if err := os.WriteFile(filepath.Join(src, "conflict.txt"), []byte("base\n"), 0o644); err != nil {
@@ -294,6 +303,7 @@ func TestCheckout_RefusesInProgressOpWhenForceFalse(t *testing.T) {
 }
 
 func TestCheckout_RefusesUnknownTask(t *testing.T) {
+	t.Parallel()
 	client := stubArgusTaskNotFound(t)
 	_, err := Checkout(context.Background(), CheckoutInput{
 		Client: client, TaskID: "ghost", Branch: "feature/x",
@@ -304,6 +314,7 @@ func TestCheckout_RefusesUnknownTask(t *testing.T) {
 }
 
 func TestCheckout_LockSerializesConcurrentCalls(t *testing.T) {
+	t.Parallel()
 	src, wt, _ := setupRepoWithBareAndWorktree(t, "co-lock")
 	g := gitRunner(t)
 	g(src, "branch", "feature/x", "origin/main")

@@ -16,6 +16,7 @@ import (
 )
 
 func TestTag_HappyPathCreatesAndPushes(t *testing.T) {
+	t.Parallel()
 	src, wt, bare := setupRepoWithBareAndWorktree(t, "tag-happy")
 	client := stubArgus(t, src, wt)
 
@@ -64,6 +65,7 @@ func TestTag_HappyPathCreatesAndPushes(t *testing.T) {
 }
 
 func TestTag_DefaultMessageWhenEmpty(t *testing.T) {
+	t.Parallel()
 	src, wt, _ := setupRepoWithBareAndWorktree(t, "tag-default-msg")
 	client := stubArgus(t, src, wt)
 
@@ -86,6 +88,7 @@ func TestTag_DefaultMessageWhenEmpty(t *testing.T) {
 }
 
 func TestTag_RefusesExistingLocalTag(t *testing.T) {
+	t.Parallel()
 	src, wt, _ := setupRepoWithBareAndWorktree(t, "tag-local-exists")
 	client := stubArgus(t, src, wt)
 
@@ -104,6 +107,7 @@ func TestTag_RefusesExistingLocalTag(t *testing.T) {
 }
 
 func TestTag_RefusesExistingRemoteTag(t *testing.T) {
+	t.Parallel()
 	src, wt, bare := setupRepoWithBareAndWorktree(t, "tag-remote-exists")
 	client := stubArgus(t, src, wt)
 
@@ -135,6 +139,7 @@ func TestTag_RefusesExistingRemoteTag(t *testing.T) {
 }
 
 func TestTag_RefusesArgvFlagSmuggling(t *testing.T) {
+	t.Parallel()
 	src, wt, _ := setupRepoWithBareAndWorktree(t, "tag-flagsmuggle")
 	client := stubArgus(t, src, wt)
 
@@ -150,6 +155,7 @@ func TestTag_RefusesArgvFlagSmuggling(t *testing.T) {
 }
 
 func TestTag_RefusesEmptyTag(t *testing.T) {
+	t.Parallel()
 	src, wt, _ := setupRepoWithBareAndWorktree(t, "tag-empty")
 	client := stubArgus(t, src, wt)
 
@@ -165,6 +171,7 @@ func TestTag_RefusesEmptyTag(t *testing.T) {
 }
 
 func TestTag_NonZeroGitExitReturnsError(t *testing.T) {
+	t.Parallel()
 	src, wt, bare := setupRepoWithBareAndWorktree(t, "tag-broken")
 	client := stubArgus(t, src, wt)
 
@@ -182,6 +189,7 @@ func TestTag_NonZeroGitExitReturnsError(t *testing.T) {
 }
 
 func TestTag_RefusesUnknownTaskID(t *testing.T) {
+	t.Parallel()
 	client := stubArgusTaskNotFound(t)
 	_, err := Tag(context.Background(), TagInput{
 		Client: client, TaskID: "ghost-task", Tag: "v1.0.0",
@@ -195,6 +203,7 @@ func TestTag_RefusesUnknownTaskID(t *testing.T) {
 }
 
 func TestTag_RefusesNonAllowlistedRepo(t *testing.T) {
+	t.Parallel()
 	src, wt, _ := setupRepoWithBareAndWorktree(t, "tag-denied")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -228,6 +237,7 @@ func TestTag_RefusesNonAllowlistedRepo(t *testing.T) {
 }
 
 func TestTag_LockSerializesCalls(t *testing.T) {
+	t.Parallel()
 	src, wt, bare := setupRepoWithBareAndWorktree(t, "tag-lock")
 	canon, _ := filepath.EvalSymlinks(src)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

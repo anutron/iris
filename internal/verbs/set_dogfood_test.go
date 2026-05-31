@@ -256,6 +256,7 @@ func TestSetDogfood_CreatesBranchIfMissing(t *testing.T) {
 }
 
 func TestSetDogfood_RefusesUnknownTask(t *testing.T) {
+	t.Parallel()
 	client := stubArgusTaskNotFound(t)
 	_, err := SetDogfood(context.Background(), client, "ghost", SetDogfoodOpts{
 		Sha:      "abc123",

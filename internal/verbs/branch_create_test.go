@@ -10,6 +10,7 @@ import (
 )
 
 func TestBranchCreate_HappyPath(t *testing.T) {
+	t.Parallel()
 	src, wt, _ := setupRepoWithBareAndWorktree(t, "bc-happy")
 	client := stubArgus(t, src, wt)
 
@@ -44,6 +45,7 @@ func TestBranchCreate_HappyPath(t *testing.T) {
 }
 
 func TestBranchCreate_RefusesEmptyName(t *testing.T) {
+	t.Parallel()
 	src, wt, _ := setupRepoWithBareAndWorktree(t, "bc-empty-name")
 	client := stubArgus(t, src, wt)
 	_, err := BranchCreate(context.Background(), BranchCreateInput{
@@ -58,6 +60,7 @@ func TestBranchCreate_RefusesEmptyName(t *testing.T) {
 }
 
 func TestBranchCreate_RefusesEmptyBaseRef(t *testing.T) {
+	t.Parallel()
 	src, wt, _ := setupRepoWithBareAndWorktree(t, "bc-empty-base")
 	client := stubArgus(t, src, wt)
 	_, err := BranchCreate(context.Background(), BranchCreateInput{
@@ -72,6 +75,7 @@ func TestBranchCreate_RefusesEmptyBaseRef(t *testing.T) {
 }
 
 func TestBranchCreate_RefusesLeadingDashName(t *testing.T) {
+	t.Parallel()
 	src, wt, _ := setupRepoWithBareAndWorktree(t, "bc-dash-name")
 	client := stubArgus(t, src, wt)
 	_, err := BranchCreate(context.Background(), BranchCreateInput{
@@ -86,6 +90,7 @@ func TestBranchCreate_RefusesLeadingDashName(t *testing.T) {
 }
 
 func TestBranchCreate_RefusesLeadingDashBaseRef(t *testing.T) {
+	t.Parallel()
 	src, wt, _ := setupRepoWithBareAndWorktree(t, "bc-dash-base")
 	client := stubArgus(t, src, wt)
 	_, err := BranchCreate(context.Background(), BranchCreateInput{
@@ -100,6 +105,7 @@ func TestBranchCreate_RefusesLeadingDashBaseRef(t *testing.T) {
 }
 
 func TestBranchCreate_RefusesDefaultBranch(t *testing.T) {
+	t.Parallel()
 	src, wt, _ := setupRepoWithBareAndWorktree(t, "bc-default")
 	client := stubArgus(t, src, wt)
 	for _, name := range []string{"main", "master"} {
@@ -116,6 +122,7 @@ func TestBranchCreate_RefusesDefaultBranch(t *testing.T) {
 }
 
 func TestBranchCreate_RefusesInvalidRefName(t *testing.T) {
+	t.Parallel()
 	src, wt, _ := setupRepoWithBareAndWorktree(t, "bc-invalid")
 	client := stubArgus(t, src, wt)
 	_, err := BranchCreate(context.Background(), BranchCreateInput{
@@ -131,6 +138,7 @@ func TestBranchCreate_RefusesInvalidRefName(t *testing.T) {
 }
 
 func TestBranchCreate_RefusesExistingBranch(t *testing.T) {
+	t.Parallel()
 	src, wt, _ := setupRepoWithBareAndWorktree(t, "bc-exists")
 	client := stubArgus(t, src, wt)
 	g := gitRunner(t)
@@ -148,6 +156,7 @@ func TestBranchCreate_RefusesExistingBranch(t *testing.T) {
 }
 
 func TestBranchCreate_RefusesUnresolvableBaseRef(t *testing.T) {
+	t.Parallel()
 	src, wt, _ := setupRepoWithBareAndWorktree(t, "bc-unresolvable")
 	client := stubArgus(t, src, wt)
 	_, err := BranchCreate(context.Background(), BranchCreateInput{
@@ -159,6 +168,7 @@ func TestBranchCreate_RefusesUnresolvableBaseRef(t *testing.T) {
 }
 
 func TestBranchCreate_RefusesUnknownTask(t *testing.T) {
+	t.Parallel()
 	client := stubArgusTaskNotFound(t)
 	_, err := BranchCreate(context.Background(), BranchCreateInput{
 		Client: client, TaskID: "ghost", Name: "feature/x", BaseRef: "origin/main",
@@ -172,6 +182,7 @@ func TestBranchCreate_RefusesUnknownTask(t *testing.T) {
 }
 
 func TestBranchCreate_LockSerializesConcurrentCalls(t *testing.T) {
+	t.Parallel()
 	src, wt, _ := setupRepoWithBareAndWorktree(t, "bc-lock")
 	client := stubArgus(t, src, wt)
 

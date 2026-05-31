@@ -29,6 +29,7 @@ func writeExecScript(t *testing.T, path, body string) {
 }
 
 func TestRunBuild_HappyPathScript(t *testing.T) {
+	t.Parallel()
 	src, wt := setupRepoWithWorktree(t, "build-script-happy")
 	writeExecScript(t, filepath.Join(wt, "script", "iris-build"),
 		"#!/usr/bin/env bash\necho \"built-from-script $1\"\n")
@@ -50,6 +51,7 @@ func TestRunBuild_HappyPathScript(t *testing.T) {
 }
 
 func TestRunBuild_HappyPathMakefile(t *testing.T) {
+	t.Parallel()
 	src, wt := setupRepoWithWorktree(t, "build-make-happy")
 	// Tab-indented recipe is required by make.
 	makefile := "build:\n\t@echo \"built-from-make\"\n"
@@ -74,6 +76,7 @@ func TestRunBuild_HappyPathMakefile(t *testing.T) {
 }
 
 func TestRunBuild_NoBuildMechanism(t *testing.T) {
+	t.Parallel()
 	src, wt := setupRepoWithWorktree(t, "build-none")
 	client := stubArgus(t, src, wt)
 
@@ -91,6 +94,7 @@ func TestRunBuild_NoBuildMechanism(t *testing.T) {
 }
 
 func TestRunBuild_NonZeroExit(t *testing.T) {
+	t.Parallel()
 	src, wt := setupRepoWithWorktree(t, "build-fail")
 	writeExecScript(t, filepath.Join(wt, "script", "iris-build"),
 		"#!/usr/bin/env bash\necho \"oops something broke\"\nexit 1\n")
@@ -127,6 +131,7 @@ func TestRunBuild_NonZeroExit(t *testing.T) {
 }
 
 func TestRunBuild_TargetArgument(t *testing.T) {
+	t.Parallel()
 	src, wt := setupRepoWithWorktree(t, "build-target")
 	writeExecScript(t, filepath.Join(wt, "script", "iris-build"),
 		"#!/usr/bin/env bash\necho \"target-was $1\"\n")
@@ -154,6 +159,7 @@ func TestRunBuild_TargetArgument(t *testing.T) {
 // setup overhead (Resolve does git + HTTP calls that can add 100-300ms
 // on a loaded machine), unlike a fixed wall-time threshold.
 func TestRunBuild_ConcurrentDifferentWorktreesParallel(t *testing.T) {
+	t.Parallel()
 	tmp := t.TempDir()
 	bare := filepath.Join(tmp, "origin.git")
 	src := filepath.Join(tmp, "src")

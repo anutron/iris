@@ -43,6 +43,7 @@ func updateOriginBranch(t *testing.T, bare, branch string) string {
 }
 
 func TestFetch_HappyPathReturnsUpdatedRefs(t *testing.T) {
+	t.Parallel()
 	src, wt, bare := setupRepoWithBareAndWorktree(t, "fetch-happy")
 	client := stubArgus(t, src, wt)
 
@@ -77,6 +78,7 @@ func TestFetch_HappyPathReturnsUpdatedRefs(t *testing.T) {
 }
 
 func TestFetch_UpToDateReturnsEmptyUpdates(t *testing.T) {
+	t.Parallel()
 	src, wt, _ := setupRepoWithBareAndWorktree(t, "fetch-uptodate")
 	client := stubArgus(t, src, wt)
 
@@ -93,6 +95,7 @@ func TestFetch_UpToDateReturnsEmptyUpdates(t *testing.T) {
 }
 
 func TestFetch_NonZeroGitExitReturnsError(t *testing.T) {
+	t.Parallel()
 	src, wt, bare := setupRepoWithBareAndWorktree(t, "fetch-broken")
 	client := stubArgus(t, src, wt)
 
@@ -109,6 +112,7 @@ func TestFetch_NonZeroGitExitReturnsError(t *testing.T) {
 }
 
 func TestFetch_RefusesUnknownTaskID(t *testing.T) {
+	t.Parallel()
 	client := stubArgusTaskNotFound(t)
 	_, err := Fetch(context.Background(), FetchInput{Client: client, TaskID: "ghost-task"})
 	if err == nil {
@@ -120,6 +124,7 @@ func TestFetch_RefusesUnknownTaskID(t *testing.T) {
 }
 
 func TestFetch_RefusesNonAllowlistedRepo(t *testing.T) {
+	t.Parallel()
 	src, wt, _ := setupRepoWithBareAndWorktree(t, "fetch-denied")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -151,6 +156,7 @@ func TestFetch_RefusesNonAllowlistedRepo(t *testing.T) {
 }
 
 func TestFetch_PerSourceRepoLockHeld(t *testing.T) {
+	t.Parallel()
 	src, wt, bare := setupRepoWithBareAndWorktree(t, "fetch-lock")
 	client := stubArgus(t, src, wt)
 

@@ -23,6 +23,7 @@ func sampleManifest() *DogfoodManifest {
 }
 
 func TestDogfoodManifestRoundTrip(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	in := sampleManifest()
 
@@ -55,6 +56,7 @@ func TestDogfoodManifestRoundTrip(t *testing.T) {
 }
 
 func TestDogfoodManifestStampsRecordedAt(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	in := sampleManifest()
 	in.RecordedAt = "" // explicitly empty; WriteManifest must stamp it
@@ -88,6 +90,7 @@ func TestDogfoodManifestStampsRecordedAt(t *testing.T) {
 }
 
 func TestDogfoodManifestEmptyLayeredSerializesAsArray(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	in := &DogfoodManifest{
 		Base:    ManifestBase{Ref: "main", SHA: "abc123"},
@@ -122,6 +125,7 @@ func TestDogfoodManifestEmptyLayeredSerializesAsArray(t *testing.T) {
 }
 
 func TestDogfoodManifestReadAbsentReturnsNilNil(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir() // no manifest written
 	got, err := ReadManifest(dir)
 	if err != nil {
@@ -133,6 +137,7 @@ func TestDogfoodManifestReadAbsentReturnsNilNil(t *testing.T) {
 }
 
 func TestDogfoodManifestReadMalformedReturnsError(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, DogfoodManifestFilename)
 	if err := os.WriteFile(path, []byte("{not valid json"), 0o600); err != nil {
@@ -152,6 +157,7 @@ func TestDogfoodManifestReadMalformedReturnsError(t *testing.T) {
 // key at all — absent, not null, not present-but-empty. This is the
 // omitempty-on-pointer contract: a nil *DogfoodManifest marshals as missing.
 func TestDogfoodManifestPreviousManifestAbsentOnFirstWrite(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	in := sampleManifest()
 	if err := WriteManifest(dir, in); err != nil {
@@ -185,6 +191,7 @@ func TestDogfoodManifestPreviousManifestAbsentOnFirstWrite(t *testing.T) {
 // the second write of a manifest embeds the first manifest's full contents
 // under previous_manifest.
 func TestDogfoodManifestPreviousManifestEmbedsPriorOnSecondWrite(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 
 	// First manifest: A.
@@ -260,6 +267,7 @@ func TestDogfoodManifestPreviousManifestEmbedsPriorOnSecondWrite(t *testing.T) {
 // on-disk manifest is C with previous_manifest=B, and B's own
 // previous_manifest is nil (not nested A).
 func TestDogfoodManifestPreviousManifestDepthBoundedAtOne(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 
 	a := &DogfoodManifest{
@@ -315,6 +323,7 @@ func TestDogfoodManifestPreviousManifestDepthBoundedAtOne(t *testing.T) {
 }
 
 func TestDogfoodManifestNoTempFileRemains(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	if err := WriteManifest(dir, sampleManifest()); err != nil {
 		t.Fatalf("WriteManifest: %v", err)

@@ -148,6 +148,7 @@ exit 1
 }
 
 func TestGHPRCreate_RefusesUnknownTaskID(t *testing.T) {
+	t.Parallel()
 	client := stubArgusTaskNotFound(t)
 	_, err := GHPRCreate(context.Background(), client, "ghost-task", GHPRCreateOptions{Title: "t"})
 	if err == nil {
@@ -159,6 +160,7 @@ func TestGHPRCreate_RefusesUnknownTaskID(t *testing.T) {
 }
 
 func TestGHPRCreate_TitleRequired(t *testing.T) {
+	t.Parallel()
 	client := stubArgusTaskNotFound(t) // never reached
 	_, err := GHPRCreate(context.Background(), client, "task-x", GHPRCreateOptions{})
 	if err == nil {
