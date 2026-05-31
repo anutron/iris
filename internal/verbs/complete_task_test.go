@@ -111,6 +111,7 @@ func (cs *completeTaskStub) handle(w http.ResponseWriter, r *http.Request) {
 }
 
 func TestCompleteTask_HappyFullPath(t *testing.T) {
+	t.Parallel()
 	src, wt, bare := setupRepoWithBareAndWorktree(t, "complete-happy")
 	stub := newCompleteTaskStub(t, src)
 	stub.registerTask("task-complete", wt)
@@ -151,6 +152,7 @@ func TestCompleteTask_HappyFullPath(t *testing.T) {
 }
 
 func TestCompleteTask_AlreadyCompleteIsIdempotent(t *testing.T) {
+	t.Parallel()
 	src, wt, _ := setupRepoWithBareAndWorktree(t, "complete-already")
 	stub := newCompleteTaskStub(t, src)
 	stub.registerTask("task-done", wt)
@@ -167,6 +169,7 @@ func TestCompleteTask_AlreadyCompleteIsIdempotent(t *testing.T) {
 }
 
 func TestCompleteTask_PartialFailureReturnsCheckpoints(t *testing.T) {
+	t.Parallel()
 	src, wt, _ := setupRepoWithBareAndWorktree(t, "complete-partial")
 	stub := newCompleteTaskStub(t, src)
 	stub.registerTask("task-partial", wt)
@@ -190,6 +193,7 @@ func TestCompleteTask_PartialFailureReturnsCheckpoints(t *testing.T) {
 }
 
 func TestCompleteTask_ResumeAfterPartialSucceeds(t *testing.T) {
+	t.Parallel()
 	src, wt, _ := setupRepoWithBareAndWorktree(t, "complete-resume")
 	stub := newCompleteTaskStub(t, src)
 	stub.registerTask("task-resume", wt)
@@ -215,6 +219,7 @@ func TestCompleteTask_ResumeAfterPartialSucceeds(t *testing.T) {
 }
 
 func TestCompleteTask_ArchiveFailureReturnsSuccessWithError(t *testing.T) {
+	t.Parallel()
 	src, wt, _ := setupRepoWithBareAndWorktree(t, "complete-arch")
 	stub := newCompleteTaskStub(t, src)
 	stub.registerTask("task-arch", wt)
@@ -243,6 +248,7 @@ func TestCompleteTask_ArchiveFailureReturnsSuccessWithError(t *testing.T) {
 }
 
 func TestCompleteTask_RejectsInvalidMergeStrategy(t *testing.T) {
+	t.Parallel()
 	src, wt, _ := setupRepoWithBareAndWorktree(t, "complete-bad-strategy")
 	stub := newCompleteTaskStub(t, src)
 	stub.registerTask("task-bad", wt)

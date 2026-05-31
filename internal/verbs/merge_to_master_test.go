@@ -127,6 +127,7 @@ func setupRepoWithWorktree(t *testing.T, slug string) (sourceRepo, worktreePath 
 }
 
 func TestMergeToMaster_RefusesNonArgusBranch(t *testing.T) {
+	t.Parallel()
 	tmp := t.TempDir()
 	bare := filepath.Join(tmp, "origin.git")
 	src := filepath.Join(tmp, "src")
@@ -158,6 +159,7 @@ func TestMergeToMaster_RefusesNonArgusBranch(t *testing.T) {
 }
 
 func TestMergeToMaster_HappyPath(t *testing.T) {
+	t.Parallel()
 	src, wt := setupRepoWithWorktree(t, "happy-slug")
 	client := stubArgus(t, src, wt)
 
@@ -188,6 +190,7 @@ func TestMergeToMaster_HappyPath(t *testing.T) {
 }
 
 func TestMergeToMaster_ConflictAborts(t *testing.T) {
+	t.Parallel()
 	tmp := t.TempDir()
 	bare := filepath.Join(tmp, "origin.git")
 	src := filepath.Join(tmp, "src")
@@ -239,6 +242,7 @@ func TestMergeToMaster_ConflictAborts(t *testing.T) {
 // Setup: src is on a side branch; the worktree is on main. A misconfigured
 // argus task pointing at main itself must be rejected.
 func TestMergeToMaster_RefusesDefaultBranchIntoItself(t *testing.T) {
+	t.Parallel()
 	tmp := t.TempDir()
 	bare := filepath.Join(tmp, "origin.git")
 	src := filepath.Join(tmp, "src")
@@ -272,6 +276,7 @@ func TestMergeToMaster_RefusesDefaultBranchIntoItself(t *testing.T) {
 
 // Delta scenario: "`no_ff=false` allows fast-forward".
 func TestMergeToMaster_FastForwardWhenNoFFFalse(t *testing.T) {
+	t.Parallel()
 	src, wt := setupRepoWithWorktree(t, "ff-slug")
 	client := stubArgus(t, src, wt)
 
@@ -293,6 +298,7 @@ func TestMergeToMaster_FastForwardWhenNoFFFalse(t *testing.T) {
 
 // Delta scenario: "Custom merge message".
 func TestMergeToMaster_CustomMessage(t *testing.T) {
+	t.Parallel()
 	src, wt := setupRepoWithWorktree(t, "msg-slug")
 	client := stubArgus(t, src, wt)
 
@@ -315,6 +321,7 @@ func TestMergeToMaster_CustomMessage(t *testing.T) {
 // "no mutation" contract is preserved by checking the client never reaches
 // the git layer (a 404 from stubArgusTaskNotFound is enough).
 func TestMergeToMaster_RefusesUnknownTaskID(t *testing.T) {
+	t.Parallel()
 	client := stubArgusTaskNotFound(t)
 	_, err := MergeToMaster(context.Background(), client, "ghost-task", MergeOptions{NoFF: true})
 	if err == nil {
@@ -327,6 +334,7 @@ func TestMergeToMaster_RefusesUnknownTaskID(t *testing.T) {
 
 // Host-bridge scenario: "Verb refuses a source repo outside the project allowlist."
 func TestMergeToMaster_RefusesNonAllowlistedRepo(t *testing.T) {
+	t.Parallel()
 	src, wt := setupRepoWithWorktree(t, "denied-slug")
 	// Stub argus knows about a different project, NOT src.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -375,6 +383,7 @@ func TestMergeToMaster_RefusesNonAllowlistedRepo(t *testing.T) {
 // BOTH sides; this test verifies the positive case where argus's stored
 // path is the symlinked form and the worktree resolves to the real form.
 func TestMergeToMaster_AllowlistMatchesNonCanonicalArgusPath(t *testing.T) {
+	t.Parallel()
 	src, wt := setupRepoWithWorktree(t, "canon-slug")
 
 	// Build a non-canonical path: prefix /var to the stripped /private/var.
@@ -425,6 +434,7 @@ func TestMergeToMaster_AllowlistMatchesNonCanonicalArgusPath(t *testing.T) {
 // (real merge variant). The dry-run variant is covered by the dry-run
 // happy-path test below.
 func TestMergeToMaster_PostconditionsOnRealMerge(t *testing.T) {
+	t.Parallel()
 	src, wt := setupRepoWithWorktree(t, "postcond-slug")
 	client := stubArgus(t, src, wt)
 
@@ -448,6 +458,7 @@ func TestMergeToMaster_PostconditionsOnRealMerge(t *testing.T) {
 
 // Delta scenario: "Dry-run previews a clean merge."
 func TestMergeToMaster_DryRunCleanPreview(t *testing.T) {
+	t.Parallel()
 	tmp := t.TempDir()
 	bare := filepath.Join(tmp, "origin.git")
 	src := filepath.Join(tmp, "src")
@@ -526,6 +537,7 @@ func TestMergeToMaster_DryRunCleanPreview(t *testing.T) {
 
 // Delta scenario: "Dry-run previews a conflicted merge."
 func TestMergeToMaster_DryRunConflictPreview(t *testing.T) {
+	t.Parallel()
 	tmp := t.TempDir()
 	bare := filepath.Join(tmp, "origin.git")
 	src := filepath.Join(tmp, "src")
@@ -583,6 +595,7 @@ func TestMergeToMaster_DryRunConflictPreview(t *testing.T) {
 
 // Delta scenario: "Dry-run skips post_merge hook."
 func TestMergeToMaster_DryRunSkipsPostMerge(t *testing.T) {
+	t.Parallel()
 	src, wt := setupRepoWithWorktree(t, "dry-no-hook")
 	// Place a [post_merge] block in .iris.toml. A real merge would run it
 	// and create marker.txt; the dry-run path must NOT execute it.
@@ -606,6 +619,7 @@ func TestMergeToMaster_DryRunSkipsPostMerge(t *testing.T) {
 // Delta scenario: "post_merge hook runs after successful merge" and
 // "post_merge env vars carry merge context."
 func TestMergeToMaster_PostMergeHookRuns(t *testing.T) {
+	t.Parallel()
 	src, wt := setupRepoWithWorktree(t, "hook-happy")
 	envDump := filepath.Join(t.TempDir(), "env.txt")
 	writeIrisTomlPostMerge(t, src, []string{"sh", "-c",
@@ -657,6 +671,7 @@ func TestMergeToMaster_PostMergeHookRuns(t *testing.T) {
 
 // Delta scenario: "post_merge failure does not roll back the merge."
 func TestMergeToMaster_PostMergeNonZeroDoesNotRollback(t *testing.T) {
+	t.Parallel()
 	src, wt := setupRepoWithWorktree(t, "hook-fail")
 	writeIrisTomlPostMerge(t, src, []string{"sh", "-c", "echo oops >&2; exit 7"})
 
@@ -690,6 +705,7 @@ func TestMergeToMaster_PostMergeNonZeroDoesNotRollback(t *testing.T) {
 
 // Delta scenario: "post_merge timeout terminates the hook."
 func TestMergeToMaster_PostMergeTimeout(t *testing.T) {
+	t.Parallel()
 	src, wt := setupRepoWithWorktree(t, "hook-timeout")
 	writeIrisTomlPostMergeWithTimeout(t, src, []string{"sh", "-c", "sleep 5"}, 1)
 
@@ -712,6 +728,7 @@ func TestMergeToMaster_PostMergeTimeout(t *testing.T) {
 
 // Delta scenario: "post_merge respects working_directory."
 func TestMergeToMaster_PostMergeWorkingDirectory(t *testing.T) {
+	t.Parallel()
 	src, wt := setupRepoWithWorktree(t, "hook-wd")
 	// Create a subdir inside the source repo; the hook will pwd into it.
 	subdir := filepath.Join(src, "subdir")
@@ -737,6 +754,7 @@ func TestMergeToMaster_PostMergeWorkingDirectory(t *testing.T) {
 
 // Delta scenario: "Missing .iris.toml does not block merge."
 func TestMergeToMaster_MissingIrisTomlSilentlySkipsPostMerge(t *testing.T) {
+	t.Parallel()
 	src, wt := setupRepoWithWorktree(t, "no-toml")
 	// Intentionally do NOT write .iris.toml.
 	client := stubArgus(t, src, wt)
@@ -822,6 +840,7 @@ func contains(haystack []string, needle string) bool {
 
 // Host-bridge scenario: "Two concurrent merge_to_master calls serialize."
 func TestMergeToMaster_ConcurrentCallsSerialize(t *testing.T) {
+	t.Parallel()
 	// Two argus tasks pointing at the SAME source repo, with two
 	// different argus/<slug> branches checked out as worktrees. Concurrent
 	// MergeToMaster calls must serialize on the per-source-repo mutex.

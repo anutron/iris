@@ -101,6 +101,7 @@ func TestGHPRMerge_InvalidStrategyRejectedBeforeGH(t *testing.T) {
 }
 
 func TestGHPRMerge_RefusesUnknownTaskID(t *testing.T) {
+	t.Parallel()
 	client := stubArgusTaskNotFound(t)
 	_, err := GHPRMerge(context.Background(), client, "ghost-task", GHPRMergeOptions{PRNumber: 1, Strategy: "squash"})
 	if err == nil {
@@ -112,6 +113,7 @@ func TestGHPRMerge_RefusesUnknownTaskID(t *testing.T) {
 }
 
 func TestGHPRMerge_RejectsNonPositivePR(t *testing.T) {
+	t.Parallel()
 	client := stubArgusTaskNotFound(t) // never reached
 	_, err := GHPRMerge(context.Background(), client, "task-x", GHPRMergeOptions{PRNumber: 0, Strategy: "squash"})
 	if err == nil {

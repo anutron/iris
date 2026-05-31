@@ -111,6 +111,7 @@ exit 1
 }
 
 func TestGHPRClose_RefusesUnknownTaskID(t *testing.T) {
+	t.Parallel()
 	client := stubArgusTaskNotFound(t)
 	_, err := GHPRClose(context.Background(), client, "ghost-task", GHPRCloseOptions{PRNumber: 1})
 	if err == nil {
@@ -122,6 +123,7 @@ func TestGHPRClose_RefusesUnknownTaskID(t *testing.T) {
 }
 
 func TestGHPRClose_RefusesNonAllowlistedRepo(t *testing.T) {
+	t.Parallel()
 	src, wt, _ := setupRepoWithBareAndWorktree(t, "ghclose-denied")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -153,6 +155,7 @@ func TestGHPRClose_RefusesNonAllowlistedRepo(t *testing.T) {
 }
 
 func TestGHPRClose_RejectsNonPositivePR(t *testing.T) {
+	t.Parallel()
 	client := stubArgusTaskNotFound(t)
 	_, err := GHPRClose(context.Background(), client, "task-x", GHPRCloseOptions{PRNumber: 0})
 	if err == nil {

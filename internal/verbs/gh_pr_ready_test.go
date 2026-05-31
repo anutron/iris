@@ -129,6 +129,7 @@ exit 99
 }
 
 func TestGHPRReady_RefusesUnknownTaskID(t *testing.T) {
+	t.Parallel()
 	client := stubArgusTaskNotFound(t)
 	_, err := GHPRReady(context.Background(), client, "ghost-task", GHPRReadyOptions{PRNumber: 1})
 	if err == nil {
@@ -140,6 +141,7 @@ func TestGHPRReady_RefusesUnknownTaskID(t *testing.T) {
 }
 
 func TestGHPRReady_RefusesNonAllowlistedRepo(t *testing.T) {
+	t.Parallel()
 	src, wt, _ := setupRepoWithBareAndWorktree(t, "ghready-denied")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -171,6 +173,7 @@ func TestGHPRReady_RefusesNonAllowlistedRepo(t *testing.T) {
 }
 
 func TestGHPRReady_RejectsNonPositivePR(t *testing.T) {
+	t.Parallel()
 	client := stubArgusTaskNotFound(t)
 	_, err := GHPRReady(context.Background(), client, "task-x", GHPRReadyOptions{PRNumber: 0})
 	if err == nil {
