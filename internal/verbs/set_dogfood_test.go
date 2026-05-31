@@ -236,6 +236,76 @@ mechanism = "none"
 	}
 }
 
+// TestSetDogfood_BootstrapReadsDogfoodBranchWithoutSharedConfig covers the
+// bootstrap chicken-and-egg: the default branch has NO .iris.toml (it lives on
+// the dogfood SHA), and dogfood_branch is only in the source-root
+// .iris.local.toml. set_dogfood must still resolve dogfood_branch (directly
+// from the local file), point dev at the composed SHA, build it, and restore
+// the default branch.
+func TestSetDogfood_BootstrapReadsDogfoodBranchWithoutSharedConfig(t *testing.T) {
+	setAuditDir(t)
+	src, wt, _ := setupRepoWithBareAndWorktree(t, "sd-bootstrap")
+	g := gitRunner(t)
+
+	// .iris.toml lives ONLY on the dogfood SHA (the worktree branch), not on
+	// the default branch.
+	const devToml = `
+schema_version = 1
+default_branch = "main"
+[build]
+command = ["true"]
+[restart]
+mechanism = "none"
+`
+	if err := os.WriteFile(filepath.Join(wt, ".iris.toml"), []byte(devToml), 0o644); err != nil {
+		t.Fatalf("write dev .iris.toml: %v", err)
+	}
+	g(wt, "add", ".iris.toml")
+	g(wt, "commit", "-m", "dogfood config on the dev SHA")
+	dogfoodSHA := strings.TrimSpace(g(wt, "rev-parse", "HEAD"))
+
+	// dogfood_branch lives ONLY in the gitignored source-root overlay; the
+	// default branch has no .iris.toml at all.
+	if err := os.WriteFile(filepath.Join(src, ".iris.local.toml"), []byte(`dogfood_branch = "dev"`+"\n"), 0o644); err != nil {
+		t.Fatalf("write .iris.local.toml: %v", err)
+	}
+
+	client := stubArgus(t, src, wt)
+	result, err := SetDogfood(context.Background(), client, "task-sd", SetDogfoodOpts{
+		Sha:      dogfoodSHA,
+		Manifest: sampleManifest(),
+	})
+	if err != nil {
+		t.Fatalf("SetDogfood should bootstrap from .iris.local.toml with no default-branch .iris.toml: %v", err)
+	}
+	if result.DogfoodBranch != "dev" {
+		t.Fatalf("DogfoodBranch: got %q want dev", result.DogfoodBranch)
+	}
+	if got := revParse(t, src, "refs/heads/dev"); got != dogfoodSHA {
+		t.Fatalf("dev branch: got %q want %q", got, dogfoodSHA)
+	}
+	if b := currentBranchOrFail(t, src); b != "main" {
+		t.Fatalf("source repo left on %q; want it restored to the default branch main", b)
+	}
+}
+
+// TestSetDogfood_BootstrapRefusesWhenDogfoodBranchSetNowhere confirms the
+// refusal still fires when neither the overlay nor .iris.local.toml declares it.
+func TestSetDogfood_BootstrapRefusesWhenDogfoodBranchSetNowhere(t *testing.T) {
+	setAuditDir(t)
+	src, wt, _ := setupRepoWithBareAndWorktree(t, "sd-bootstrap-none")
+	dogfoodSHA := strings.TrimSpace(gitRunner(t)(wt, "rev-parse", "HEAD"))
+	client := stubArgus(t, src, wt)
+
+	_, err := SetDogfood(context.Background(), client, "task-sd", SetDogfoodOpts{
+		Sha:      dogfoodSHA,
+		Manifest: sampleManifest(),
+	})
+	if err == nil || !strings.Contains(err.Error(), "dogfood_branch not configured") {
+		t.Fatalf("expected refusal when dogfood_branch is set nowhere, got: %v", err)
+	}
+}
+
 func TestSetDogfood_RefusesUnreachableSHA(t *testing.T) {
 	src, _, _, _, client := setupDogfoodRepo(t, "sd-unreachable", tomlDogfoodNone)
 	g := gitRunner(t)

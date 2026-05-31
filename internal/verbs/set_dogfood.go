@@ -82,10 +82,22 @@ func SetDogfood(ctx context.Context, client *argus.Client, taskID string, opts S
 	if err != nil {
 		return nil, err
 	}
-	if overlay.Doc == nil || overlay.Doc.DogfoodBranch == "" {
+	dogfoodBranch := ""
+	if overlay.Doc != nil {
+		dogfoodBranch = overlay.Doc.DogfoodBranch
+	}
+	if dogfoodBranch == "" {
+		// Bootstrap: `.iris.toml` may be absent at the source root (it lives on
+		// the dogfood branch we're about to build), in which case LoadOverlay
+		// yields no doc and the local overlay's dogfood_branch is unseen. But
+		// dogfood_branch IS the pointer to that branch, so read it directly
+		// from `.iris.local.toml` — its resolution must not be gated behind
+		// `.iris.toml` existing.
+		dogfoodBranch = config.PeekLocalDogfoodBranch(target.SourceRepo)
+	}
+	if dogfoodBranch == "" {
 		return nil, fmt.Errorf(`dogfood_branch not configured for this repo (add dogfood_branch = "..." to .iris.local.toml)`)
 	}
-	dogfoodBranch := overlay.Doc.DogfoodBranch
 
 	// Surface overlay taxonomy warnings (e.g. a local-tagged field left in
 	// .iris.toml) to the caller.
