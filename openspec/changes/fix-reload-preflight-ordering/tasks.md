@@ -21,10 +21,10 @@
 
 ## 4. Regression coverage + full validation
 
-- [ ] 4.1 Add a synthetic forward-compatible regression test proving the end-to-end ordering: a repo whose post-pull (reload) / worktree (publish) `.iris.toml` carries a field unknown to the running binary deploys successfully in one call, with the unknown field recorded as a warning and the build/restart reached
-- [ ] 4.2 `openspec validate fix-reload-preflight-ordering --strict` green
-- [ ] 4.3 `go test ./...` green and `go vet ./...` clean
-- [ ] 4.4 Update each `tasks.md` checkbox as completed; re-run `openspec validate` after the last edit
+- [x] 4.1 Add a synthetic forward-compatible regression test proving the end-to-end ordering: a repo whose post-pull (reload) / worktree (publish) `.iris.toml` carries a field unknown to the running binary deploys successfully in one call, with the unknown field recorded as a warning and the build/restart reached
+- [x] 4.2 `openspec validate fix-reload-preflight-ordering --strict` green
+- [x] 4.3 `go test ./...` green and `go vet ./...` clean
+- [x] 4.4 Update each `tasks.md` checkbox as completed; re-run `openspec validate` after the last edit
 
 ## 5. Land
 
