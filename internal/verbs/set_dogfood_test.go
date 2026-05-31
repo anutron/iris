@@ -31,17 +31,43 @@ mechanism = "none"
 //
 // dogfoodSHA is the worktree branch's HEAD — a commit reachable in the shared
 // object store of the source repo, suitable as a set_dogfood target.
+//
+// The .iris.toml is committed on BOTH the default branch and the worktree
+// (dogfood) branch: set_dogfood now builds the composed SHA by checking out the
+// dogfood branch, so that branch's tree must carry its own .iris.toml (mirroring
+// real dogfooding, where the composed SHA includes the build config).
 func setupDogfoodRepo(t *testing.T, slug, toml string) (src, wt, bare, dogfoodSHA string, client *argus.Client) {
+	t.Helper()
+	return setupDogfoodRepoFiles(t, slug, map[string]string{".iris.toml": toml})
+}
+
+// setupDogfoodRepoFiles is setupDogfoodRepo generalized to an arbitrary set of
+// repo-relative files, each committed on BOTH the default branch and the
+// worktree (dogfood) branch so the composed SHA carries them. Use it when a
+// test needs a build script, a .gitignore (so a gitignored .iris.local.toml
+// keeps the tree clean for reload pre-flight), or other fixture files alongside
+// .iris.toml.
+func setupDogfoodRepoFiles(t *testing.T, slug string, files map[string]string) (src, wt, bare, dogfoodSHA string, client *argus.Client) {
 	t.Helper()
 	setAuditDir(t)
 	src, wt, bare = setupRepoWithBareAndWorktree(t, slug)
 	g := gitRunner(t)
 
-	if err := os.WriteFile(filepath.Join(src, ".iris.toml"), []byte(toml), 0o644); err != nil {
-		t.Fatalf("write .iris.toml: %v", err)
+	writeCommit := func(dir string) {
+		for name, content := range files {
+			p := filepath.Join(dir, name)
+			if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+				t.Fatalf("mkdir for %s: %v", name, err)
+			}
+			if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+				t.Fatalf("write %s: %v", name, err)
+			}
+			g(dir, "add", name)
+		}
+		g(dir, "commit", "-m", "fixture files")
 	}
-	g(src, "add", ".iris.toml")
-	g(src, "commit", "-m", "fixture: .iris.toml")
+	writeCommit(src)
+	writeCommit(wt)
 
 	// The worktree branch HEAD is reachable in the source repo's object store.
 	dogfoodSHA = strings.TrimSpace(g(wt, "rev-parse", "HEAD"))
@@ -120,6 +146,93 @@ mechanism = "none"
 	stateDir, _ := SourceRepoStateDir(canonicalize(src))
 	if m, _ := ReadManifest(stateDir); m != nil {
 		t.Fatal("manifest written on refusal")
+	}
+}
+
+// TestSetDogfood_ResolvesDogfoodBranchFromLocalToml covers Bug 1: dogfood_branch
+// is a local-tagged field, so a value set ONLY in the gitignored .iris.local.toml
+// must be honored (set_dogfood reads the merged overlay, not the shared file
+// alone — matching iris:validate_config).
+func TestSetDogfood_ResolvesDogfoodBranchFromLocalToml(t *testing.T) {
+	const sharedNoDogfood = `
+schema_version = 1
+[build]
+command = ["true"]
+[restart]
+mechanism = "none"
+`
+	src, _, _, sha, client := setupDogfoodRepoFiles(t, "sd-localtoml", map[string]string{
+		".iris.toml": sharedNoDogfood,
+		".gitignore": ".iris.local.toml\n",
+	})
+	// dogfood_branch lives ONLY in the gitignored local overlay. It stays
+	// untracked-but-ignored so the reload pre-flight's clean-tree check passes.
+	if err := os.WriteFile(filepath.Join(src, ".iris.local.toml"), []byte(`dogfood_branch = "dev"`+"\n"), 0o644); err != nil {
+		t.Fatalf("write .iris.local.toml: %v", err)
+	}
+	g := gitRunner(t)
+	g(src, "branch", "dev", "main")
+
+	result, err := SetDogfood(context.Background(), client, "task-sd", SetDogfoodOpts{
+		Sha:      sha,
+		Manifest: sampleManifest(),
+	})
+	if err != nil {
+		t.Fatalf("SetDogfood should honor dogfood_branch from .iris.local.toml: %v", err)
+	}
+	if result.DogfoodBranch != "dev" {
+		t.Fatalf("DogfoodBranch: got %q want dev", result.DogfoodBranch)
+	}
+	if got := revParse(t, src, "refs/heads/dev"); got != sha {
+		t.Fatalf("dev branch: got %q want %q", got, sha)
+	}
+}
+
+// TestSetDogfood_BuildDeploysComposedSHA covers Bug 2: the build must run
+// against the composed dogfood SHA's tree, not the default branch's. The build
+// command records the HEAD it sees into a marker file; that HEAD must be the
+// composed SHA. Afterward the source repo is restored to the default branch.
+func TestSetDogfood_BuildDeploysComposedSHA(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), "built-head")
+	toml := `
+schema_version = 1
+dogfood_branch = "dev"
+[build]
+command = ["sh", "record-build.sh"]
+[build.env]
+BUILD_MARKER = "` + marker + `"
+[restart]
+mechanism = "none"
+`
+	const recordBuild = "#!/bin/sh\ngit rev-parse HEAD > \"$BUILD_MARKER\"\n"
+	src, _, _, sha, client := setupDogfoodRepoFiles(t, "sd-buildsha", map[string]string{
+		".iris.toml":      toml,
+		"record-build.sh": recordBuild,
+	})
+	g := gitRunner(t)
+	g(src, "branch", "dev", "main")
+	mainHead := headSHA(t, src)
+	if sha == mainHead {
+		t.Fatalf("precondition: composed SHA %q must differ from default-branch HEAD", sha)
+	}
+
+	if _, err := SetDogfood(context.Background(), client, "task-sd", SetDogfoodOpts{
+		Sha:      sha,
+		Manifest: sampleManifest(),
+	}); err != nil {
+		t.Fatalf("SetDogfood: %v", err)
+	}
+
+	built, err := os.ReadFile(marker)
+	if err != nil {
+		t.Fatalf("build marker not written (the build did not run?): %v", err)
+	}
+	if builtSHA := strings.TrimSpace(string(built)); builtSHA != sha {
+		t.Fatalf("build ran against %q; want the composed dogfood SHA %q (default HEAD %q)", builtSHA, sha, mainHead)
+	}
+	// The source repo is restored to the default branch after the build.
+	if b := currentBranchOrFail(t, src); b != "main" {
+		t.Fatalf("source repo left on %q; want it restored to main", b)
 	}
 }
 

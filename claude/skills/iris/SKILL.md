@@ -73,13 +73,22 @@ All tools are registered as `mcp__argus__<name>`. Names below omit the prefix. U
 
 ### Self-management (rarely what a task agent wants)
 
-These manage iris-style daemons via a repo's `.iris.toml`. A normal task agent shipping code almost never needs them; they're for operating iris (or another iris-managed daemon) itself.
+These manage iris-style daemons via a repo's `.iris.toml` (and the optional per-developer `.iris.local.toml` overlay). A normal task agent shipping code almost never needs them; they're for operating iris (or another iris-managed daemon) itself.
 
-- **`iris_status`** — for one managed system: resolved `.iris.toml`, current HEAD/branch, default branch, origin SHA, clean-tree state, matching argus task, and last reload/publish outcome. `task_id` and `path` are mutually exclusive; omit both to target iris itself.
+- **`iris_status`** — for one managed system: resolved config, current HEAD/branch, default branch, origin SHA, clean-tree state, matching argus task, and last reload/publish outcome. `task_id` and `path` are mutually exclusive; omit both to target iris itself.
 - **`iris_ls`** — list systems iris has reloaded/published recently (from the audit log).
-- **`iris_validate_config`** — parse + cross-validate a `.iris.toml` with no side effects. Use when authoring a config.
+- **`iris_validate_config`** — parse + cross-validate the resolved `.iris.toml` (+ `.iris.local.toml` overlay) with no side effects. Your edit→validate→fix loop when **authoring a config**.
+- **`iris_set_local_config`** — write/merge `.iris.local.toml` (per-developer fields only, e.g. `dogfood_branch`). Refuses shared fields, validates per-field, writes atomically. Prefer this over hand-editing the local file.
 - **`iris_reload`** — live-upgrade an iris-managed daemon (pull default branch, build, restart per `.iris.toml`). Omit `task_id`/`path` to reload iris itself.
 - **`iris_publish`** — from a worktree, update the source repo's *current* branch to your HEAD, then rebuild+restart via `.iris.toml`. `reset=true` for hard reset; `push=true` also pushes (non-default branch). For the build-deploy-this-checkout loop, not for shipping a PR.
+
+### Authoring `.iris.toml` / `.iris.local.toml`
+
+When you need to **create, edit, or debug an iris config** (onboarding a repo to iris-managed reload, adding a dogfood/ship setup, or fixing a config `iris_validate_config`/`iris_reload` rejects), read **`config-authoring.md`** in this skill directory. It is the full schema reference: every field and which of the two files it belongs in, the `[build]`/`[restart]`/hook blocks, the six restart mechanisms and the `exit_code`-is-self-only rule, the overlay/merge semantics, the validate→fix authoring loop, and worked example configs. The 30-second version:
+
+- `.iris.toml` (checked in, project-wide) declares **how to build + restart** the daemon: `schema_version = 1`, optional `default_branch`, a required `[build] command = [...]` (argv, no shell), and a required `[restart] mechanism = "..."`.
+- `.iris.local.toml` (gitignored, per-developer) overlays **machine-specific** fields only — `dogfood_branch`, `ship_ci_timeout_seconds`. Write it via `iris_set_local_config`, not by hand.
+- Validate every edit with `iris_validate_config`; it has **no side effects** and returns per-field errors with remediation hints.
 
 ## 5. When to use what
 

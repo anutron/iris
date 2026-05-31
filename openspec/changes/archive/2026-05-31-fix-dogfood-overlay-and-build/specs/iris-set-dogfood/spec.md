@@ -1,8 +1,7 @@
 # iris-set-dogfood Specification
 
-## Purpose
-TBD - created by archiving change add-dogfood-and-ship-verbs. Update Purpose after archive.
-## Requirements
+## MODIFIED Requirements
+
 ### Requirement: `iris:set_dogfood` verb
 
 The plugin SHALL expose `iris:set_dogfood` as an MCP tool and CLI subcommand that, for one managed system, atomically hard-resets the configured dogfood branch to a worker-supplied commit SHA, persists a structured manifest describing what that SHA contains, and triggers the existing reload/build/restart machinery against the composed SHA. The verb SHALL resolve `dogfood_branch` from the MERGED configuration — `.iris.toml` overlaid with the optional `.iris.local.toml` (`dogfood_branch` is a `local`-tagged field). The verb SHALL refuse to operate on any repo whose merged configuration does not declare `dogfood_branch`. Overlay taxonomy warnings (for example, a `local`-tagged field left in `.iris.toml`) SHALL be propagated into the result's `warnings`.
@@ -93,42 +92,3 @@ Result shape:
 
 - **WHEN** the user runs `iris set-dogfood --sha <sha> --manifest <json-path>` from any shell
 - **THEN** the same `verbs.SetDogfood` Go function executes and prints the structured result as pretty-printed JSON
-
-### Requirement: Dogfood manifest schema
-
-The persisted manifest file SHALL be JSON conforming to the input `manifest` shape, with `base.ref`, `base.sha`, and at least an empty `layered: []` array. The file SHALL include a `recorded_at` ISO-8601 timestamp added by iris at write time.
-
-#### Scenario: Manifest includes recorded_at when persisted
-
-- **WHEN** iris writes the manifest
-- **THEN** the file includes `recorded_at` populated with the current UTC time in ISO-8601 format, regardless of whether the input manifest contained one
-
-### Requirement: Manifest captures 1-deep `previous_manifest`
-
-When `iris:set_dogfood` overwrites an existing dogfood manifest, the new manifest SHALL embed the prior manifest's full contents under a `previous_manifest` field. The embedded prior manifest's own `previous_manifest` field SHALL be stripped before embedding (no recursion beyond one level). When no prior manifest exists, `previous_manifest` SHALL be omitted entirely (NOT set to `null`).
-
-#### Scenario: previous_manifest captures the prior state
-
-- **GIVEN** a source repo with an existing `dogfood-manifest.json` containing `{ base, layered: [F1, F2], recorded_at }`
-- **WHEN** `iris:set_dogfood` succeeds with a new manifest `{ base', layered: [F2, F3] }`
-- **THEN** the persisted manifest is `{ base', layered: [F2, F3], recorded_at: <now>, previous_manifest: { base, layered: [F1, F2], recorded_at: <prior> } }`
-- **AND** the embedded `previous_manifest` does NOT itself contain a `previous_manifest` field
-
-#### Scenario: previous_manifest is omitted on first dogfood
-
-- **GIVEN** a source repo with no existing `dogfood-manifest.json`
-- **WHEN** `iris:set_dogfood` succeeds for the first time
-- **THEN** the persisted manifest has NO `previous_manifest` key (not set, not `null` — absent)
-
-#### Scenario: previous_manifest depth is bounded at 1
-
-- **GIVEN** three successive `iris:set_dogfood` calls with manifests A, B, C
-- **WHEN** all three succeed
-- **THEN** after the third call, the on-disk manifest is `{ ...C, previous_manifest: { ...B } }` and the embedded B does NOT contain A
-
-#### Scenario: previous_manifest survives manifest read
-
-- **GIVEN** a manifest on disk with `previous_manifest`
-- **WHEN** `iris:status` is invoked
-- **THEN** the `dogfood` field in the result contains the full manifest including `previous_manifest`
-
