@@ -81,10 +81,10 @@ type RecomposeConflict struct {
 // ShipFeatureResult is the structured success payload, mirrored to MCP/CLI as
 // pretty-printed JSON.
 type ShipFeatureResult struct {
-	Shipped  bool      `json:"shipped"`
-	Branch   string    `json:"branch"`
-	PRNumber int       `json:"pr_number"`
-	PRURL    string    `json:"pr_url"`
+	Shipped   bool             `json:"shipped"`
+	Branch    string           `json:"branch"`
+	PRNumber  int              `json:"pr_number"`
+	PRURL     string           `json:"pr_url"`
 	Merged    bool             `json:"merged"` // always false in pr mode
 	MergeSHA  string           `json:"merge_sha,omitempty"`
 	Fetched   bool             `json:"fetched"` // always false in pr mode
@@ -290,14 +290,16 @@ func ShipFeature(ctx context.Context, client *argus.Client, taskID string, opts 
 }
 
 // shipCITimeout resolves how long pr-auto waits for CI checks. It reads
-// ship_ci_timeout_seconds from the source repo's .iris.toml (default 600s),
-// tolerating a missing or invalid config by falling back to the default. A
-// non-nil shipCITimeoutOverride wins, so tests can drive a sub-second timeout.
+// ship_ci_timeout_seconds from the source repo's MERGED config — .iris.toml
+// overlaid with the optional gitignored .iris.local.toml (ship_ci_timeout_seconds
+// is a local-tagged field, so it normally lives in .iris.local.toml) — defaulting
+// to 600s and tolerating a missing or invalid config by falling back to the
+// default. A non-nil shipCITimeoutOverride wins, so tests can drive a sub-second
+// timeout.
 func shipCITimeout(sourceRepo string) time.Duration {
 	timeout := time.Duration(config.DefaultShipCITimeoutSeconds) * time.Second
-	tomlPath := filepath.Join(sourceRepo, config.IrisTomlFilename)
-	if doc, _, _ := config.LoadIrisToml(tomlPath, false); doc != nil {
-		timeout = time.Duration(doc.ResolvedShipCITimeoutSeconds()) * time.Second
+	if overlay, err := config.LoadOverlay(sourceRepo, false); err == nil && overlay.Doc != nil {
+		timeout = time.Duration(overlay.Doc.ResolvedShipCITimeoutSeconds()) * time.Second
 	}
 	if shipCITimeoutOverride != nil {
 		timeout = *shipCITimeoutOverride

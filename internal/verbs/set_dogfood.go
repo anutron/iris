@@ -14,7 +14,6 @@ package verbs
 import (
 	"context"
 	"fmt"
-	"path/filepath"
 	"strings"
 
 	"github.com/anutron/iris/internal/argus"
@@ -72,18 +71,32 @@ func SetDogfood(ctx context.Context, client *argus.Client, taskID string, opts S
 		return nil, err
 	}
 
-	// 2. Require dogfood_branch config. A missing .iris.toml is treated the
-	// same as one that doesn't declare the field.
+	// 2. Require dogfood_branch config, resolved from the MERGED overlay
+	// (.iris.toml + the optional gitignored .iris.local.toml). dogfood_branch
+	// is a local-tagged field, so it normally lives in .iris.local.toml; a
+	// shared-only read would miss it (and disagree with iris:validate_config,
+	// which is overlay-aware). A missing .iris.toml is treated the same as a
+	// merged config that doesn't declare the field.
 	isSelf, _ := isSelfTarget(ctx, target.SourceRepo)
-	tomlPath := filepath.Join(target.SourceRepo, config.IrisTomlFilename)
-	doc, _, err := config.LoadIrisToml(tomlPath, isSelf)
+	overlay, err := config.LoadOverlay(target.SourceRepo, isSelf)
 	if err != nil {
 		return nil, err
 	}
-	if doc == nil || doc.DogfoodBranch == "" {
-		return nil, fmt.Errorf(`dogfood_branch not configured for this repo (add dogfood_branch = "..." to .iris.toml)`)
+	if overlay.Doc == nil || overlay.Doc.DogfoodBranch == "" {
+		return nil, fmt.Errorf(`dogfood_branch not configured for this repo (add dogfood_branch = "..." to .iris.local.toml)`)
 	}
-	dogfoodBranch := doc.DogfoodBranch
+	dogfoodBranch := overlay.Doc.DogfoodBranch
+
+	// Surface overlay taxonomy warnings (e.g. a local-tagged field left in
+	// .iris.toml) to the caller.
+	overlayWarnings := []string{}
+	for _, w := range overlay.Warnings {
+		if w.Hint != "" {
+			overlayWarnings = append(overlayWarnings, fmt.Sprintf("%s (%s)", w.Message, w.Hint))
+		} else {
+			overlayWarnings = append(overlayWarnings, w.Message)
+		}
+	}
 
 	// 3. Verify the SHA resolves to a commit reachable in the source repo.
 	out, err := runGit(ctx, target.SourceRepo, "rev-parse", "--verify", "--quiet", opts.Sha+"^{commit}")
@@ -136,21 +149,24 @@ func SetDogfood(ctx context.Context, client *argus.Client, taskID string, opts S
 	// 9. Rebuild + restart via the existing reload sequence. NoPull: the
 	// origin-first model keeps the default branch read-only (it moves only via
 	// explicit iris:fetch); set_dogfood builds the SHA we just composed rather
-	// than pulling new upstream work as a side effect.
+	// than pulling new upstream work as a side effect. BuildBranch: reload
+	// checks out the dogfood branch for the build+restart (so the composed SHA
+	// is what gets built and deployed) and restores the default branch after.
 	caller := taskID
 	if caller == "" {
 		caller = "self"
 	}
 	reload, err := Reload(ctx, client, ReloadInput{
-		TaskID: taskID,
-		NoPull: true,
-		Caller: caller,
+		TaskID:      taskID,
+		NoPull:      true,
+		Caller:      caller,
+		BuildBranch: dogfoodBranch,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("reload after set_dogfood: %w", err)
 	}
 
-	warnings := []string{}
+	warnings := append([]string{}, overlayWarnings...)
 	if reload != nil && len(reload.Warnings) > 0 {
 		warnings = append(warnings, reload.Warnings...)
 	}

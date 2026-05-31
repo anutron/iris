@@ -55,6 +55,15 @@ type ReloadInput struct {
 	// the call came in via MCP, "cli" for direct CLI invocation, or "self"
 	// otherwise.
 	Caller string
+	// BuildBranch, when non-empty, names a branch to check out for the
+	// build+restart so the configuration load, build, and restart act on
+	// that branch's tree rather than the currently-checked-out (default)
+	// branch. It is an internal seam — set by set_dogfood to build the
+	// composed dogfood SHA — not a new MCP/CLI input. After the build and
+	// restart, reload restores the branch that was checked out on entry.
+	// Empty (the case for every other caller) preserves the prior behavior
+	// exactly: no extra checkout, no restore.
+	BuildBranch string
 }
 
 // ReloadResult is the structured result. The same shape appears in the
@@ -201,6 +210,40 @@ func Reload(ctx context.Context, client *argus.Client, in ReloadInput) (*ReloadR
 	}
 	defer releaseLock()
 
+	// 4a. Optional build-branch checkout. When the caller supplied a branch to
+	// build (set_dogfood building the composed dogfood SHA), check it out now —
+	// after the entry pre-flight passed and the lock is held — so the config
+	// load, build, and restart all act on that branch's tree. The entry branch
+	// is restored on every exit path: explicitly on the success path (so a
+	// restore-failure warning lands in the result) and via the deferred
+	// safety-net on the early-return error paths. A failed restore is a warning,
+	// never a rollback — by then the new binary is already deployed.
+	entryBranch := currentBranch
+	restoredBuildBranch := false
+	restoreBuildBranch := func() {
+		if in.BuildBranch == "" || restoredBuildBranch {
+			return
+		}
+		restoredBuildBranch = true
+		if out, rerr := runGit(context.Background(), target.SourceRepo, "checkout", entryBranch); rerr != nil {
+			warnings = append(warnings, fmt.Sprintf(
+				"failed to restore branch %q after building %q (repo left on %q): %v; output:\n%s",
+				entryBranch, in.BuildBranch, in.BuildBranch, rerr, out))
+		}
+	}
+	defer restoreBuildBranch()
+	if in.BuildBranch != "" {
+		if out, coErr := runGit(ctx, target.SourceRepo, "checkout", in.BuildBranch); coErr != nil {
+			err := fmt.Errorf("checkout build branch %q: %w; output:\n%s", in.BuildBranch, coErr, out)
+			writeAudit(AuditEntry{
+				Caller: caller, TargetSourceRepo: target.SourceRepo, Mode: mode,
+				Outcome: "failure", FailureReason: err.Error(),
+				Warnings: warnings,
+			})
+			return nil, err
+		}
+	}
+
 	// 5. Pull (fetch + ff-only merge) unless no_pull
 	prePullSha, err := runGit(ctx, target.SourceRepo, "rev-parse", "HEAD")
 	if err != nil {
@@ -296,7 +339,7 @@ func Reload(ctx context.Context, client *argus.Client, in ReloadInput) (*ReloadR
 				Pulled: pulled, PrePullSha: prePullSha, PostPullSha: postPullSha,
 				PreFlightOutput: preFlightOutput,
 				Outcome:         "failure", FailureReason: err.Error(),
-				Warnings:        warnings,
+				Warnings: warnings,
 			})
 			return nil, err
 		}
@@ -350,6 +393,11 @@ func Reload(ctx context.Context, client *argus.Client, in ReloadInput) (*ReloadR
 			return nil, err
 		}
 	}
+
+	// Restore the entry branch before reporting success (so a restore-failure
+	// warning is captured in the result and audit entry, and the repo is back
+	// on its default branch before any self-exit is scheduled).
+	restoreBuildBranch()
 
 	result := &ReloadResult{
 		TargetSourceRepo: target.SourceRepo,
