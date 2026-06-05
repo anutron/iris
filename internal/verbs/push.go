@@ -50,6 +50,12 @@ func Push(ctx context.Context, client *argus.Client, taskID string, opts PushOpt
 	if effective == "" {
 		return nil, fmt.Errorf("task has no current branch")
 	}
+	// Reject a leading '-' so a caller-supplied branch override cannot smuggle
+	// flags into git (e.g. `--upload-pack=evil`). Real branch names never begin
+	// with `-`.
+	if strings.HasPrefix(effective, "-") {
+		return nil, fmt.Errorf("invalid branch name %q (must not begin with '-')", effective)
+	}
 	if effective == defaultBranch {
 		return nil, fmt.Errorf("refusing to push default branch %q", effective)
 	}

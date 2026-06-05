@@ -219,6 +219,26 @@ func TestGHPRCreate_HeadOverrideDefaultBranchRefused(t *testing.T) {
 	}
 }
 
+// TestGHPRCreate_HeadOverrideRejectsLeadingDash verifies that a caller-supplied
+// head override beginning with '-' is rejected before gh runs, so it cannot
+// smuggle flags into gh pr create.
+func TestGHPRCreate_HeadOverrideRejectsLeadingDash(t *testing.T) {
+	src, wt, _ := setupRepoWithBareAndWorktree(t, "ghpr-headoverride-dash")
+	client := stubArgus(t, src, wt)
+	dir := writeFakeGH(t, fakeGHCaptureArgv+"\nexit 0\n")
+
+	_, err := GHPRCreate(context.Background(), client, "task-headodash", GHPRCreateOptions{Title: "x", Head: "--upload-pack=evil"})
+	if err == nil {
+		t.Fatal("expected error rejecting leading-dash head override, got nil")
+	}
+	if !strings.Contains(err.Error(), "must not begin with '-'") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if argv := readFakeGHArgv(t, dir); argv != "" {
+		t.Fatalf("expected gh NOT to be invoked, but argv was captured:\n%s", argv)
+	}
+}
+
 // TestGHPRCreate_ForkWithHeadOverride verifies that a fork origin fork-qualifies
 // the head override (not the resolved task branch).
 func TestGHPRCreate_ForkWithHeadOverride(t *testing.T) {

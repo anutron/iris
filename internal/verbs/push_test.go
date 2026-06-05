@@ -248,6 +248,27 @@ func TestPush_BranchOverrideDefaultBranchRefused(t *testing.T) {
 	}
 }
 
+// TestPush_BranchOverrideRejectsLeadingDash verifies that a caller-supplied
+// branch override beginning with '-' is rejected before git runs, so it cannot
+// smuggle flags into git push.
+func TestPush_BranchOverrideRejectsLeadingDash(t *testing.T) {
+	t.Parallel()
+	src, wt, bare := setupRepoWithBareAndWorktree(t, "push-override-dash")
+	client := stubArgus(t, src, wt)
+	beforeRemote := remoteRef(t, bare, "argus/push-override-dash")
+
+	_, err := Push(context.Background(), client, "task-dash", PushOptions{Branch: "--upload-pack=evil"})
+	if err == nil {
+		t.Fatal("expected error rejecting leading-dash branch override, got nil")
+	}
+	if !strings.Contains(err.Error(), "must not begin with '-'") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if afterRemote := remoteRef(t, bare, "argus/push-override-dash"); afterRemote != beforeRemote {
+		t.Fatalf("expected origin unchanged: before=%s after=%s", beforeRemote, afterRemote)
+	}
+}
+
 // TestPush_NoBranchOverridePreservesTaskBranch verifies backward compatibility:
 // omitting opts.Branch pushes the task's resolved branch as before.
 func TestPush_NoBranchOverridePreservesTaskBranch(t *testing.T) {

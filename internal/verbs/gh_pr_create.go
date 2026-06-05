@@ -59,6 +59,12 @@ func GHPRCreate(ctx context.Context, client *argus.Client, taskID string, opts G
 	if effective == "" {
 		return nil, fmt.Errorf("task has no current branch")
 	}
+	// Reject a leading '-' so a caller-supplied head override cannot smuggle
+	// flags into gh (and, in the fork case, cannot poison the `owner:branch`
+	// join). Real branch names never begin with `-`.
+	if strings.HasPrefix(effective, "-") {
+		return nil, fmt.Errorf("invalid head name %q (must not begin with '-')", effective)
+	}
 	if effective == defaultBranch {
 		return nil, fmt.Errorf("refusing to open PR from default branch %q", effective)
 	}
