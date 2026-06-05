@@ -210,6 +210,7 @@ func toolDefinitions() []mcp.ToolDefinition {
 				"properties": map[string]any{
 					"task_id":          map[string]any{"type": "string", "description": "Argus task ID. Iris resolves the source repo and branch from this."},
 					"force_with_lease": map[string]any{"type": "boolean", "description": "Pass --force-with-lease to git push (default false). Safe form of --force; checks the upstream matches."},
+					"branch":           map[string]any{"type": "string", "description": "(optional) Branch to push instead of the task's resolved branch. MUST NOT be the default branch."},
 				},
 				"required": []string{"task_id"},
 			},
@@ -224,6 +225,7 @@ func toolDefinitions() []mcp.ToolDefinition {
 					"title":   map[string]any{"type": "string", "description": "PR title."},
 					"body":    map[string]any{"type": "string", "description": "(optional) PR body. When omitted, gh's default applies."},
 					"draft":   map[string]any{"type": "boolean", "description": "Open the PR as a draft (default false)."},
+					"head":    map[string]any{"type": "string", "description": "(optional) Head branch to open the PR for instead of the task's resolved branch. MUST NOT be the default branch."},
 				},
 				"required": []string{"task_id", "title"},
 			},
@@ -494,8 +496,8 @@ func toolDefinitions() []mcp.ToolDefinition {
 				"properties": map[string]any{
 					"task_id": map[string]any{"type": "string", "description": "(optional) Argus task ID. Iris resolves the source repo from this; omit for self-target."},
 					"fields": map[string]any{
-						"type":        "object",
-						"description": "Map of local-tagged field name to value. Valid names: dogfood_branch (string, valid git ref, != default_branch), ship_ci_timeout_seconds (non-negative integer).",
+						"type":                 "object",
+						"description":          "Map of local-tagged field name to value. Valid names: dogfood_branch (string, valid git ref, != default_branch), ship_ci_timeout_seconds (non-negative integer).",
 						"additionalProperties": true,
 					},
 					"delete": map[string]any{

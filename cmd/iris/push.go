@@ -14,7 +14,10 @@ import (
 )
 
 func newPushCmd() *cobra.Command {
-	var forceWithLease bool
+	var (
+		forceWithLease bool
+		branch         string
+	)
 
 	cmd := &cobra.Command{
 		Use:   "push <task-id>",
@@ -38,7 +41,7 @@ func newPushCmd() *cobra.Command {
 			}
 			client := argus.New(fmt.Sprintf("http://127.0.0.1:%d", apiPort), token)
 
-			result, err := verbs.Push(cmd.Context(), client, taskID, verbs.PushOptions{ForceWithLease: forceWithLease})
+			result, err := verbs.Push(cmd.Context(), client, taskID, verbs.PushOptions{ForceWithLease: forceWithLease, Branch: branch})
 			if err != nil {
 				return err
 			}
@@ -48,5 +51,6 @@ func newPushCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&forceWithLease, "force-with-lease", false, "pass --force-with-lease to git push")
+	cmd.Flags().StringVar(&branch, "branch", "", "(optional) push this branch instead of the task's resolved branch. MUST NOT be the default branch.")
 	return cmd
 }

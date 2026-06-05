@@ -18,6 +18,7 @@ func newGHPRCreateCmd() *cobra.Command {
 		title string
 		body  string
 		draft bool
+		head  string
 	)
 
 	cmd := &cobra.Command{
@@ -46,6 +47,7 @@ func newGHPRCreateCmd() *cobra.Command {
 				Title: title,
 				Body:  body,
 				Draft: draft,
+				Head:  head,
 			})
 			if err != nil {
 				return err
@@ -58,6 +60,7 @@ func newGHPRCreateCmd() *cobra.Command {
 	cmd.Flags().StringVar(&title, "title", "", "PR title (required)")
 	cmd.Flags().StringVar(&body, "body", "", "PR body (optional; gh's default applies when empty)")
 	cmd.Flags().BoolVar(&draft, "draft", false, "Open the PR as a draft")
+	cmd.Flags().StringVar(&head, "head", "", "(optional) head branch to open the PR for instead of the task's resolved branch. MUST NOT be the default branch.")
 	_ = cmd.MarkFlagRequired("title")
 	return cmd
 }

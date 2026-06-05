@@ -1,11 +1,10 @@
 # iris-push Specification
 
-## Purpose
-TBD - created by archiving change add-push-verb. Update Purpose after archive.
-## Requirements
+## MODIFIED Requirements
+
 ### Requirement: `iris:push` verb
 
-The plugin SHALL expose `iris:push` as an MCP tool accepting `task_id` (string, required), `force_with_lease` (bool, default false), and `branch` (string, optional). When `branch` is provided and non-empty, the verb SHALL push that branch; when `branch` is omitted or empty, the verb SHALL push the task's resolved branch. The branch actually acted upon is the "effective branch". On success the verb SHALL return `{pushed: true, branch, remote_sha}` where `branch` is the effective branch; on failure it SHALL return a structured error and leave origin's refs unchanged. The default-branch refusal and source-repo allowlist SHALL apply to the effective branch. The verb SHALL reject an effective branch that begins with `-` before invoking git, so a branch override cannot smuggle flags into `git push`.
+The plugin SHALL expose `iris:push` as an MCP tool accepting `task_id` (string, required), `force_with_lease` (bool, default false), and `branch` (string, optional). When `branch` is provided and non-empty, the verb SHALL push that branch; when `branch` is omitted or empty, the verb SHALL push the task's resolved branch. The branch actually acted upon is the "effective branch". On success the verb SHALL return `{pushed: true, branch, remote_sha}` where `branch` is the effective branch; on failure it SHALL return a structured error and leave origin's refs unchanged. The default-branch refusal and source-repo allowlist SHALL apply to the effective branch.
 
 #### Scenario: Successful push of a task branch
 
@@ -16,11 +15,6 @@ The plugin SHALL expose `iris:push` as an MCP tool accepting `task_id` (string, 
 
 - **WHEN** the verb is invoked with `branch="feature-x"` for a task whose resolved branch is `argus/<task-slug>`, and `feature-x` exists in the source repo with commits ahead of origin
 - **THEN** iris runs `git push origin feature-x` in the source repo (NOT the resolved task branch), and returns `{pushed: true, branch: "feature-x", remote_sha: "<sha>"}`
-
-#### Scenario: Rejects a branch override beginning with a dash
-
-- **WHEN** the verb is invoked with a `branch` override that begins with `-` (e.g. `--upload-pack=evil`)
-- **THEN** iris returns a structured error stating the branch must not begin with `-`, does NOT invoke git, and origin's refs are unchanged
 
 #### Scenario: Refuses to push the default branch
 
@@ -51,4 +45,3 @@ The plugin SHALL expose `iris:push` as an MCP tool accepting `task_id` (string, 
 
 - **WHEN** the user runs `iris push <task-id> [--force-with-lease] [--branch <name>]` from any shell on the host
 - **THEN** the same `verbs.Push` Go function executes (bypassing the daemon process) and prints the structured result
-

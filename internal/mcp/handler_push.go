@@ -12,6 +12,7 @@ import (
 type pushInput struct {
 	TaskID         string `json:"task_id"`
 	ForceWithLease bool   `json:"force_with_lease,omitempty"`
+	Branch         string `json:"branch,omitempty"`
 }
 
 // NewPushHandler returns a Handler that decodes the envelope input and
@@ -28,7 +29,7 @@ func NewPushHandler(client *argus.Client) Handler {
 			return ErrorResponse("iris:push: task_id is required")
 		}
 
-		result, err := verbs.Push(ctx, client, in.TaskID, verbs.PushOptions{ForceWithLease: in.ForceWithLease})
+		result, err := verbs.Push(ctx, client, in.TaskID, verbs.PushOptions{ForceWithLease: in.ForceWithLease, Branch: in.Branch})
 		if err != nil {
 			return ErrorResponse(fmt.Sprintf("iris:push: %v", err))
 		}

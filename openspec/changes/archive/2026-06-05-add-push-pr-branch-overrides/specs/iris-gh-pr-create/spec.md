@@ -1,11 +1,10 @@
 # iris-gh-pr-create Specification
 
-## Purpose
-TBD - created by archiving change add-gh-pr-create-verb. Update Purpose after archive.
-## Requirements
+## MODIFIED Requirements
+
 ### Requirement: `iris:gh_pr_create` verb
 
-The plugin SHALL expose `iris:gh_pr_create` as an MCP tool accepting `task_id` (string, required), `title` (string, required), `body` (string, optional), `draft` (bool, default false), and `head` (string, optional). When `head` is provided and non-empty, the verb SHALL open the PR for that head branch; when `head` is omitted or empty, the verb SHALL open the PR for the task's resolved branch. The branch the PR is opened for is the "effective head". On success the verb SHALL return `{number, url}` where `number` is parsed from the last non-empty line of `gh pr create`'s stdout matching `/pull/<N>`. On failure the verb SHALL return a structured error wrapping gh's combined output. The default-branch refusal and source-repo allowlist SHALL apply to the effective head. The verb SHALL reject an effective head that begins with `-` before invoking gh, so a head override cannot smuggle flags into `gh pr create` (nor poison the fork-qualified `owner:branch` join).
+The plugin SHALL expose `iris:gh_pr_create` as an MCP tool accepting `task_id` (string, required), `title` (string, required), `body` (string, optional), `draft` (bool, default false), and `head` (string, optional). When `head` is provided and non-empty, the verb SHALL open the PR for that head branch; when `head` is omitted or empty, the verb SHALL open the PR for the task's resolved branch. The branch the PR is opened for is the "effective head". On success the verb SHALL return `{number, url}` where `number` is parsed from the last non-empty line of `gh pr create`'s stdout matching `/pull/<N>`. On failure the verb SHALL return a structured error wrapping gh's combined output. The default-branch refusal and source-repo allowlist SHALL apply to the effective head.
 
 #### Scenario: Successful PR creation
 
@@ -16,11 +15,6 @@ The plugin SHALL expose `iris:gh_pr_create` as an MCP tool accepting `task_id` (
 
 - **WHEN** the verb is invoked with `head="feature-x"` for a task whose resolved branch is `argus/<slug>`, and `feature-x` is pushed to origin
 - **THEN** iris runs `gh pr create --base <default> --head feature-x --title <T>` (NOT the resolved task branch) and returns `{number, url}`
-
-#### Scenario: Rejects a head override beginning with a dash
-
-- **WHEN** the verb is invoked with a `head` override that begins with `-` (e.g. `--upload-pack=evil`)
-- **THEN** iris returns a structured error stating the head must not begin with `-`, does NOT invoke gh, and the source repo and origin are unchanged
 
 #### Scenario: Refuses to open a PR from the default branch
 
@@ -97,4 +91,3 @@ Fork detection SHALL be best-effort and SHALL NOT regress the common case: if ir
 - **GIVEN** a resolved source repo whose effective head is the default branch
 - **WHEN** `iris:gh_pr_create` is invoked
 - **THEN** iris refuses with the default-branch error and does NOT invoke gh, regardless of whether `origin` is a fork
-
