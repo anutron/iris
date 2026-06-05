@@ -195,6 +195,78 @@ func TestPush_NonFastForwardErrorsWithoutForce(t *testing.T) {
 	_ = src // keep src in scope to silence vet (its presence makes the setup readable)
 }
 
+// TestPush_BranchOverride verifies that when opts.Branch is non-empty the verb
+// pushes the named branch (not the task's resolved branch) and reports it.
+func TestPush_BranchOverride(t *testing.T) {
+	t.Parallel()
+	src, wt, bare := setupRepoWithBareAndWorktree(t, "push-override")
+	client := stubArgus(t, src, wt)
+
+	// Create a second branch in the worktree's source repo so there is something
+	// to push.  The worktree's own branch is "argus/push-override"; we create
+	// "feature-x" from the same HEAD. The push succeeds because it's a brand-new
+	// ref on origin, not because it's ahead of an existing one.
+	g := gitRunner(t)
+	g(src, "branch", "feature-x")
+
+	result, err := Push(context.Background(), client, "task-override", PushOptions{Branch: "feature-x"})
+	if err != nil {
+		t.Fatalf("push with branch override: %v", err)
+	}
+	if !result.Pushed {
+		t.Fatal("expected Pushed=true")
+	}
+	if result.Branch != "feature-x" {
+		t.Fatalf("result.Branch: got %q, want %q", result.Branch, "feature-x")
+	}
+	// origin must have the override branch, not the task branch.
+	if remoteRef(t, bare, "feature-x") == "" {
+		t.Fatal("expected feature-x to be pushed to bare origin")
+	}
+	if remoteRef(t, bare, "argus/push-override") != "" {
+		t.Fatal("expected argus/push-override NOT to be pushed to bare origin")
+	}
+}
+
+// TestPush_BranchOverrideDefaultBranchRefused verifies that the default-branch
+// refusal applies to the override, not just the resolved task branch.
+func TestPush_BranchOverrideDefaultBranchRefused(t *testing.T) {
+	t.Parallel()
+	src, wt, bare := setupRepoWithBareAndWorktree(t, "push-override-default")
+	client := stubArgus(t, src, wt)
+	beforeRemote := remoteRef(t, bare, "main")
+
+	_, err := Push(context.Background(), client, "task-odef", PushOptions{Branch: "main"})
+	if err == nil {
+		t.Fatal("expected error refusing default branch via override, got nil")
+	}
+	if !strings.Contains(err.Error(), "default branch") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if afterRemote := remoteRef(t, bare, "main"); afterRemote != beforeRemote {
+		t.Fatalf("expected origin/main unchanged: before=%s after=%s", beforeRemote, afterRemote)
+	}
+}
+
+// TestPush_NoBranchOverridePreservesTaskBranch verifies backward compatibility:
+// omitting opts.Branch pushes the task's resolved branch as before.
+func TestPush_NoBranchOverridePreservesTaskBranch(t *testing.T) {
+	t.Parallel()
+	src, wt, bare := setupRepoWithBareAndWorktree(t, "push-nooverride")
+	client := stubArgus(t, src, wt)
+
+	result, err := Push(context.Background(), client, "task-nooverride", PushOptions{})
+	if err != nil {
+		t.Fatalf("push: %v", err)
+	}
+	if result.Branch != "argus/push-nooverride" {
+		t.Fatalf("result.Branch: got %q, want %q", result.Branch, "argus/push-nooverride")
+	}
+	if remoteRef(t, bare, "argus/push-nooverride") == "" {
+		t.Fatal("expected argus/push-nooverride to be pushed to bare origin")
+	}
+}
+
 // Concurrency invariant: Push shares repoLocks with MergeToMaster. We don't
 // need a second test for this — the merge_to_master serialize test already
 // validates the lock map; this is a coverage check that Push compiles

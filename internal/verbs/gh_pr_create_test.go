@@ -170,3 +170,101 @@ func TestGHPRCreate_TitleRequired(t *testing.T) {
 		t.Fatalf("expected title-required error, got: %v", err)
 	}
 }
+
+// TestGHPRCreate_HeadOverride verifies that when opts.Head is non-empty the verb
+// passes the override branch as --head (same-repo form) and NOT the resolved
+// task branch.
+func TestGHPRCreate_HeadOverride(t *testing.T) {
+	src, wt, _ := setupRepoWithBareAndWorktree(t, "ghpr-headoverride")
+	client := stubArgus(t, src, wt)
+	body := fakeGHCaptureArgv + `
+echo "https://github.com/anutron/iris/pull/55"
+exit 0
+`
+	dir := writeFakeGH(t, body)
+
+	result, err := GHPRCreate(context.Background(), client, "task-headoverride", GHPRCreateOptions{Title: "Override test", Head: "feature-x"})
+	if err != nil {
+		t.Fatalf("gh pr create with head override: %v", err)
+	}
+	if result.Number != 55 {
+		t.Fatalf("PR number: got %d want 55", result.Number)
+	}
+	argv := readFakeGHArgv(t, dir)
+	if !strings.Contains(argv, "feature-x") {
+		t.Fatalf("expected head override 'feature-x' in argv:\n%s", argv)
+	}
+	// The task's resolved branch must NOT appear as the --head value.
+	if strings.Contains(argv, "argus/ghpr-headoverride") {
+		t.Fatalf("expected task branch NOT to appear in argv when head override given:\n%s", argv)
+	}
+}
+
+// TestGHPRCreate_HeadOverrideDefaultBranchRefused verifies that the default-branch
+// refusal applies to the head override, not just the resolved task branch.
+func TestGHPRCreate_HeadOverrideDefaultBranchRefused(t *testing.T) {
+	src, wt, _ := setupRepoWithBareAndWorktree(t, "ghpr-headoverride-default")
+	client := stubArgus(t, src, wt)
+	dir := writeFakeGH(t, fakeGHCaptureArgv+"\nexit 0\n")
+
+	_, err := GHPRCreate(context.Background(), client, "task-headodef", GHPRCreateOptions{Title: "x", Head: "main"})
+	if err == nil {
+		t.Fatal("expected refusal for default branch via head override, got nil")
+	}
+	if !strings.Contains(err.Error(), "default branch") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if argv := readFakeGHArgv(t, dir); argv != "" {
+		t.Fatalf("expected gh NOT to be invoked, but argv was captured:\n%s", argv)
+	}
+}
+
+// TestGHPRCreate_ForkWithHeadOverride verifies that a fork origin fork-qualifies
+// the head override (not the resolved task branch).
+func TestGHPRCreate_ForkWithHeadOverride(t *testing.T) {
+	src, wt, _ := setupRepoWithBareAndWorktree(t, "ghpr-fork-headoverride")
+	client := stubArgus(t, src, wt)
+	dir := writeFakeGH(t, fakeGHForkAware(
+		`{"nameWithOwner":"anutron/argus","parent":{"name":"argus","owner":{"login":"drn"}}}`,
+		"https://github.com/drn/argus/pull/77", 0))
+
+	result, err := GHPRCreate(context.Background(), client, "task-fork-headoverride", GHPRCreateOptions{Title: "Fork override", Head: "feature-x"})
+	if err != nil {
+		t.Fatalf("cross-fork pr create with head override: %v", err)
+	}
+	if result.Number != 77 {
+		t.Fatalf("PR number: got %d want 77", result.Number)
+	}
+	argv := readFakeGHArgv(t, dir)
+	// The fork-qualified override must appear, not the task branch.
+	if !strings.Contains(argv, "anutron:feature-x") {
+		t.Fatalf("expected fork-qualified head override 'anutron:feature-x' in argv:\n%s", argv)
+	}
+	if strings.Contains(argv, "argus/ghpr-fork-headoverride") {
+		t.Fatalf("expected task branch NOT to appear in argv:\n%s", argv)
+	}
+}
+
+// TestGHPRCreate_NoHeadOverridePreservesTaskBranch verifies backward compatibility:
+// omitting opts.Head opens the PR for the task's resolved branch as before.
+func TestGHPRCreate_NoHeadOverridePreservesTaskBranch(t *testing.T) {
+	src, wt, _ := setupRepoWithBareAndWorktree(t, "ghpr-noheadoverride")
+	client := stubArgus(t, src, wt)
+	body := fakeGHCaptureArgv + `
+echo "https://github.com/anutron/iris/pull/99"
+exit 0
+`
+	dir := writeFakeGH(t, body)
+
+	result, err := GHPRCreate(context.Background(), client, "task-noheadoverride", GHPRCreateOptions{Title: "No override"})
+	if err != nil {
+		t.Fatalf("gh pr create: %v", err)
+	}
+	if result.Number != 99 {
+		t.Fatalf("PR number: got %d want 99", result.Number)
+	}
+	argv := readFakeGHArgv(t, dir)
+	if !strings.Contains(argv, "argus/ghpr-noheadoverride") {
+		t.Fatalf("expected task branch 'argus/ghpr-noheadoverride' in argv:\n%s", argv)
+	}
+}

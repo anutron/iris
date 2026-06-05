@@ -17,6 +17,9 @@ type GHPRCreateOptions struct {
 	Title string
 	Body  string
 	Draft bool
+	// Head, when non-empty, overrides the task's resolved branch as the PR head.
+	// The effective head is this value; the default-branch refusal applies.
+	Head string
 }
 
 // GHPRCreateResult is the structured success payload.
@@ -46,22 +49,29 @@ func GHPRCreate(ctx context.Context, client *argus.Client, taskID string, opts G
 		return nil, fmt.Errorf("determine default branch: %w", err)
 	}
 
-	if resolved.Branch == "" {
+	// Compute the effective head: use the override when provided, otherwise
+	// fall back to the task's resolved branch.
+	effective := resolved.Branch
+	if opts.Head != "" {
+		effective = opts.Head
+	}
+
+	if effective == "" {
 		return nil, fmt.Errorf("task has no current branch")
 	}
-	if resolved.Branch == defaultBranch {
-		return nil, fmt.Errorf("refusing to open PR from default branch %q", resolved.Branch)
+	if effective == defaultBranch {
+		return nil, fmt.Errorf("refusing to open PR from default branch %q", effective)
 	}
 
 	args := []string{"pr", "create", "--title", opts.Title}
 	if fu := detectForkUpstream(ctx, resolved.SourceRepo); fu != nil {
 		// Cross-fork: origin is a fork, so target the upstream parent and
-		// qualify the head with the fork owner. Omit --base; gh defaults it to
-		// the upstream repository's default branch.
-		args = append(args, "--repo", fu.UpstreamRepo, "--head", fu.ForkOwner+":"+resolved.Branch)
+		// qualify the effective head with the fork owner. Omit --base; gh
+		// defaults it to the upstream repository's default branch.
+		args = append(args, "--repo", fu.UpstreamRepo, "--head", fu.ForkOwner+":"+effective)
 	} else {
 		// Same-repo: origin is the target.
-		args = append(args, "--base", defaultBranch, "--head", resolved.Branch)
+		args = append(args, "--base", defaultBranch, "--head", effective)
 	}
 	if opts.Body != "" {
 		args = append(args, "--body", opts.Body)

@@ -15,6 +15,7 @@ type ghPRCreateInput struct {
 	Title  string `json:"title"`
 	Body   string `json:"body,omitempty"`
 	Draft  bool   `json:"draft,omitempty"`
+	Head   string `json:"head,omitempty"`
 }
 
 // NewGHPRCreateHandler returns a Handler that decodes the envelope input
@@ -38,6 +39,7 @@ func NewGHPRCreateHandler(client *argus.Client) Handler {
 			Title: in.Title,
 			Body:  in.Body,
 			Draft: in.Draft,
+			Head:  in.Head,
 		})
 		if err != nil {
 			return ErrorResponse(fmt.Sprintf("iris:gh_pr_create: %v", err))
