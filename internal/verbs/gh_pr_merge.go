@@ -17,8 +17,10 @@ type GHPRMergeOptions struct {
 
 // GHPRMergeResult is the structured success payload.
 type GHPRMergeResult struct {
-	Merged   bool   `json:"merged"`
-	Strategy string `json:"strategy"`
+	Merged        bool     `json:"merged"`
+	Strategy      string   `json:"strategy"`
+	DefaultBranch string   `json:"default_branch,omitempty"`
+	Warnings      []string `json:"warnings,omitempty"`
 }
 
 // validGHPRMergeStrategies bounds the strategy enum at the verb boundary.
@@ -63,5 +65,34 @@ func GHPRMerge(ctx context.Context, client *argus.Client, taskID string, opts GH
 		return nil, fmt.Errorf("gh pr merge: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 
-	return &GHPRMergeResult{Merged: true, Strategy: opts.Strategy}, nil
+	result := &GHPRMergeResult{Merged: true, Strategy: opts.Strategy}
+
+	// After merging on GitHub, restore the canonical source repo to the default
+	// branch and pull so a subsequent iris_reload (which requires default-branch
+	// checkout) works without manual intervention.
+	defaultBranch, dbErr := DefaultBranch(ctx, resolved.SourceRepo)
+	if dbErr != nil {
+		result.Warnings = append(result.Warnings, fmt.Sprintf("post-merge: could not determine default branch: %v", dbErr))
+		return result, nil
+	}
+	result.DefaultBranch = defaultBranch
+
+	current, cbErr := currentBranch(ctx, resolved.SourceRepo)
+	if cbErr != nil {
+		result.Warnings = append(result.Warnings, fmt.Sprintf("post-merge: could not read current branch: %v", cbErr))
+		return result, nil
+	}
+
+	if current != defaultBranch {
+		if _, coErr := runGit(ctx, resolved.SourceRepo, "checkout", defaultBranch); coErr != nil {
+			result.Warnings = append(result.Warnings, fmt.Sprintf("post-merge: checkout %q failed: %v", defaultBranch, coErr))
+			return result, nil
+		}
+	}
+
+	if _, pullErr := runGit(ctx, resolved.SourceRepo, "pull", "--ff-only"); pullErr != nil {
+		result.Warnings = append(result.Warnings, fmt.Sprintf("post-merge: pull --ff-only failed: %v", pullErr))
+	}
+
+	return result, nil
 }

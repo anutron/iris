@@ -123,3 +123,68 @@ func TestGHPRMerge_RejectsNonPositivePR(t *testing.T) {
 		t.Fatalf("expected pr_number validation error, got: %v", err)
 	}
 }
+
+func TestGHPRMerge_RestoresDefaultBranchWhenOnStrayBranch(t *testing.T) {
+	src, wt, _ := setupRepoWithBareAndWorktree(t, "ghmerge-restore")
+	client := stubArgus(t, src, wt)
+
+	// Put canonical source repo on a stray branch (not the worktree's branch,
+	// not main). Simulates the state where a prior operation left the repo
+	// on the wrong branch.
+	g := gitRunner(t)
+	g(src, "branch", "stray-old-feature")
+	g(src, "checkout", "stray-old-feature")
+
+	writeFakeGH(t, fakeGHCaptureArgv+"\nexit 0\n")
+
+	result, err := GHPRMerge(context.Background(), client, "task-restore", GHPRMergeOptions{PRNumber: 1, Strategy: "squash"})
+	if err != nil {
+		t.Fatalf("gh pr merge: %v", err)
+	}
+	if !result.Merged {
+		t.Fatal("expected Merged=true")
+	}
+	if result.DefaultBranch != "main" {
+		t.Fatalf("expected DefaultBranch=main, got %q", result.DefaultBranch)
+	}
+	if len(result.Warnings) != 0 {
+		t.Fatalf("expected no warnings, got: %v", result.Warnings)
+	}
+
+	// Canonical source repo must be back on main.
+	branch, err := currentBranch(context.Background(), src)
+	if err != nil {
+		t.Fatalf("currentBranch: %v", err)
+	}
+	if branch != "main" {
+		t.Fatalf("expected source repo on main after merge, got %q", branch)
+	}
+}
+
+func TestGHPRMerge_PullsWhenAlreadyOnDefaultBranch(t *testing.T) {
+	// When the source repo is already on main, GHPRMerge should pull and produce no warnings.
+	src, wt, _ := setupRepoWithBareAndWorktree(t, "ghmerge-pull")
+	client := stubArgus(t, src, wt)
+
+	writeFakeGH(t, fakeGHCaptureArgv+"\nexit 0\n")
+
+	// src is already on main (setupRepoWithBareAndWorktree leaves it there).
+	result, err := GHPRMerge(context.Background(), client, "task-pull", GHPRMergeOptions{PRNumber: 2, Strategy: "squash"})
+	if err != nil {
+		t.Fatalf("gh pr merge: %v", err)
+	}
+	if !result.Merged {
+		t.Fatal("expected Merged=true")
+	}
+	if len(result.Warnings) != 0 {
+		t.Fatalf("expected no warnings, got: %v", result.Warnings)
+	}
+
+	branch, err := currentBranch(context.Background(), src)
+	if err != nil {
+		t.Fatalf("currentBranch: %v", err)
+	}
+	if branch != "main" {
+		t.Fatalf("expected source repo on main, got %q", branch)
+	}
+}
