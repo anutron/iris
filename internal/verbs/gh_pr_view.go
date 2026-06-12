@@ -24,8 +24,9 @@ type GHPRViewResult struct {
 
 // ghPRViewJSONFields is the fixed --json field list iris requests. The
 // design pins this so callers see a stable shape regardless of which
-// agent invoked the verb.
-const ghPRViewJSONFields = "state,checks,reviews,mergeable,headRefName,baseRefName,isDraft,statusCheckRollup"
+// agent invoked the verb. CI check state is carried by statusCheckRollup;
+// the legacy `checks` field was removed from gh and is not requested.
+const ghPRViewJSONFields = "state,reviews,mergeable,headRefName,baseRefName,isDraft,statusCheckRollup"
 
 // GHPRView reads a GitHub PR's state via the host gh CLI in the resolved
 // source repo and returns the parsed JSON. Holds the per-source-repo lock
