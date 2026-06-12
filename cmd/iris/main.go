@@ -35,6 +35,7 @@ func newRootCmd() *cobra.Command {
 	root.AddCommand(newGHPRCommentCmd())
 	root.AddCommand(newGHPRCloseCmd())
 	root.AddCommand(newRunBuildCmd())
+	root.AddCommand(newRunChecksCmd())
 	root.AddCommand(newCompleteTaskCmd())
 	root.AddCommand(newFetchCmd())
 	root.AddCommand(newBranchDeleteRemoteCmd())

@@ -67,9 +67,10 @@ All tools are registered as `mcp__argus__<name>`. Names below omit the prefix. U
 - **`iris_branch_delete_remote`** — delete a remote branch via `git push origin :<branch>`. Refuses the default branch. Returns the prior remote SHA.
 - **`iris_tag`** — create an annotated tag at `origin/<default-branch>` and push it (`tag` name, optional `message`). Refuses if the tag already exists.
 
-### Build
+### Build & checks
 
 - **`iris_run_build`** — run the project's build in the worktree (`script/iris-build` if present, else the Makefile `build` target). Returns command, exit code, and combined output; non-zero exit still carries the output so you see compile errors. Use to gate a PR/merge on a clean build.
+- **`iris_run_checks`** — run a repo-defined quality check in the worktree via `script/iris-check <check>` (e.g. `check="lint"`, `"test"`, `"security"`). Script-only, no Makefile fallback; errors naming `script/iris-check` if it's absent or non-executable. Returns command, exit code, and combined output; non-zero exit still carries the full output, so you read the real rubocop/rspec/brakeman text host-side instead of waiting on CI. `check` is a single token passed as an argv element to the repo-controlled script, not a shell string.
 
 ### Self-management (rarely what a task agent wants)
 
