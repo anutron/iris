@@ -16,7 +16,7 @@ Read [`SKETCH.md`](./SKETCH.md) for the full design context. Read [`openspec/cha
 
 - Not a remote shell. No generic command-passthrough verb. Ever.
 - Not a worktree-cleanup daemon. Argus owns lifecycle; iris performs the privileged ops cleanup needs.
-- Not a CI runner. `iris:run_build` runs a local script when added; it's not a substitute for GitHub Actions.
+- Not a CI runner. `iris:run_build` and `iris:run_checks` run repo-defined local scripts (`script/iris-build`, `script/iris-check <check>`) host-side when added; they're not a substitute for GitHub Actions.
 - Not a credential manager. Reuses `~/.ssh`, `~/.gitconfig`, `gh auth` as-is.
 
 ## Install
@@ -72,6 +72,7 @@ iris gh-pr-ready <task-id> -p N    Mark a draft PR as ready for review via gh CL
 iris gh-pr-comment <task-id> -p N --body B   Post a comment to a GitHub PR via gh CLI.
 iris gh-pr-close <task-id> -p N    Close a GitHub PR without merging (--delete-branch optional).
 iris run-build <task-id>           Run the worktree's build (script/iris-build or make build [target]).
+iris run-checks <task-id> <check>  Run a repo-defined check in the worktree (script/iris-check <check>; script-only).
 iris complete-task <task-id>       Composite ship-it: merge + push default + delete remote branch + mark complete + archive.
 iris fetch <task-id>               Run `git fetch origin` in the source repo; returns refs whose tracking SHAs changed.
 iris branch-delete-remote <task-id> --branch <name>

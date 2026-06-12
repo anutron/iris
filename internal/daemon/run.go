@@ -78,6 +78,7 @@ func Start(ctx context.Context, cfg *config.Config, log *slog.Logger) (*Daemon, 
 	mcpSrv.RegisterHandler("iris_gh_pr_comment", mcp.NewGHPRCommentHandler(client))
 	mcpSrv.RegisterHandler("iris_gh_pr_close", mcp.NewGHPRCloseHandler(client))
 	mcpSrv.RegisterHandler("iris_run_build", mcp.NewRunBuildHandler(client))
+	mcpSrv.RegisterHandler("iris_run_checks", mcp.NewRunChecksHandler(client))
 	mcpSrv.RegisterHandler("iris_set_dogfood", mcp.NewSetDogfoodHandler(client))
 	mcpSrv.RegisterHandler("iris_set_local_config", mcp.NewSetLocalConfigHandler(client))
 	mcpSrv.RegisterHandler("iris_ship_feature", mcp.NewShipFeatureHandler(client))
@@ -303,6 +304,18 @@ func toolDefinitions() []mcp.ToolDefinition {
 					"target":  map[string]any{"type": "string", "description": "(optional) Build target/argument passed verbatim to the script or as `make build <target>`."},
 				},
 				"required": []string{"task_id"},
+			},
+		},
+		{
+			Name:        "iris_run_checks",
+			Description: "Run a repo-defined quality check for an argus task in its worktree, host-side. Runs the executable `script/iris-check <check>` (e.g. check=\"lint\", \"test\", \"security\") and returns command, exit code, and combined output. Script-only — there is no Makefile fallback; if `script/iris-check` is absent or non-executable the call errors naming the expected path. On non-zero exit the response is an error that still carries the full check output (the real rubocop/rspec/brakeman text), so sandboxed agents see check failures verbatim without reading CI logs. `check` is a single token passed as an argv element to the repo-controlled script, not a shell string.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"task_id": map[string]any{"type": "string", "description": "Argus task ID. Iris resolves the worktree from this."},
+					"check":   map[string]any{"type": "string", "description": "Check to run, passed as the first positional argument to `script/iris-check` (e.g. \"lint\", \"test\", \"security\"). Required and non-empty."},
+				},
+				"required": []string{"task_id", "check"},
 			},
 		},
 		{
