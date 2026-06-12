@@ -20,7 +20,7 @@ func TestGHPRView_HappyPathReturnsParsedJSON(t *testing.T) {
 
 	body := fakeGHCaptureArgv + `
 cat <<EOF
-{"state":"OPEN","isDraft":false,"headRefName":"argus/ghview-happy","baseRefName":"main","mergeable":"MERGEABLE","checks":[],"reviews":[],"statusCheckRollup":[]}
+{"state":"OPEN","isDraft":false,"headRefName":"argus/ghview-happy","baseRefName":"main","mergeable":"MERGEABLE","reviews":[],"statusCheckRollup":[]}
 EOF
 exit 0
 `
@@ -53,7 +53,7 @@ exit 0
 	if !strings.Contains(argv, "--json") {
 		t.Fatalf("argv missing --json flag:\n%s", argv)
 	}
-	for _, field := range []string{"state", "checks", "reviews", "mergeable", "headRefName", "baseRefName", "isDraft", "statusCheckRollup"} {
+	for _, field := range []string{"state", "reviews", "mergeable", "headRefName", "baseRefName", "isDraft", "statusCheckRollup"} {
 		if !strings.Contains(argv, field) {
 			t.Fatalf("argv missing --json field %q:\n%s", field, argv)
 		}

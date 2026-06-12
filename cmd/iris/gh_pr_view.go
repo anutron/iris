@@ -19,7 +19,7 @@ func newGHPRViewCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "gh-pr-view <task-id>",
 		Short: "Read a GitHub PR's state via the host gh CLI (direct host invocation)",
-		Long:  "Run iris:gh_pr_view directly against the host shell. Shells out to `gh pr view --json state,checks,reviews,mergeable,headRefName,baseRefName,isDraft,statusCheckRollup`; bypasses argus + MCP.",
+		Long:  "Run iris:gh_pr_view directly against the host shell. Shells out to `gh pr view --json state,reviews,mergeable,headRefName,baseRefName,isDraft,statusCheckRollup`; bypasses argus + MCP.",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			taskID := args[0]

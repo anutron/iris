@@ -246,7 +246,7 @@ func toolDefinitions() []mcp.ToolDefinition {
 		},
 		{
 			Name:        "iris_gh_pr_view",
-			Description: "Read a GitHub PR's state via the host's gh CLI. Shells out to `gh pr view <pr> --json state,checks,reviews,mergeable,headRefName,baseRefName,isDraft,statusCheckRollup` in the resolved source repo and returns the parsed JSON unchanged. For \"is this PR ready to merge\" agent loops.",
+			Description: "Read a GitHub PR's state via the host's gh CLI. Shells out to `gh pr view <pr> --json state,reviews,mergeable,headRefName,baseRefName,isDraft,statusCheckRollup` in the resolved source repo and returns the parsed JSON unchanged. CI check state is in statusCheckRollup. For \"is this PR ready to merge\" agent loops.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
