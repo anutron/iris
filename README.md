@@ -64,8 +64,8 @@ iris start --foreground            Run the daemon (called by the LaunchAgent).
 iris stop                          SIGTERM to the running daemon.
 iris status                        Daemon health (no args) OR self-mgmt status (with target).
 iris merge-to-master <task-id>     Merge an argus task's branch into the source repo's default branch (--dry-run previews).
-iris push <task-id>                Push the task's branch to origin (host-side; --force-with-lease).
-iris gh-pr-create <task-id> -t T   Create a GitHub PR via gh CLI (--title required; --body, --draft).
+iris push <task-id>                Push the task's branch to origin (host-side; --force-with-lease, --branch, --remote <name>).
+iris gh-pr-create <task-id> -t T   Create a GitHub PR via gh CLI (--title required; --body, --draft, --head, --base-repo <owner/repo>).
 iris gh-pr-merge <task-id> -p N    Merge a GitHub PR via gh CLI (--strategy squash|merge|rebase).
 iris gh-pr-view <task-id> -p N     Read a GitHub PR's state via gh CLI (--json state/checks/reviews/...).
 iris gh-pr-ready <task-id> -p N    Mark a draft PR as ready for review via gh CLI (idempotent).
@@ -97,6 +97,18 @@ iris ls                            List managed systems iris has reloaded (--lim
 ```
 
 Direct invocation bypasses argus + MCP and calls the same Go function the MCP handler does — useful when debugging.
+
+### Pushing to an upstream so CI runs
+
+When `origin` is your fork (e.g. `anutron/argus`) but you have write access to the canonical upstream (`drn/argus`), GitHub will not run CI on a cross-fork PR. The CI-gated motion is to push the branch **to the upstream** and open a **same-repo PR there**:
+
+```
+iris push <task-id> --remote upstream
+iris gh-pr-create <task-id> --title "..." --base-repo drn/argus
+```
+
+- `--remote` targets any **configured** remote (a name, never a URL — iris validates it exists and never adds remotes). Defaults to `origin`.
+- `--base-repo` opens a same-repo PR on that `owner/repo` and **bypasses fork auto-detection** (the head is not fork-qualified; the branch must already exist there). Without it, `iris:gh_pr_create` opens a same-repo PR on origin, or — when origin is a fork — a cross-fork PR into the upstream parent (which won't run CI).
 
 ## Self-management
 

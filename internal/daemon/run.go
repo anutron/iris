@@ -205,28 +205,30 @@ func toolDefinitions() []mcp.ToolDefinition {
 		},
 		{
 			Name:        "iris_push",
-			Description: "Push the argus task's branch to origin from the canonical source repo. Resolves source repo and branch from task_id. Refuses to push the default branch. Returns the remote SHA.",
+			Description: "Push the argus task's branch to a remote from the canonical source repo. Resolves source repo and branch from task_id. Pushes to `origin` by default; pass `remote` to push to a different CONFIGURED remote (a name, never a URL) — e.g. to push a branch to an upstream you have write access to so its CI runs (cross-fork PRs from a fork don't run CI). Refuses to push the default branch. Returns the effective remote and remote SHA.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"task_id":          map[string]any{"type": "string", "description": "Argus task ID. Iris resolves the source repo and branch from this."},
 					"force_with_lease": map[string]any{"type": "boolean", "description": "Pass --force-with-lease to git push (default false). Safe form of --force; checks the upstream matches."},
 					"branch":           map[string]any{"type": "string", "description": "(optional) Branch to push instead of the task's resolved branch. MUST NOT be the default branch."},
+					"remote":           map[string]any{"type": "string", "description": "(optional) Push to this remote instead of `origin`. MUST be a remote already configured in the source repo (a name like `upstream`, not a URL); iris validates it exists and never adds remotes."},
 				},
 				"required": []string{"task_id"},
 			},
 		},
 		{
 			Name:        "iris_gh_pr_create",
-			Description: "Open a GitHub pull request for the argus task's branch using the host's gh CLI. Resolves source repo and branch from task_id. Refuses to open a PR from the default branch. Returns the PR number and URL.",
+			Description: "Open a GitHub pull request for the argus task's branch using the host's gh CLI. Resolves source repo and branch from task_id. Target selection: if `base_repo` is given, opens a SAME-REPO PR on that owner/repo (use this to PR into an upstream you pushed a branch to via `iris_push remote=...`, so CI runs); else if origin is a fork, opens a CROSS-FORK PR into the upstream parent (note: GitHub does not run CI on cross-fork PRs from a fork); else opens a same-repo PR on origin. Refuses to open a PR from the default branch. Returns the PR number and URL.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"task_id": map[string]any{"type": "string", "description": "Argus task ID. Iris resolves the source repo and branch from this."},
-					"title":   map[string]any{"type": "string", "description": "PR title."},
-					"body":    map[string]any{"type": "string", "description": "(optional) PR body. When omitted, gh's default applies."},
-					"draft":   map[string]any{"type": "boolean", "description": "Open the PR as a draft (default false)."},
-					"head":    map[string]any{"type": "string", "description": "(optional) Head branch to open the PR for instead of the task's resolved branch. MUST NOT be the default branch."},
+					"task_id":   map[string]any{"type": "string", "description": "Argus task ID. Iris resolves the source repo and branch from this."},
+					"title":     map[string]any{"type": "string", "description": "PR title."},
+					"body":      map[string]any{"type": "string", "description": "(optional) PR body. When omitted, gh's default applies."},
+					"draft":     map[string]any{"type": "boolean", "description": "Open the PR as a draft (default false)."},
+					"head":      map[string]any{"type": "string", "description": "(optional) Head branch to open the PR for instead of the task's resolved branch. MUST NOT be the default branch."},
+					"base_repo": map[string]any{"type": "string", "description": "(optional) Open a same-repo PR on this owner/repo (e.g. `drn/argus`) and skip fork auto-detection. The head branch must already exist there (push it first with `iris_push remote=...`). Takes precedence over fork detection; the head is not fork-qualified."},
 				},
 				"required": []string{"task_id", "title"},
 			},

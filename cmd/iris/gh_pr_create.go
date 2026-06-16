@@ -15,10 +15,11 @@ import (
 
 func newGHPRCreateCmd() *cobra.Command {
 	var (
-		title string
-		body  string
-		draft bool
-		head  string
+		title    string
+		body     string
+		draft    bool
+		head     string
+		baseRepo string
 	)
 
 	cmd := &cobra.Command{
@@ -44,10 +45,11 @@ func newGHPRCreateCmd() *cobra.Command {
 			client := argus.New(fmt.Sprintf("http://127.0.0.1:%d", apiPort), token)
 
 			result, err := verbs.GHPRCreate(cmd.Context(), client, taskID, verbs.GHPRCreateOptions{
-				Title: title,
-				Body:  body,
-				Draft: draft,
-				Head:  head,
+				Title:    title,
+				Body:     body,
+				Draft:    draft,
+				Head:     head,
+				BaseRepo: baseRepo,
 			})
 			if err != nil {
 				return err
@@ -61,6 +63,7 @@ func newGHPRCreateCmd() *cobra.Command {
 	cmd.Flags().StringVar(&body, "body", "", "PR body (optional; gh's default applies when empty)")
 	cmd.Flags().BoolVar(&draft, "draft", false, "Open the PR as a draft")
 	cmd.Flags().StringVar(&head, "head", "", "(optional) head branch to open the PR for instead of the task's resolved branch. MUST NOT be the default branch.")
+	cmd.Flags().StringVar(&baseRepo, "base-repo", "", "(optional) open a same-repo PR on this owner/repo (e.g. drn/argus) instead of auto-detecting a fork.")
 	_ = cmd.MarkFlagRequired("title")
 	return cmd
 }

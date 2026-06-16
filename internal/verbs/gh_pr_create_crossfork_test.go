@@ -77,6 +77,98 @@ func TestGHPRCreate_NonForkSameRepo(t *testing.T) {
 	}
 }
 
+// fakeGHBaseRepoOnly builds a fake gh that records the `gh pr create` argv but
+// FAILS on `gh repo view` — so a passing test proves fork detection was never
+// consulted when base_repo is set.
+func fakeGHBaseRepoOnly(prURL string) string {
+	return `
+case "$1 $2" in
+  "repo view")
+    echo 'gh: repo view must not be called when base_repo is set' >&2
+    exit 1 ;;
+  "pr create")
+    { for a in "$@"; do printf '%s\n' "$a"; done; } > "$IRIS_FAKE_GH_DIR/argv"
+    printf '%s\n' "` + prURL + `"
+    exit 0 ;;
+esac
+echo "unexpected gh invocation: $*" >&2
+exit 1
+`
+}
+
+func TestGHPRCreate_BaseRepoSameRepoPR(t *testing.T) {
+	src, wt, _ := setupRepoWithBareAndWorktree(t, "ghpr-baserepo")
+	client := stubArgus(t, src, wt)
+	dir := writeFakeGH(t, fakeGHBaseRepoOnly("https://github.com/drn/argus/pull/42"))
+
+	result, err := GHPRCreate(context.Background(), client, "task-ghpr-baserepo", GHPRCreateOptions{
+		Title:    "Add config",
+		BaseRepo: "drn/argus",
+	})
+	if err != nil {
+		t.Fatalf("base_repo pr create: %v", err)
+	}
+	if result.Number != 42 {
+		t.Fatalf("PR number: got %d want 42", result.Number)
+	}
+	argv := readFakeGHArgv(t, dir)
+	for _, want := range []string{"--repo", "drn/argus", "--head", "argus/ghpr-baserepo"} {
+		if !strings.Contains(argv, want) {
+			t.Fatalf("base_repo argv missing %q:\n%s", want, argv)
+		}
+	}
+	if strings.Contains(argv, "--base") {
+		t.Fatalf("base_repo PR should omit --base (gh defaults to base_repo default):\n%s", argv)
+	}
+	if strings.Contains(argv, "drn:") || strings.Contains(argv, "anutron:") {
+		t.Fatalf("base_repo PR must NOT fork-qualify the head:\n%s", argv)
+	}
+}
+
+// TestGHPRCreate_BaseRepoPrecedenceOverFork verifies base_repo wins even when
+// origin is a fork. The fake gh fails on `repo view`, so the test only passes
+// if detection is skipped entirely.
+func TestGHPRCreate_BaseRepoPrecedenceOverFork(t *testing.T) {
+	src, wt, _ := setupRepoWithBareAndWorktree(t, "ghpr-baserepo-fork")
+	client := stubArgus(t, src, wt)
+	dir := writeFakeGH(t, fakeGHBaseRepoOnly("https://github.com/drn/argus/pull/43"))
+
+	result, err := GHPRCreate(context.Background(), client, "task-ghpr-baserepo-fork", GHPRCreateOptions{
+		Title:    "x",
+		BaseRepo: "drn/argus",
+	})
+	if err != nil {
+		t.Fatalf("base_repo precedence pr create: %v", err)
+	}
+	if result.Number != 43 {
+		t.Fatalf("PR number: got %d want 43", result.Number)
+	}
+	argv := readFakeGHArgv(t, dir)
+	if !strings.Contains(argv, "--repo") || !strings.Contains(argv, "drn/argus") {
+		t.Fatalf("expected --repo drn/argus:\n%s", argv)
+	}
+	if strings.Contains(argv, ":argus/") || strings.Contains(argv, "anutron:") {
+		t.Fatalf("base_repo must not fork-qualify the head:\n%s", argv)
+	}
+}
+
+func TestGHPRCreate_BaseRepoRejectsMalformed(t *testing.T) {
+	src, wt, _ := setupRepoWithBareAndWorktree(t, "ghpr-baserepo-bad")
+	client := stubArgus(t, src, wt)
+	// No fake gh: any gh invocation would fail to find the binary, but the
+	// verb must reject before reaching gh.
+	for _, bad := range []string{"-evil", "notaslug", "too/many/slashes", "/leadingslash", "trailing/"} {
+		_, err := GHPRCreate(context.Background(), client, "task-ghpr-baserepo-bad", GHPRCreateOptions{
+			Title:    "x",
+			BaseRepo: bad,
+		})
+		if err == nil {
+			t.Fatalf("expected error for malformed base_repo %q, got nil", bad)
+		}
+	}
+	_ = src
+}
+
 func TestGHPRCreate_ForkDetectionFailureFallsBack(t *testing.T) {
 	src, wt, _ := setupRepoWithBareAndWorktree(t, "ghpr-detectfail")
 	client := stubArgus(t, src, wt)

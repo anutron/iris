@@ -15,12 +15,17 @@ type PushOptions struct {
 	// Branch, when non-empty, overrides the task's resolved branch. The
 	// effective branch is this value; the default-branch refusal applies.
 	Branch string
+	// Remote, when non-empty, overrides the default "origin" target. The
+	// effective remote MUST be a remote already configured in the source
+	// repo — Push validates it exists and never accepts a URL.
+	Remote string
 }
 
 // PushResult is the structured success payload.
 type PushResult struct {
 	Pushed    bool   `json:"pushed"`
 	Branch    string `json:"branch"`
+	Remote    string `json:"remote"`
 	RemoteSHA string `json:"remote_sha"`
 }
 
@@ -60,25 +65,45 @@ func Push(ctx context.Context, client *argus.Client, taskID string, opts PushOpt
 		return nil, fmt.Errorf("refusing to push default branch %q", effective)
 	}
 
+	// Compute the effective remote: use the override when provided, otherwise
+	// fall back to origin.
+	remote := "origin"
+	if opts.Remote != "" {
+		remote = opts.Remote
+	}
+	// Reject a leading '-' so a caller-supplied remote override cannot smuggle
+	// flags into git. Real remote names never begin with `-`.
+	if strings.HasPrefix(remote, "-") {
+		return nil, fmt.Errorf("invalid remote name %q (must not begin with '-')", remote)
+	}
+
 	mu := lockSourceRepo(resolved.SourceRepo)
 	defer mu.Unlock()
 
-	pushArgs := []string{"push", "origin", effective}
+	// The remote must already be configured in the source repo. iris pushes to
+	// named remotes only — never to ad-hoc URLs — so resolve it up front and
+	// fail cleanly when it is unknown.
+	if _, err := runGit(ctx, resolved.SourceRepo, "remote", "get-url", remote); err != nil {
+		return nil, fmt.Errorf("unknown git remote %q in source repo %s", remote, resolved.SourceRepo)
+	}
+
+	pushArgs := []string{"push", remote, effective}
 	if opts.ForceWithLease {
 		pushArgs = append(pushArgs, "--force-with-lease")
 	}
 	if out, err := runGit(ctx, resolved.SourceRepo, pushArgs...); err != nil {
-		return nil, fmt.Errorf("push %s: %w; log:\n%s", effective, err, out)
+		return nil, fmt.Errorf("push %s to %s: %w; log:\n%s", effective, remote, err, out)
 	}
 
-	sha, err := runGit(ctx, resolved.SourceRepo, "rev-parse", "origin/"+effective)
+	sha, err := runGit(ctx, resolved.SourceRepo, "rev-parse", remote+"/"+effective)
 	if err != nil {
-		return nil, fmt.Errorf("rev-parse origin/%s: %w", effective, err)
+		return nil, fmt.Errorf("rev-parse %s/%s: %w", remote, effective, err)
 	}
 
 	return &PushResult{
 		Pushed:    true,
 		Branch:    effective,
+		Remote:    remote,
 		RemoteSHA: strings.TrimSpace(sha),
 	}, nil
 }
