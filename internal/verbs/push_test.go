@@ -288,6 +288,99 @@ func TestPush_NoBranchOverridePreservesTaskBranch(t *testing.T) {
 	}
 }
 
+// TestPush_RemoteOverride verifies that when opts.Remote is non-empty the verb
+// pushes to the named remote (not origin) and reports it.
+func TestPush_RemoteOverride(t *testing.T) {
+	t.Parallel()
+	src, wt, bare := setupRepoWithBareAndWorktree(t, "push-remote")
+	client := stubArgus(t, src, wt)
+
+	// Add a second bare remote "upstream" to the source repo.
+	tmp := t.TempDir()
+	upstreamBare := filepath.Join(tmp, "upstream.git")
+	g := gitRunner(t)
+	g("", "init", "--bare", "-b", "main", upstreamBare)
+	g(src, "remote", "add", "upstream", upstreamBare)
+
+	result, err := Push(context.Background(), client, "task-remote", PushOptions{Remote: "upstream"})
+	if err != nil {
+		t.Fatalf("push with remote override: %v", err)
+	}
+	if !result.Pushed {
+		t.Fatal("expected Pushed=true")
+	}
+	if result.Remote != "upstream" {
+		t.Fatalf("result.Remote: got %q, want %q", result.Remote, "upstream")
+	}
+	localSHA := headSHA(t, wt)
+	if result.RemoteSHA != localSHA {
+		t.Fatalf("remote sha mismatch: got %q want %q", result.RemoteSHA, localSHA)
+	}
+	// The branch must land on the upstream bare, NOT on origin.
+	if remoteRef(t, upstreamBare, "argus/push-remote") != localSHA {
+		t.Fatal("expected argus/push-remote on the upstream bare")
+	}
+	if remoteRef(t, bare, "argus/push-remote") != "" {
+		t.Fatal("expected origin bare to NOT receive the branch")
+	}
+}
+
+// TestPush_RefusesUnknownRemote verifies a remote that is not configured in the
+// source repo is refused before any push.
+func TestPush_RefusesUnknownRemote(t *testing.T) {
+	t.Parallel()
+	src, wt, bare := setupRepoWithBareAndWorktree(t, "push-badremote")
+	client := stubArgus(t, src, wt)
+	before := remoteRef(t, bare, "argus/push-badremote")
+
+	_, err := Push(context.Background(), client, "task-badremote", PushOptions{Remote: "nope"})
+	if err == nil {
+		t.Fatal("expected error for unknown remote, got nil")
+	}
+	if !strings.Contains(err.Error(), "nope") {
+		t.Fatalf("expected error to name the unknown remote, got: %v", err)
+	}
+	if after := remoteRef(t, bare, "argus/push-badremote"); after != before {
+		t.Fatalf("expected origin unchanged: before=%s after=%s", before, after)
+	}
+}
+
+// TestPush_RemoteRejectsLeadingDash verifies a remote override beginning with
+// '-' is rejected before git runs.
+func TestPush_RemoteRejectsLeadingDash(t *testing.T) {
+	t.Parallel()
+	src, wt, _ := setupRepoWithBareAndWorktree(t, "push-remote-dash")
+	client := stubArgus(t, src, wt)
+
+	_, err := Push(context.Background(), client, "task-remote-dash", PushOptions{Remote: "--upload-pack=evil"})
+	if err == nil {
+		t.Fatal("expected error rejecting leading-dash remote, got nil")
+	}
+	if !strings.Contains(err.Error(), "must not begin with '-'") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	_ = src
+}
+
+// TestPush_NoRemoteDefaultsToOrigin verifies backward compatibility: omitting
+// opts.Remote pushes to origin and reports remote="origin".
+func TestPush_NoRemoteDefaultsToOrigin(t *testing.T) {
+	t.Parallel()
+	src, wt, bare := setupRepoWithBareAndWorktree(t, "push-noremote")
+	client := stubArgus(t, src, wt)
+
+	result, err := Push(context.Background(), client, "task-noremote", PushOptions{})
+	if err != nil {
+		t.Fatalf("push: %v", err)
+	}
+	if result.Remote != "origin" {
+		t.Fatalf("result.Remote: got %q, want %q", result.Remote, "origin")
+	}
+	if remoteRef(t, bare, "argus/push-noremote") == "" {
+		t.Fatal("expected argus/push-noremote pushed to origin bare")
+	}
+}
+
 // Concurrency invariant: Push shares repoLocks with MergeToMaster. We don't
 // need a second test for this — the merge_to_master serialize test already
 // validates the lock map; this is a coverage check that Push compiles

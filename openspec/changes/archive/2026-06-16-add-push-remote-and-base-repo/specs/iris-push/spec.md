@@ -1,8 +1,7 @@
 # iris-push Specification
 
-## Purpose
-TBD - created by archiving change add-push-verb. Update Purpose after archive.
-## Requirements
+## MODIFIED Requirements
+
 ### Requirement: `iris:push` verb
 
 The plugin SHALL expose `iris:push` as an MCP tool accepting `task_id` (string, required), `force_with_lease` (bool, default false), `branch` (string, optional), and `remote` (string, optional). When `branch` is provided and non-empty, the verb SHALL push that branch; when `branch` is omitted or empty, the verb SHALL push the task's resolved branch. The branch actually acted upon is the "effective branch". When `remote` is provided and non-empty, the verb SHALL push to that named git remote; when `remote` is omitted or empty, the verb SHALL push to `origin`. The remote actually acted upon is the "effective remote". The effective remote MUST be a remote already configured in the source repo — iris SHALL validate it exists (e.g. via `git remote get-url <remote>`) before pushing and SHALL NOT accept a URL or add remotes. On success the verb SHALL return `{pushed: true, branch, remote, remote_sha}` where `branch` is the effective branch and `remote` is the effective remote; on failure it SHALL return a structured error and leave the remote's refs unchanged. The default-branch refusal and source-repo allowlist SHALL apply to the effective branch. The verb SHALL reject an effective branch or an effective remote that begins with `-` before invoking git, so an override cannot smuggle flags into `git push`.
@@ -66,4 +65,3 @@ The plugin SHALL expose `iris:push` as an MCP tool accepting `task_id` (string, 
 
 - **WHEN** the user runs `iris push <task-id> [--force-with-lease] [--branch <name>] [--remote <name>]` from any shell on the host
 - **THEN** the same `verbs.Push` Go function executes (bypassing the daemon process) and prints the structured result
-

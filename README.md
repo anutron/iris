@@ -8,15 +8,15 @@ Greek-pantheon naming continues from [argus](https://github.com/drn/argus) and [
 
 ## Status
 
-v1 verb set landed: `merge_to_master`, `push`, `gh_pr_create`, `gh_pr_merge`, `run_build`, `complete_task`. Each verb lives in its own OpenSpec change folder under `openspec/changes/` until they archive together.
+The full verb set has shipped and archived: host-side git/gh operations (`merge_to_master`, `push`, `gh_pr_*`, `branch_*`, `cherry_pick`, `checkout`, `fetch`, `tag`, `complete_task`), build and check runners (`run_build`, `run_checks`), daemon self-management (`reload`, `publish`, `validate_config`, `ls`, `status`), and the dogfood/ship workflow (`set_dogfood`, `ship_feature`, `set_local_config`). Each verb's base spec lives under [`openspec/specs/`](./openspec/specs/); the change folders that introduced them are archived under [`openspec/changes/archive/`](./openspec/changes/archive/).
 
-Read [`SKETCH.md`](./SKETCH.md) for the full design context. Read [`openspec/changes/bootstrap-iris-plugin/`](./openspec/changes/bootstrap-iris-plugin/) for the active change folder.
+Read [`SKETCH.md`](./SKETCH.md) for the full design context. In-flight work lives in the active change folders under [`openspec/changes/`](./openspec/changes/).
 
 ## What iris is NOT
 
 - Not a remote shell. No generic command-passthrough verb. Ever.
 - Not a worktree-cleanup daemon. Argus owns lifecycle; iris performs the privileged ops cleanup needs.
-- Not a CI runner. `iris:run_build` and `iris:run_checks` run repo-defined local scripts (`script/iris-build`, `script/iris-check <check>`) host-side when added; they're not a substitute for GitHub Actions.
+- Not a CI runner. `iris:run_build` and `iris:run_checks` invoke a single repo-defined local script on demand (`script/iris-build`, `script/iris-check <check>`) in the task's worktree on the host. They let an agent build or run tests/lint without leaving the sandbox — but there are no triggers, no matrix, no parallelism, and no merge gating. They are a convenience, not a substitute for GitHub Actions; CI remains authoritative.
 - Not a credential manager. Reuses `~/.ssh`, `~/.gitconfig`, `gh auth` as-is.
 
 ## Install
@@ -64,8 +64,8 @@ iris start --foreground            Run the daemon (called by the LaunchAgent).
 iris stop                          SIGTERM to the running daemon.
 iris status                        Daemon health (no args) OR self-mgmt status (with target).
 iris merge-to-master <task-id>     Merge an argus task's branch into the source repo's default branch (--dry-run previews).
-iris push <task-id>                Push the task's branch to origin (host-side; --force-with-lease).
-iris gh-pr-create <task-id> -t T   Create a GitHub PR via gh CLI (--title required; --body, --draft).
+iris push <task-id>                Push the task's branch to origin (host-side; --force-with-lease, --branch, --remote <name>).
+iris gh-pr-create <task-id> -t T   Create a GitHub PR via gh CLI (--title required; --body, --draft, --head, --base-repo <owner/repo>).
 iris gh-pr-merge <task-id> -p N    Merge a GitHub PR via gh CLI (--strategy squash|merge|rebase).
 iris gh-pr-view <task-id> -p N     Read a GitHub PR's state via gh CLI (--json state/checks/reviews/...).
 iris gh-pr-ready <task-id> -p N    Mark a draft PR as ready for review via gh CLI (idempotent).
@@ -91,10 +91,24 @@ iris ship-feature --branch <name> --via pr|pr-auto [--title T] [--body B] [--mer
                                    Ship a feature branch to origin's default branch via a GitHub PR. pr-auto also waits for CI, approves, merges, fetches, and re-composes the dogfood branch.
 iris reload [target]               Live-upgrade an iris-managed daemon via .iris.toml (--no-pull, --timeout).
 iris validate-config [target]      Parse + cross-validate a .iris.toml; no side effects.
+iris set-local-config <task-id> --field k=v [--delete k]
+                                   Write/merge per-developer fields into .iris.local.toml at the source repo root.
 iris ls                            List managed systems iris has reloaded (--limit, --since).
 ```
 
 Direct invocation bypasses argus + MCP and calls the same Go function the MCP handler does — useful when debugging.
+
+### Pushing to an upstream so CI runs
+
+When `origin` is your fork (e.g. `anutron/argus`) but you have write access to the canonical upstream (`drn/argus`), GitHub will not run CI on a cross-fork PR. The CI-gated motion is to push the branch **to the upstream** and open a **same-repo PR there**:
+
+```
+iris push <task-id> --remote upstream
+iris gh-pr-create <task-id> --title "..." --base-repo drn/argus
+```
+
+- `--remote` targets any **configured** remote (a name, never a URL — iris validates it exists and never adds remotes). Defaults to `origin`.
+- `--base-repo` opens a same-repo PR on that `owner/repo` and **bypasses fork auto-detection** (the head is not fork-qualified; the branch must already exist there). Without it, `iris:gh_pr_create` opens a same-repo PR on origin, or — when origin is a fork — a cross-fork PR into the upstream parent (which won't run CI).
 
 ## Self-management
 

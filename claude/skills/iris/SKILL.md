@@ -45,13 +45,13 @@ All tools are registered as `mcp__argus__<name>`. Names below omit the prefix. U
 
 ### Ship (get your branch into the default branch / origin)
 
-- **`iris_push`** — push the task's `argus/*` branch to `origin` (force-with-lease). Use whenever you'd reach for `git push`. Refuses the default branch.
+- **`iris_push`** — push the task's `argus/*` branch to `origin` (force-with-lease). Use whenever you'd reach for `git push`. Refuses the default branch. Pass `remote` to push to a different **configured** remote (a name, never a URL) — e.g. `remote="upstream"` to push the branch to an upstream you have write access to so its CI runs (see the cross-fork note below).
 - **`iris_merge_to_master`** — merge the task's branch into the source repo's default branch (master/main) under lock. Does **not** delete the branch or worktree. Pass `dry_run: true` to preview (`would_succeed`, `files_changed`, `conflicts`) without committing.
 - **`iris_complete_task`** — the composite ship-it: merge → push default branch → delete remote task branch → mark the argus task complete → archive. Each sub-step is a checkpoint; a partial failure returns checkpoints reached so a retry resumes. Use this when you're done and want one call to finish everything.
 
 ### PR lifecycle (host `gh` CLI)
 
-- **`iris_gh_pr_create`** — open a PR for the task's branch (`title` required; `body`, `draft` optional). Refuses to open from the default branch. Returns PR number + URL. Handles a **fork → upstream** PR automatically: when `origin` is a fork, it targets the upstream parent (`--repo <upstream> --head <fork-owner>:<branch>`) — you don't need a host `gh` for cross-fork PRs.
+- **`iris_gh_pr_create`** — open a PR for the task's branch (`title` required; `body`, `draft` optional). Refuses to open from the default branch. Returns PR number + URL. Target selection: pass `base_repo="owner/repo"` to open a **same-repo PR on that repo** (skips fork detection; the branch must already exist there — push it first with `iris_push remote=...`); otherwise, when `origin` is a fork, it opens a **cross-fork** PR into the upstream parent automatically (`--repo <upstream> --head <fork-owner>:<branch>`); otherwise a same-repo PR on `origin`. **CI caveat:** GitHub does not run CI on cross-fork PRs from a fork — if you need CI, push to the upstream (`iris_push remote=...`) and use `base_repo` so the PR is same-repo there.
 - **`iris_gh_pr_view`** — read a PR's state (`pr_number`); returns `gh`'s JSON (state, checks, reviews, mergeable, isDraft, statusCheckRollup, …). This is your polling tool for "is this PR green / ready to merge?".
 - **`iris_gh_pr_ready`** — take a draft PR out of draft (idempotent; reports whether it changed state).
 - **`iris_gh_pr_comment`** — post a comment to a PR (`body`). Returns the comment URL.
@@ -151,7 +151,16 @@ iris_gh_pr_create(task_id, title="…", draft=true)   # draft while review happe
 iris_gh_pr_ready(task_id, pr_number=N)               # take it out of draft
 ```
 
-### C. Cherry-pick a hotfix onto a release branch
+### C. Push to an upstream so CI runs (origin is your fork)
+
+When `origin` is your fork but you have write access to the canonical upstream, a cross-fork PR won't run CI. Push the branch to the upstream and open a same-repo PR there:
+
+```
+iris_push(task_id, remote="upstream")                 # branch lands on the upstream (must be a configured remote)
+iris_gh_pr_create(task_id, title="…", base_repo="drn/argus")   # same-repo PR on the upstream -> CI runs
+```
+
+### D. Cherry-pick a hotfix onto a release branch
 
 ```
 iris_branch_create(task_id, name="hotfix/x", base_ref="origin/release-1.2")

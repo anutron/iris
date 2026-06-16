@@ -11,11 +11,12 @@ import (
 )
 
 type ghPRCreateInput struct {
-	TaskID string `json:"task_id"`
-	Title  string `json:"title"`
-	Body   string `json:"body,omitempty"`
-	Draft  bool   `json:"draft,omitempty"`
-	Head   string `json:"head,omitempty"`
+	TaskID   string `json:"task_id"`
+	Title    string `json:"title"`
+	Body     string `json:"body,omitempty"`
+	Draft    bool   `json:"draft,omitempty"`
+	Head     string `json:"head,omitempty"`
+	BaseRepo string `json:"base_repo,omitempty"`
 }
 
 // NewGHPRCreateHandler returns a Handler that decodes the envelope input
@@ -36,10 +37,11 @@ func NewGHPRCreateHandler(client *argus.Client) Handler {
 		}
 
 		result, err := verbs.GHPRCreate(ctx, client, in.TaskID, verbs.GHPRCreateOptions{
-			Title: in.Title,
-			Body:  in.Body,
-			Draft: in.Draft,
-			Head:  in.Head,
+			Title:    in.Title,
+			Body:     in.Body,
+			Draft:    in.Draft,
+			Head:     in.Head,
+			BaseRepo: in.BaseRepo,
 		})
 		if err != nil {
 			return ErrorResponse(fmt.Sprintf("iris:gh_pr_create: %v", err))
