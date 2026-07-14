@@ -87,7 +87,15 @@ func Push(ctx context.Context, client *argus.Client, taskID string, opts PushOpt
 		return nil, fmt.Errorf("unknown git remote %q in source repo %s", remote, resolved.SourceRepo)
 	}
 
-	pushArgs := []string{"push", remote, effective}
+	// Push resolved.Branch (the task's actual, always-current work) as the
+	// source, naming it effective (the possibly-overridden name) on the
+	// remote. A bare `push <remote> <effective>` would instead read
+	// whatever local ref is literally named <effective> in the shared
+	// source repo — which, under a branch= override, can be a stale,
+	// unrelated ref left over from other tasks, silently publishing the
+	// wrong commit while still reporting success.
+	refspec := resolved.Branch + ":" + effective
+	pushArgs := []string{"push", remote, refspec}
 	if opts.ForceWithLease {
 		pushArgs = append(pushArgs, "--force-with-lease")
 	}

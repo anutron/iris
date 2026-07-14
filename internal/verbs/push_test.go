@@ -228,6 +228,43 @@ func TestPush_BranchOverride(t *testing.T) {
 	}
 }
 
+// TestPush_BranchOverridePushesTaskWorkNotStaleLocalRef verifies that a
+// branch= override publishes the task's actual HEAD, not whatever
+// unrelated local ref already happens to be named after the override in
+// the shared source repo. Regression test for a bug where `git push
+// <remote> <effective>` read the literal local ref named <effective> —
+// silently pushing stale history (and reporting success) instead of the
+// task's real work whenever a same-named stale branch already existed.
+func TestPush_BranchOverridePushesTaskWorkNotStaleLocalRef(t *testing.T) {
+	t.Parallel()
+	src, wt, bare := setupRepoWithBareAndWorktree(t, "push-stale-override")
+	client := stubArgus(t, src, wt)
+
+	// A pre-existing local branch in src, same name as the override target,
+	// but branched from src's own current HEAD — i.e. the *original* commit,
+	// not the worktree's later work commit. This mirrors the stale-ref shape
+	// seen in production: a shared source repo accumulates same-named
+	// branches from unrelated earlier tasks.
+	g := gitRunner(t)
+	g(src, "branch", "stale-target")
+
+	result, err := Push(context.Background(), client, "task-stale-override", PushOptions{Branch: "stale-target"})
+	if err != nil {
+		t.Fatalf("push with branch override: %v", err)
+	}
+	if !result.Pushed {
+		t.Fatal("expected Pushed=true")
+	}
+
+	wantSHA := headSHA(t, wt)
+	if result.RemoteSHA != wantSHA {
+		t.Fatalf("result.RemoteSHA: got %q, want worktree HEAD %q (task work must be pushed, not the stale local ref)", result.RemoteSHA, wantSHA)
+	}
+	if got := remoteRef(t, bare, "stale-target"); got != wantSHA {
+		t.Fatalf("bare origin stale-target: got %q, want worktree HEAD %q", got, wantSHA)
+	}
+}
+
 // TestPush_BranchOverrideDefaultBranchRefused verifies that the default-branch
 // refusal applies to the override, not just the resolved task branch.
 func TestPush_BranchOverrideDefaultBranchRefused(t *testing.T) {
