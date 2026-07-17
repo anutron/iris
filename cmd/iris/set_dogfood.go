@@ -15,6 +15,7 @@ func newSetDogfoodCmd() *cobra.Command {
 	var taskID string
 	var sha string
 	var manifest string
+	var force bool
 	cmd := &cobra.Command{
 		Use:   "set-dogfood",
 		Short: "Point the dogfood branch at a SHA, record a manifest, and reload",
@@ -41,6 +42,7 @@ that begins with '{').`,
 			result, err := verbs.SetDogfood(cmd.Context(), client, taskID, verbs.SetDogfoodOpts{
 				Sha:      sha,
 				Manifest: m,
+				Force:    force,
 			})
 			if result != nil {
 				body, _ := json.MarshalIndent(result, "", "  ")
@@ -52,6 +54,7 @@ that begins with '{').`,
 	cmd.Flags().StringVar(&taskID, "task", "", "(optional) argus task ID; omit for self-target")
 	cmd.Flags().StringVar(&sha, "sha", "", "full commit SHA to point the dogfood branch at (required)")
 	cmd.Flags().StringVar(&manifest, "manifest", "", "manifest as a JSON file path or inline JSON string (required)")
+	cmd.Flags().BoolVar(&force, "force", false, "override the commit-dropping ancestry refusal (deploy a --sha that is not a descendant of the current dogfood SHA, dropping commits, with a warning)")
 	_ = cmd.MarkFlagRequired("sha")
 	_ = cmd.MarkFlagRequired("manifest")
 	return cmd

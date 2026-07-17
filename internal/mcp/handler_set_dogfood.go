@@ -13,6 +13,7 @@ type setDogfoodInput struct {
 	TaskID   string                 `json:"task_id,omitempty"`
 	Sha      string                 `json:"sha"`
 	Manifest *verbs.DogfoodManifest `json:"manifest"`
+	Force    bool                   `json:"force,omitempty"`
 }
 
 // NewSetDogfoodHandler returns a Handler for iris_set_dogfood. The handler is a
@@ -32,6 +33,7 @@ func NewSetDogfoodHandler(client *argus.Client) Handler {
 		result, err := verbs.SetDogfood(ctx, client, in.TaskID, verbs.SetDogfoodOpts{
 			Sha:      in.Sha,
 			Manifest: in.Manifest,
+			Force:    in.Force,
 		})
 		if err != nil {
 			return ErrorResponse(fmt.Sprintf("iris:set_dogfood: %v", err))

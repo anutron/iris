@@ -78,8 +78,9 @@ func setupDogfoodRepoFiles(t *testing.T, slug string, files map[string]string) (
 func TestSetDogfood_HappyPathSetsBranchAndReloads(t *testing.T) {
 	src, _, _, sha, client := setupDogfoodRepo(t, "sd-happy", tomlDogfoodNone)
 	g := gitRunner(t)
-	// dev already exists, pointing at main's commit.
-	g(src, "branch", "dev", "main")
+	// dev already exists at the composed SHA's parent — a clean fast-forward, so
+	// the commit-dropping ancestry guard passes.
+	g(src, "branch", "dev", sha+"^")
 	priorDev := revParse(t, src, "refs/heads/dev")
 
 	result, err := SetDogfood(context.Background(), client, "task-sd", SetDogfoodOpts{
@@ -171,7 +172,8 @@ mechanism = "none"
 		t.Fatalf("write .iris.local.toml: %v", err)
 	}
 	g := gitRunner(t)
-	g(src, "branch", "dev", "main")
+	// dev at the composed SHA's parent → a clean fast-forward (ancestry guard passes).
+	g(src, "branch", "dev", sha+"^")
 
 	result, err := SetDogfood(context.Background(), client, "task-sd", SetDogfoodOpts{
 		Sha:      sha,
@@ -210,7 +212,8 @@ mechanism = "none"
 		"record-build.sh": recordBuild,
 	})
 	g := gitRunner(t)
-	g(src, "branch", "dev", "main")
+	// dev at the composed SHA's parent → a clean fast-forward (ancestry guard passes).
+	g(src, "branch", "dev", sha+"^")
 	mainHead := headSHA(t, src)
 	if sha == mainHead {
 		t.Fatalf("precondition: composed SHA %q must differ from default-branch HEAD", sha)
@@ -330,7 +333,7 @@ func TestSetDogfood_RefusesUnreachableSHA(t *testing.T) {
 func TestSetDogfood_PersistsManifestAlongsideAuditLog(t *testing.T) {
 	src, _, _, sha, client := setupDogfoodRepo(t, "sd-manifest", tomlDogfoodNone)
 	g := gitRunner(t)
-	g(src, "branch", "dev", "main")
+	g(src, "branch", "dev", sha+"^")
 
 	if _, err := SetDogfood(context.Background(), client, "task-sd", SetDogfoodOpts{
 		Sha:      sha,
@@ -365,7 +368,9 @@ func TestSetDogfood_PersistsManifestAlongsideAuditLog(t *testing.T) {
 func TestSetDogfood_ManifestWriteFailureLeavesBranchUntouched(t *testing.T) {
 	src, _, _, sha, client := setupDogfoodRepo(t, "sd-manifest-fail", tomlDogfoodNone)
 	g := gitRunner(t)
-	g(src, "branch", "dev", "main")
+	// dev at the composed SHA's parent → ancestry guard passes, so the run
+	// reaches the manifest write (which is what this test exercises).
+	g(src, "branch", "dev", sha+"^")
 	beforeDev := revParse(t, src, "refs/heads/dev")
 
 	// Point the audit/state dir at a path whose parent is a regular file, so
@@ -388,31 +393,43 @@ func TestSetDogfood_ManifestWriteFailureLeavesBranchUntouched(t *testing.T) {
 	}
 }
 
-func TestSetDogfood_BranchResetFailureLeavesManifestAhead(t *testing.T) {
-	src, _, _, sha, client := setupDogfoodRepo(t, "sd-reset-fail", tomlDogfoodNone)
+// TestSetDogfood_WorktreeGuardResetsCheckedOutBranch covers Fix 1 (the core
+// regression): when the dogfood branch IS the checked-out branch of a worktree,
+// `git branch -f` is refused by git ("cannot force update the branch used by
+// worktree"). The worktree-guarded ref move must fall back to `git reset --hard`
+// in that worktree, so the ref, HEAD, and working tree all advance to the
+// composed SHA.
+//
+// (The reload that follows legitimately refuses a source repo left off its
+// default branch — a pre-existing, unrelated behavior — so this test asserts the
+// ref-move outcome, which is exactly what Fix 1 changes, not the overall call.)
+func TestSetDogfood_WorktreeGuardResetsCheckedOutBranch(t *testing.T) {
+	src, wt, _, sha, client := setupDogfoodRepo(t, "sd-worktree-guard", tomlDogfoodNone)
 	g := gitRunner(t)
-	g(src, "branch", "dev", "main")
-	// Check dev out in the source repo so `git branch -f dev <sha>` is refused
-	// by git (cannot force-update a checked-out branch).
+	// dev exists at the composed SHA (which carries .iris.toml, so config still
+	// resolves) and IS the checked-out branch of the source repo — the exact
+	// state that made the old `git branch -f` fail ("cannot force update the
+	// branch used by worktree"). Deploy a descendant SHA so the ancestry guard
+	// passes and the ref genuinely moves.
+	g(src, "branch", "dev", sha)
 	g(src, "checkout", "dev")
-	beforeDev := revParse(t, src, "refs/heads/dev")
+	g(wt, "commit", "--allow-empty", "-m", "descendant of the dogfood SHA")
+	descendant := strings.TrimSpace(g(wt, "rev-parse", "HEAD"))
 
 	_, err := SetDogfood(context.Background(), client, "task-sd", SetDogfoodOpts{
-		Sha:      sha,
+		Sha:      descendant,
 		Manifest: sampleManifest(),
 	})
-	if err == nil {
-		t.Fatal("expected error when the branch reset fails")
+	// Fix 1: the guarded ref move falls back to `git reset --hard` in the
+	// worktree that has dev checked out. Old behavior: `git branch -f` errored
+	// and left dev unmoved.
+	if got := revParse(t, src, "refs/heads/dev"); got != descendant {
+		t.Fatalf("worktree-guard: dev not moved via reset --hard; got %q want %q (err=%v)", got, descendant, err)
 	}
-	// Branch unchanged...
-	if revParse(t, src, "refs/heads/dev") != beforeDev {
-		t.Fatal("dev branch moved despite reset failure")
-	}
-	// ...but the manifest is ahead (written before the failed reset).
-	stateDir, _ := SourceRepoStateDir(canonicalize(src))
-	m, _ := ReadManifest(stateDir)
-	if m == nil {
-		t.Fatal("manifest should have been written before the reset failed")
+	// reset --hard (not a bare ref move) also advanced the checked-out worktree's
+	// HEAD/tree.
+	if got := headSHA(t, src); got != descendant {
+		t.Fatalf("worktree-guard: checked-out HEAD not moved; got %q want %q", got, descendant)
 	}
 }
 
@@ -438,6 +455,98 @@ func TestSetDogfood_CreatesBranchIfMissing(t *testing.T) {
 	}
 }
 
+// TestSetDogfood_RefusesCommitDroppingDeployWithoutForce covers Fix 2: when the
+// new SHA is not a descendant of the current dogfood SHA, deploying it would
+// drop commits. Without force, iris refuses (naming the drop count and the
+// previous SHA) with no side effects.
+func TestSetDogfood_RefusesCommitDroppingDeployWithoutForce(t *testing.T) {
+	src, _, _, sha, client := setupDogfoodRepo(t, "sd-drop-refuse", tomlDogfoodNone)
+	g := gitRunner(t)
+	// dev points at main, which carries a commit the composed SHA does not
+	// contain (the two diverge). Deploying sha would drop that commit.
+	g(src, "branch", "dev", "main")
+	beforeDev := revParse(t, src, "refs/heads/dev")
+
+	_, err := SetDogfood(context.Background(), client, "task-sd", SetDogfoodOpts{
+		Sha:      sha,
+		Manifest: sampleManifest(),
+	})
+	if err == nil {
+		t.Fatal("expected refusal for a commit-dropping (non-descendant) deploy")
+	}
+	if !strings.Contains(err.Error(), "drop") {
+		t.Fatalf("error should explain the dropped commits: %v", err)
+	}
+	if !strings.Contains(err.Error(), beforeDev) {
+		t.Fatalf("error should name the previous_sha %q: %v", beforeDev, err)
+	}
+	// No side effects: dev unchanged, no manifest written.
+	if revParse(t, src, "refs/heads/dev") != beforeDev {
+		t.Fatal("dev branch moved on a refused commit-dropping deploy")
+	}
+	stateDir, _ := SourceRepoStateDir(canonicalize(src))
+	if m, _ := ReadManifest(stateDir); m != nil {
+		t.Fatal("manifest written on a refused commit-dropping deploy")
+	}
+}
+
+// TestSetDogfood_ForcedCommitDroppingDeployWarns covers Fix 2's override: with
+// force=true the same non-descendant deploy proceeds and moves the branch, but a
+// prominent commit-dropping warning is surfaced.
+func TestSetDogfood_ForcedCommitDroppingDeployWarns(t *testing.T) {
+	src, _, _, sha, client := setupDogfoodRepo(t, "sd-drop-force", tomlDogfoodNone)
+	g := gitRunner(t)
+	// Non-descendant deploy (dev=main diverges from the composed SHA).
+	g(src, "branch", "dev", "main")
+
+	result, err := SetDogfood(context.Background(), client, "task-sd", SetDogfoodOpts{
+		Sha:      sha,
+		Manifest: sampleManifest(),
+		Force:    true,
+	})
+	if err != nil {
+		t.Fatalf("forced commit-dropping deploy should proceed: %v", err)
+	}
+	if got := revParse(t, src, "refs/heads/dev"); got != sha {
+		t.Fatalf("dev branch not moved on forced deploy; got %q want %q", got, sha)
+	}
+	found := false
+	for _, w := range result.Warnings {
+		if strings.Contains(strings.ToLower(w), "drop") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected a prominent commit-dropping warning; got %v", result.Warnings)
+	}
+}
+
+// TestSetDogfood_DescendantSHAProceedsWithoutForce covers the safe case: when
+// the new SHA IS a descendant of the current dogfood SHA (a clean fast-forward),
+// the deploy proceeds without force and without any commit-dropping warning.
+func TestSetDogfood_DescendantSHAProceedsWithoutForce(t *testing.T) {
+	src, _, _, sha, client := setupDogfoodRepo(t, "sd-descendant", tomlDogfoodNone)
+	g := gitRunner(t)
+	// dev at the composed SHA's parent → sha is a strict descendant.
+	g(src, "branch", "dev", sha+"^")
+
+	result, err := SetDogfood(context.Background(), client, "task-sd", SetDogfoodOpts{
+		Sha:      sha,
+		Manifest: sampleManifest(),
+	})
+	if err != nil {
+		t.Fatalf("descendant deploy should proceed without force: %v", err)
+	}
+	if got := revParse(t, src, "refs/heads/dev"); got != sha {
+		t.Fatalf("dev branch not moved; got %q want %q", got, sha)
+	}
+	for _, w := range result.Warnings {
+		if strings.Contains(strings.ToLower(w), "drop") {
+			t.Fatalf("unexpected commit-dropping warning on a descendant deploy: %v", result.Warnings)
+		}
+	}
+}
+
 func TestSetDogfood_RefusesUnknownTask(t *testing.T) {
 	t.Parallel()
 	client := stubArgusTaskNotFound(t)
@@ -453,7 +562,7 @@ func TestSetDogfood_RefusesUnknownTask(t *testing.T) {
 func TestSetDogfood_LockSerializesConcurrentCalls(t *testing.T) {
 	src, _, _, sha, client := setupDogfoodRepo(t, "sd-lock", tomlDogfoodNone)
 	g := gitRunner(t)
-	g(src, "branch", "dev", "main")
+	g(src, "branch", "dev", sha+"^")
 
 	canon, _ := filepath.EvalSymlinks(src)
 	mu := lockSourceRepo(canon)
@@ -488,7 +597,7 @@ func TestSetDogfood_LockSerializesConcurrentCalls(t *testing.T) {
 func TestSetDogfood_ResultMarshalsAsJSON(t *testing.T) {
 	src, _, _, sha, client := setupDogfoodRepo(t, "sd-json", tomlDogfoodNone)
 	g := gitRunner(t)
-	g(src, "branch", "dev", "main")
+	g(src, "branch", "dev", sha+"^")
 
 	result, err := SetDogfood(context.Background(), client, "task-sd", SetDogfoodOpts{
 		Sha:      sha,
