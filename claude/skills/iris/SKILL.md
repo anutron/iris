@@ -47,11 +47,12 @@ All tools are registered as `mcp__argus__<name>`. Names below omit the prefix. U
 
 - **`iris_push`** — push the task's `argus/*` branch to `origin` (force-with-lease). Use whenever you'd reach for `git push`. Refuses the default branch. Pass `remote` to push to a different **configured** remote (a name, never a URL) — e.g. `remote="upstream"` to push the branch to an upstream you have write access to so its CI runs (see the cross-fork note below). Runs under iris's own timeout (`git_transfer_timeout_seconds` in `.iris.toml`, default 300s), not your request's — a large or far-diverged push isn't killed just because you stopped waiting. A failure names its kind: `[timeout]` means iris's own deadline fired (check `iris_fetch`/`iris_status` before assuming success or failure — don't blindly retry); `[auth_failure]`/`[network_failure]` mean fix credentials/connectivity before retrying; `[other_failure]` is everything else (e.g. non-fast-forward).
 - **`iris_merge_to_master`** — merge the task's branch into the source repo's default branch (master/main) under lock. Does **not** delete the branch or worktree. Pass `dry_run: true` to preview (`would_succeed`, `files_changed`, `conflicts`) without committing.
+- **`iris_merge_to_branch`** — merge (not cherry-pick) an arbitrary `source_ref` (branch, tag, or SHA) into an arbitrary long-lived, non-default `target_branch`, then push it. Runs in a scratch `git worktree`, so the source repo's currently checked-out branch and working tree are never touched. Use this for integration/staging branches that repeatedly absorb whole feature branches — `iris_merge_to_master` is only for the default branch, and `iris_cherry_pick` is for a single commit. Pass `dry_run: true` to preview the same way as `iris_merge_to_master`; `no_ff` (default true) and `message` are optional.
 - **`iris_complete_task`** — the composite ship-it: merge → push default branch → delete remote task branch → mark the argus task complete → archive. Each sub-step is a checkpoint; a partial failure returns checkpoints reached so a retry resumes. Use this when you're done and want one call to finish everything.
 
 ### PR lifecycle (host `gh` CLI)
 
-- **`iris_gh_pr_create`** — open a PR for the task's branch (`title` required; `body`, `draft` optional). Refuses to open from the default branch. Returns PR number + URL. Target selection: pass `base_repo="owner/repo"` to open a **same-repo PR on that repo** (skips fork detection; the branch must already exist there — push it first with `iris_push remote=...`); otherwise, when `origin` is a fork, it opens a **cross-fork** PR into the upstream parent automatically (`--repo <upstream> --head <fork-owner>:<branch>`); otherwise a same-repo PR on `origin`. **CI caveat:** GitHub does not run CI on cross-fork PRs from a fork — if you need CI, push to the upstream (`iris_push remote=...`) and use `base_repo` so the PR is same-repo there.
+- **`iris_gh_pr_create`** — open a PR for the task's branch (`title` required; `body`, `draft` optional). Refuses to open from the default branch. Returns PR number + URL. Target selection: pass `base_repo="owner/repo"` to open a **same-repo PR on that repo** (skips fork detection; the branch must already exist there — push it first with `iris_push remote=...`); otherwise, when `origin` is a fork, it opens a **cross-fork** PR into the upstream parent automatically (`--repo <upstream> --head <fork-owner>:<branch>`); otherwise a same-repo PR on `origin`. Pass `base="branch-name"` to independently select the target **branch** within whichever repo `base_repo`/fork-detection/origin selected — distinct from `base_repo`, which selects the target **repo**; omit it and each mode's default branch applies unchanged. **CI caveat:** GitHub does not run CI on cross-fork PRs from a fork — if you need CI, push to the upstream (`iris_push remote=...`) and use `base_repo` so the PR is same-repo there.
 - **`iris_gh_pr_view`** — read a PR's state (`pr_number`); returns `gh`'s JSON (state, checks, reviews, mergeable, isDraft, statusCheckRollup, …). This is your polling tool for "is this PR green / ready to merge?".
 - **`iris_gh_pr_ready`** — take a draft PR out of draft (idempotent; reports whether it changed state).
 - **`iris_gh_pr_comment`** — post a comment to a PR (`body`). Returns the comment URL.
@@ -96,6 +97,7 @@ When you need to **create, edit, or debug an iris config** (onboarding a repo to
 - **Done with the task, want it merged and cleaned up in one shot** → `iris_complete_task`.
 - **Want a PR to live for review (not auto-merge)** → `iris_push` then `iris_gh_pr_create`. Mark ready later with `iris_gh_pr_ready`.
 - **Merge straight to the default branch, no PR** → `iris_merge_to_master` (preview first with `dry_run: true` if unsure it's clean).
+- **Merge a whole branch/tag/SHA into a long-lived integration/staging branch (not the default branch)** → `iris_merge_to_branch` (preview first with `dry_run: true`).
 - **"Is the PR ready?"** → poll `iris_gh_pr_view`; merge with `iris_gh_pr_merge` only once checks are green.
 - **Land a fix on a release/other branch** → `iris_branch_create` + `iris_cherry_pick` (or `iris_checkout` first), then `iris_push`.
 - **Source repo is wedged mid-operation** → `iris_checkout(force=true)`.
@@ -158,6 +160,12 @@ When `origin` is your fork but you have write access to the canonical upstream, 
 ```
 iris_push(task_id, remote="upstream")                 # branch lands on the upstream (must be a configured remote)
 iris_gh_pr_create(task_id, title="…", base_repo="drn/argus")   # same-repo PR on the upstream -> CI runs
+```
+
+`base_repo` only selects the target **repo**. If that repo's PR should also land on a non-default branch (e.g. a long-lived integration branch rather than `main`), add `base`:
+
+```
+iris_gh_pr_create(task_id, title="…", base_repo="drn/argus", base="integration/big-feature")
 ```
 
 ### D. Cherry-pick a hotfix onto a release branch

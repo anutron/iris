@@ -8,7 +8,7 @@ Greek-pantheon naming continues from [argus](https://github.com/drn/argus) and [
 
 ## Status
 
-The full verb set has shipped and archived: host-side git/gh operations (`merge_to_master`, `push`, `gh_pr_*`, `branch_*`, `cherry_pick`, `checkout`, `fetch`, `tag`, `complete_task`), build and check runners (`run_build`, `run_checks`), daemon self-management (`reload`, `publish`, `validate_config`, `ls`, `status`), and the dogfood/ship workflow (`set_dogfood`, `ship_feature`, `set_local_config`). Each verb's base spec lives under [`openspec/specs/`](./openspec/specs/); the change folders that introduced them are archived under [`openspec/changes/archive/`](./openspec/changes/archive/).
+The full verb set has shipped and archived: host-side git/gh operations (`merge_to_master`, `merge_to_branch`, `push`, `gh_pr_*`, `branch_*`, `cherry_pick`, `checkout`, `fetch`, `tag`, `complete_task`), build and check runners (`run_build`, `run_checks`), daemon self-management (`reload`, `publish`, `validate_config`, `ls`, `status`), and the dogfood/ship workflow (`set_dogfood`, `ship_feature`, `set_local_config`). Each verb's base spec lives under [`openspec/specs/`](./openspec/specs/); the change folders that introduced them are archived under [`openspec/changes/archive/`](./openspec/changes/archive/).
 
 Read [`SKETCH.md`](./SKETCH.md) for the full design context. In-flight work lives in the active change folders under [`openspec/changes/`](./openspec/changes/).
 
@@ -66,7 +66,7 @@ iris status                        Daemon health (no args) OR self-mgmt status (
 iris merge-to-master <task-id>     Merge an argus task's branch into the source repo's default branch (--dry-run previews).
 iris merge-to-branch <task-id> <target-branch> <source-ref>
                                    Merge an arbitrary source-ref into an arbitrary long-lived target-branch and push, via a scratch worktree that never disturbs the source repo's checkout (--no-ff, -m, --dry-run). Refuses the default/protected branch as target.
-iris push <task-id>                Push the task's branch to origin (host-side; --force-with-lease, --branch, --remote <name>).
+iris push <task-id>                Push the task's branch to origin (host-side; --force-with-lease, --branch, --remote <name>). Failures classify as [timeout]/[auth_failure]/[network_failure]/[other_failure].
 iris gh-pr-create <task-id> -t T   Create a GitHub PR via gh CLI (--title required; --body, --draft, --head, --base-repo <owner/repo>, --base <branch>).
 iris gh-pr-merge <task-id> -p N    Merge a GitHub PR via gh CLI (--strategy squash|merge|rebase).
 iris gh-pr-view <task-id> -p N     Read a GitHub PR's state via gh CLI (--json state/checks/reviews/...).
@@ -76,7 +76,7 @@ iris gh-pr-close <task-id> -p N    Close a GitHub PR without merging (--delete-b
 iris run-build <task-id>           Run the worktree's build (script/iris-build or make build [target]).
 iris run-checks <task-id> <check>  Run a repo-defined check in the worktree (script/iris-check <check>; script-only).
 iris complete-task <task-id>       Composite ship-it: merge + push default + delete remote branch + mark complete + archive.
-iris fetch <task-id>               Run `git fetch origin` in the source repo; returns refs whose tracking SHAs changed.
+iris fetch <task-id>               Run `git fetch origin` in the source repo; returns refs whose tracking SHAs changed. Same failure classification as `push`.
 iris branch-delete-remote <task-id> --branch <name>
                                    Delete a remote branch on origin (refuses the default branch).
 iris branch-create <task-id> <name> <base-ref>
@@ -112,6 +112,8 @@ iris gh-pr-create <task-id> --title "..." --base-repo drn/argus
 - `--remote` targets any **configured** remote (a name, never a URL — iris validates it exists and never adds remotes). Defaults to `origin`.
 - `--base-repo` opens a same-repo PR on that `owner/repo` and **bypasses fork auto-detection** (the head is not fork-qualified; the branch must already exist there). Without it, `iris:gh_pr_create` opens a same-repo PR on origin, or — when origin is a fork — a cross-fork PR into the upstream parent (which won't run CI).
 - `--base <branch>` independently selects the target **branch** (e.g. a long-lived integration branch) within whichever repo `--base-repo`/fork-detection/origin selected. Omit it and each mode's existing default branch applies unchanged.
+
+Both `iris push` and `iris fetch` run under iris's own `git_transfer_timeout_seconds` deadline (default 300s, configurable in `.iris.toml`), independent of the caller's request timeout. A failure names its kind so you know what to do next: `[timeout]` means iris's own deadline fired — check `iris fetch`/`iris status` before assuming success or failure rather than blindly retrying; `[auth_failure]` / `[network_failure]` mean fix credentials/connectivity before retrying; `[other_failure]` covers everything else (e.g. non-fast-forward).
 
 ## Self-management
 
@@ -259,6 +261,7 @@ Inputs:
 
 - `task_id` (optional) — standard resolution; omit for iris-on-iris.
 - `sha` (required) — a full commit SHA reachable in the source repo.
+- `force` (optional, default `false`) — override the commit-dropping ancestry refusal described below: deploy a `sha` that is not a descendant of the current dogfood SHA anyway, with a warning.
 - `manifest` (required) — what composes the SHA:
 
 ```json
@@ -274,7 +277,8 @@ Inputs:
 Behavior and safety:
 
 - The manifest is written **before** the branch reset (durable-first). If the write fails, no git mutation occurs; if the reset then fails, the manifest is "ahead" of the branch and `iris:status` reports the drift.
-- The branch is created if it does not yet exist (`previous_sha: ""`), otherwise force-moved.
+- **Ancestry safety:** when the dogfood branch already exists, iris refuses a `sha` that is not a descendant of the current dogfood SHA (`previous_sha`) — deploying it would silently drop every commit reachable from `previous_sha` but not `sha`. The error names the dropped-commit count and `previous_sha`. Pass `force=true` to deploy anyway; the result then carries a prominent warning naming the same count and SHA.
+- The branch is created if it does not yet exist (`previous_sha: ""`). Otherwise it is force-moved — via `git branch -f` when the dogfood branch is not checked out in any worktree, or via `git reset --hard` in that worktree when it **is** checked out (git refuses to `branch -f` a branch that's currently checked out; this worktree-guard keeps the ref, HEAD, index, and tree in agreement on a live dogfood host instead of erroring).
 - iris does NOT validate that `manifest.layered[i].sha` is reachable from `sha` — the manifest is for communication, not verification.
 
 The structured result includes `set`, `dogfood_branch`, `previous_sha`, `new_sha`, the embedded `reload` result, and `warnings`. The manifest persists as `dogfood-manifest.json` in the same per-source-repo state directory as the audit log, overwritten on each call.

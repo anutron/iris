@@ -27,6 +27,9 @@ Iris does not compose: build the SHA yourself (cherry-pick/merge/rebase) and
 hand the finished commit here. Refuses any repo whose .iris.toml does not
 declare dogfood_branch.
 
+Refuses a --sha that is not a descendant of the current dogfood_branch SHA
+(it would silently drop commits) unless --force is passed.
+
 --manifest accepts either a path to a JSON file or an inline JSON string (one
 that begins with '{').`,
 		Args: cobra.NoArgs,
