@@ -70,6 +70,7 @@ func Start(ctx context.Context, cfg *config.Config, log *slog.Logger) (*Daemon, 
 
 	// Register handlers for every verb iris exposes.
 	mcpSrv.RegisterHandler("iris_merge_to_master", mcp.NewMergeToMasterHandler(client))
+	mcpSrv.RegisterHandler("iris_merge_to_branch", mcp.NewMergeToBranchHandler(client))
 	mcpSrv.RegisterHandler("iris_push", mcp.NewPushHandler(client))
 	mcpSrv.RegisterHandler("iris_gh_pr_create", mcp.NewGHPRCreateHandler(client))
 	mcpSrv.RegisterHandler("iris_gh_pr_merge", mcp.NewGHPRMergeHandler(client))
@@ -204,6 +205,22 @@ func toolDefinitions() []mcp.ToolDefinition {
 			},
 		},
 		{
+			Name:        "iris_merge_to_branch",
+			Description: "Merge an arbitrary source_ref into an arbitrary long-lived target_branch and push, for integration branches that are not the default branch. Resolves the source repo from the argus task_id (used only for repo resolution/allowlisting — target_branch and source_ref are not constrained to any prefix, unlike iris_merge_to_master's argus/-prefix restriction on its source). Performs the merge in a scratch `git worktree add` in a temp directory that is removed on exit, so the source repo's current checkout is NEVER changed. Refuses an empty/dash-leading target_branch or source_ref, merging a branch into itself, and targeting the default/protected branch (use iris_merge_to_master for that). With `dry_run: true`, previews via `git merge --no-commit --no-ff` in the scratch worktree, returning `would_succeed`/`files_changed`/`conflicts` without pushing or running the post_merge hook. When `.iris.toml` on target_branch declares a `[post_merge]` hook, iris runs it after a successful push and captures the outcome in `post_merge`.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"task_id":       map[string]any{"type": "string", "description": "Argus task ID. Iris resolves and allowlist-checks the source repo from this."},
+					"target_branch": map[string]any{"type": "string", "description": "Long-lived branch to merge into and push. MUST NOT be empty, begin with '-', equal source_ref, or equal the default/protected branch (use iris_merge_to_master for that)."},
+					"source_ref":    map[string]any{"type": "string", "description": "Ref to merge into target_branch — any branch, tag, or commit SHA. MUST NOT be empty or begin with '-'."},
+					"no_ff":         map[string]any{"type": "boolean", "description": "Pass --no-ff to git merge (default true). When false, requires fast-forward."},
+					"message":       map[string]any{"type": "string", "description": "(optional) Merge commit message (-m <message>)."},
+					"dry_run":       map[string]any{"type": "boolean", "description": "Preview the merge: run `git merge --no-commit --no-ff <source_ref>` in the scratch worktree, capture files_changed + conflicts, then `merge --abort`. No push, no post_merge hook. Defaults to false."},
+				},
+				"required": []string{"task_id", "target_branch", "source_ref"},
+			},
+		},
+		{
 			Name:        "iris_push",
 			Description: "Push the argus task's branch to a remote from the canonical source repo. Resolves source repo and branch from task_id. Pushes to `origin` by default; pass `remote` to push to a different CONFIGURED remote (a name, never a URL) — e.g. to push a branch to an upstream you have write access to so its CI runs (cross-fork PRs from a fork don't run CI). Refuses to push the default branch. Returns the effective remote and remote SHA.",
 			InputSchema: map[string]any{
@@ -219,7 +236,7 @@ func toolDefinitions() []mcp.ToolDefinition {
 		},
 		{
 			Name:        "iris_gh_pr_create",
-			Description: "Open a GitHub pull request for the argus task's branch using the host's gh CLI. Resolves source repo and branch from task_id. Target selection: if `base_repo` is given, opens a SAME-REPO PR on that owner/repo (use this to PR into an upstream you pushed a branch to via `iris_push remote=...`, so CI runs); else if origin is a fork, opens a CROSS-FORK PR into the upstream parent (note: GitHub does not run CI on cross-fork PRs from a fork); else opens a same-repo PR on origin. Refuses to open a PR from the default branch. Returns the PR number and URL.",
+			Description: "Open a GitHub pull request for the argus task's branch using the host's gh CLI. Resolves source repo and branch from task_id. Target selection: if `base_repo` is given, opens a SAME-REPO PR on that owner/repo (use this to PR into an upstream you pushed a branch to via `iris_push remote=...`, so CI runs); else if origin is a fork, opens a CROSS-FORK PR into the upstream parent (note: GitHub does not run CI on cross-fork PRs from a fork); else opens a same-repo PR on origin. `base` independently selects the target BRANCH within whichever repo was selected (e.g. a long-lived integration branch) — when omitted, each mode's existing default branch applies. Refuses to open a PR from the default branch. Returns the PR number and URL.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -229,6 +246,7 @@ func toolDefinitions() []mcp.ToolDefinition {
 					"draft":     map[string]any{"type": "boolean", "description": "Open the PR as a draft (default false)."},
 					"head":      map[string]any{"type": "string", "description": "(optional) Head branch to open the PR for instead of the task's resolved branch. MUST NOT be the default branch."},
 					"base_repo": map[string]any{"type": "string", "description": "(optional) Open a same-repo PR on this owner/repo (e.g. `drn/argus`) and skip fork auto-detection. The head branch must already exist there (push it first with `iris_push remote=...`). Takes precedence over fork detection; the head is not fork-qualified."},
+					"base":      map[string]any{"type": "string", "description": "(optional) Target BRANCH within whichever repo is selected (independent of base_repo, which selects the target repo) — e.g. a long-lived integration branch. When omitted, gh defaults to the target repo's own default branch (base_repo/fork modes) or iris passes the resolved source-repo default branch explicitly (same-repo-on-origin mode)."},
 				},
 				"required": []string{"task_id", "title"},
 			},
