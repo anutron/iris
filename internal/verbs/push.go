@@ -99,11 +99,25 @@ func Push(ctx context.Context, client *argus.Client, taskID string, opts PushOpt
 	if opts.ForceWithLease {
 		pushArgs = append(pushArgs, "--force-with-lease")
 	}
-	if out, err := runGit(ctx, resolved.SourceRepo, pushArgs...); err != nil {
+	// The push itself runs under iris's own timeout, decoupled from ctx's
+	// cancellation — see runGitTransfer. DefaultBranch and the remote
+	// get-url check above are fast local operations that run before any
+	// mutation is attempted, so they correctly stay on ctx: if ctx is
+	// already dead, aborting before pushing is exactly right.
+	timeout := gitTransferTimeout(resolved.SourceRepo)
+	if out, err := runGitTransfer(ctx, resolved.SourceRepo, timeout, pushArgs...); err != nil {
 		return nil, fmt.Errorf("push %s to %s: %w; log:\n%s", effective, remote, err, out)
 	}
 
-	sha, err := runGit(ctx, resolved.SourceRepo, "rev-parse", remote+"/"+effective)
+	// The push already landed at this point. Reading back its resulting SHA
+	// is detached from ctx the same way: a caller's context dying in the
+	// same instant the push completes must not turn a genuine success into
+	// a reported failure. This read is local and fast regardless of network
+	// conditions, so it gets a small fixed grace period rather than the
+	// configurable git_transfer_timeout_seconds.
+	readCtx, readCancel := context.WithTimeout(context.WithoutCancel(ctx), postTransferReadTimeout)
+	defer readCancel()
+	sha, err := runGit(readCtx, resolved.SourceRepo, "rev-parse", remote+"/"+effective)
 	if err != nil {
 		return nil, fmt.Errorf("rev-parse %s/%s: %w", remote, effective, err)
 	}

@@ -45,7 +45,7 @@ All tools are registered as `mcp__argus__<name>`. Names below omit the prefix. U
 
 ### Ship (get your branch into the default branch / origin)
 
-- **`iris_push`** — push the task's `argus/*` branch to `origin` (force-with-lease). Use whenever you'd reach for `git push`. Refuses the default branch. Pass `remote` to push to a different **configured** remote (a name, never a URL) — e.g. `remote="upstream"` to push the branch to an upstream you have write access to so its CI runs (see the cross-fork note below).
+- **`iris_push`** — push the task's `argus/*` branch to `origin` (force-with-lease). Use whenever you'd reach for `git push`. Refuses the default branch. Pass `remote` to push to a different **configured** remote (a name, never a URL) — e.g. `remote="upstream"` to push the branch to an upstream you have write access to so its CI runs (see the cross-fork note below). Runs under iris's own timeout (`git_transfer_timeout_seconds` in `.iris.toml`, default 300s), not your request's — a large or far-diverged push isn't killed just because you stopped waiting. A failure names its kind: `[timeout]` means iris's own deadline fired (check `iris_fetch`/`iris_status` before assuming success or failure — don't blindly retry); `[auth_failure]`/`[network_failure]` mean fix credentials/connectivity before retrying; `[other_failure]` is everything else (e.g. non-fast-forward).
 - **`iris_merge_to_master`** — merge the task's branch into the source repo's default branch (master/main) under lock. Does **not** delete the branch or worktree. Pass `dry_run: true` to preview (`would_succeed`, `files_changed`, `conflicts`) without committing.
 - **`iris_complete_task`** — the composite ship-it: merge → push default branch → delete remote task branch → mark the argus task complete → archive. Each sub-step is a checkpoint; a partial failure returns checkpoints reached so a retry resumes. Use this when you're done and want one call to finish everything.
 
@@ -60,7 +60,7 @@ All tools are registered as `mcp__argus__<name>`. Names below omit the prefix. U
 
 ### Branch & history (on the source repo)
 
-- **`iris_fetch`** — `git fetch origin` in the source repo; returns refs whose tracking SHAs changed. Use before deciding whether you're behind.
+- **`iris_fetch`** — `git fetch origin` in the source repo; returns refs whose tracking SHAs changed. Use before deciding whether you're behind. Same timeout/classification behavior as `iris_push` (above).
 - **`iris_branch_create`** — create a branch in the source repo from an arbitrary `base_ref` (e.g. `origin/master`). Does **not** change the source repo's checkout. Pair with `iris_checkout` to switch.
 - **`iris_checkout`** — switch the source repo to a branch. `force=false` (default) propagates git's refusal on a dirty tree; `force=true` aborts any in-progress merge/cherry-pick/rebase and discards changes first — the recovery path for a stuck source repo.
 - **`iris_cherry_pick`** — checkout `target_branch` then cherry-pick `commit` under lock; aborts cleanly on conflict (returns conflict paths, leaves a clean tree). Refuses the default branch as target — use `iris_merge_to_master` for that.
