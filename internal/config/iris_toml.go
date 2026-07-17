@@ -41,6 +41,11 @@ const DefaultVerifyTimeoutSeconds = 30
 // how long iris:ship_feature (pr-auto) waits for CI checks before giving up.
 const DefaultShipCITimeoutSeconds = 600
 
+// DefaultGitTransferTimeoutSeconds is the default for
+// `git_transfer_timeout_seconds` — how long a single git push/fetch network
+// operation may run under iris's own deadline before giving up.
+const DefaultGitTransferTimeoutSeconds = 300
+
 // RestartMechanism enumerates the supported `[restart] mechanism` values.
 type RestartMechanism string
 
@@ -62,15 +67,16 @@ const (
 // field has a valid classification so adding a new field without one
 // fails CI.
 type IrisToml struct {
-	SchemaVersion        int          `toml:"schema_version"          json:"schema_version"                  kind:"shared"`
-	DefaultBranch        string       `toml:"default_branch"          json:"default_branch,omitempty"        kind:"shared"`
-	DogfoodBranch        string       `toml:"dogfood_branch"          json:"dogfood_branch,omitempty"        kind:"local"`
-	ShipCITimeoutSeconds int          `toml:"ship_ci_timeout_seconds" json:"ship_ci_timeout_seconds,omitempty" kind:"local"`
-	Build                BuildBlock   `toml:"build"                   json:"build"                           kind:"shared"`
-	Restart              RestartBlock `toml:"restart"                 json:"restart"                         kind:"shared"`
-	PreFlight            *HookBlock   `toml:"pre_flight"              json:"pre_flight,omitempty"            kind:"shared"`
-	Verify               *HookBlock   `toml:"verify"                  json:"verify,omitempty"                kind:"shared"`
-	PostMerge            *HookBlock   `toml:"post_merge"              json:"post_merge,omitempty"            kind:"shared"`
+	SchemaVersion             int          `toml:"schema_version"                json:"schema_version"                        kind:"shared"`
+	DefaultBranch             string       `toml:"default_branch"                json:"default_branch,omitempty"              kind:"shared"`
+	DogfoodBranch             string       `toml:"dogfood_branch"                json:"dogfood_branch,omitempty"               kind:"local"`
+	ShipCITimeoutSeconds      int          `toml:"ship_ci_timeout_seconds"       json:"ship_ci_timeout_seconds,omitempty"     kind:"local"`
+	GitTransferTimeoutSeconds int          `toml:"git_transfer_timeout_seconds"  json:"git_transfer_timeout_seconds,omitempty" kind:"shared"`
+	Build                     BuildBlock   `toml:"build"                          json:"build"                                 kind:"shared"`
+	Restart                   RestartBlock `toml:"restart"                 json:"restart"                         kind:"shared"`
+	PreFlight                 *HookBlock   `toml:"pre_flight"              json:"pre_flight,omitempty"            kind:"shared"`
+	Verify                    *HookBlock   `toml:"verify"                  json:"verify,omitempty"                kind:"shared"`
+	PostMerge                 *HookBlock   `toml:"post_merge"              json:"post_merge,omitempty"            kind:"shared"`
 }
 
 // BuildBlock declares the build step.
@@ -276,6 +282,7 @@ func (c *IrisToml) Validate(isSelf bool) []ValidationError {
 	}
 
 	errs = append(errs, c.validateDogfood()...)
+	errs = append(errs, c.validateGitTransfer()...)
 	errs = append(errs, c.Build.validate()...)
 	errs = append(errs, c.Restart.validate(isSelf)...)
 	if c.PreFlight != nil {
@@ -325,6 +332,23 @@ func (c *IrisToml) validateDogfood() []ValidationError {
 			Field:   "ship_ci_timeout_seconds",
 			Message: "must be non-negative",
 			Hint:    "use a non-negative number of seconds, or omit the field to use the default of 600",
+		})
+	}
+
+	return errs
+}
+
+// validateGitTransfer cross-validates git_transfer_timeout_seconds, when
+// set, MUST be non-negative. Unset (0) resolves to
+// DefaultGitTransferTimeoutSeconds at use time.
+func (c *IrisToml) validateGitTransfer() []ValidationError {
+	var errs []ValidationError
+
+	if c.GitTransferTimeoutSeconds < 0 {
+		errs = append(errs, ValidationError{
+			Field:   "git_transfer_timeout_seconds",
+			Message: "must be non-negative",
+			Hint:    "use a non-negative number of seconds, or omit the field to use the default of 300",
 		})
 	}
 
@@ -643,4 +667,15 @@ func (r RestartBlock) ResolvedExecTimeoutSeconds() int {
 		return DefaultExecTimeoutSeconds
 	}
 	return r.TimeoutSeconds
+}
+
+// ResolvedGitTransferTimeoutSeconds returns the configured
+// git_transfer_timeout_seconds or DefaultGitTransferTimeoutSeconds (300)
+// when unset. The default is applied here at resolution time rather than
+// stamped onto the field, matching the build/exec/ship timeout resolvers.
+func (c IrisToml) ResolvedGitTransferTimeoutSeconds() int {
+	if c.GitTransferTimeoutSeconds == 0 {
+		return DefaultGitTransferTimeoutSeconds
+	}
+	return c.GitTransferTimeoutSeconds
 }

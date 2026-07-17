@@ -43,16 +43,30 @@ func Fetch(ctx context.Context, in FetchInput) (*FetchResult, error) {
 	mu := lockSourceRepo(resolved.SourceRepo)
 	defer mu.Unlock()
 
+	// No mutation has happened yet, so if ctx is already dead this
+	// correctly aborts before fetching — nothing has changed, nothing to
+	// lose.
 	before, err := snapshotRemoteRefs(ctx, resolved.SourceRepo)
 	if err != nil {
 		return nil, fmt.Errorf("snapshot pre-fetch refs: %w", err)
 	}
 
-	if out, err := runGit(ctx, resolved.SourceRepo, "fetch", "origin"); err != nil {
+	// The fetch itself runs under iris's own timeout, decoupled from ctx's
+	// cancellation — see runGitTransfer.
+	timeout := gitTransferTimeout(resolved.SourceRepo)
+	if out, err := runGitTransfer(ctx, resolved.SourceRepo, timeout, "fetch", "origin"); err != nil {
 		return nil, fmt.Errorf("fetch origin: %w; log:\n%s", err, out)
 	}
 
-	after, err := snapshotRemoteRefs(ctx, resolved.SourceRepo)
+	// The fetch already landed at this point. Snapshotting the resulting
+	// refs is detached from ctx the same way: a caller's context dying in
+	// the same instant the fetch completes must not turn a genuine success
+	// into a reported failure. This read is local and fast regardless of
+	// network conditions, so it gets a small fixed grace period rather
+	// than the configurable git_transfer_timeout_seconds.
+	postCtx, postCancel := context.WithTimeout(context.WithoutCancel(ctx), postTransferReadTimeout)
+	defer postCancel()
+	after, err := snapshotRemoteRefs(postCtx, resolved.SourceRepo)
 	if err != nil {
 		return nil, fmt.Errorf("snapshot post-fetch refs: %w", err)
 	}

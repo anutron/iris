@@ -42,6 +42,7 @@ func TestFieldKind_ExpectedShared(t *testing.T) {
 		"pre_flight",
 		"verify",
 		"post_merge",
+		"git_transfer_timeout_seconds",
 	}
 	for _, name := range shared {
 		kind, ok := FieldKind(name)
@@ -105,6 +106,7 @@ func TestSharedFields_MatchesExpectedSet(t *testing.T) {
 	want := []string{
 		"build",
 		"default_branch",
+		"git_transfer_timeout_seconds",
 		"post_merge",
 		"pre_flight",
 		"restart",

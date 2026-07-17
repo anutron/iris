@@ -222,7 +222,7 @@ func toolDefinitions() []mcp.ToolDefinition {
 		},
 		{
 			Name:        "iris_push",
-			Description: "Push the argus task's branch to a remote from the canonical source repo. Resolves source repo and branch from task_id. Pushes to `origin` by default; pass `remote` to push to a different CONFIGURED remote (a name, never a URL) — e.g. to push a branch to an upstream you have write access to so its CI runs (cross-fork PRs from a fork don't run CI). Refuses to push the default branch. Returns the effective remote and remote SHA.",
+			Description: "Push the argus task's branch to a remote from the canonical source repo. Resolves source repo and branch from task_id. Pushes to `origin` by default; pass `remote` to push to a different CONFIGURED remote (a name, never a URL) — e.g. to push a branch to an upstream you have write access to so its CI runs (cross-fork PRs from a fork don't run CI). Refuses to push the default branch. Returns the effective remote and remote SHA. The push runs under iris's own timeout (`git_transfer_timeout_seconds` in the source repo's `.iris.toml`, default 300s) instead of this request's timeout, so a large or far-diverged push isn't killed just because the caller stopped waiting. On failure the error is prefixed with a classification — `[timeout]` (iris's own deadline fired; check `iris_fetch`/`iris_status` before assuming success or failure), `[auth_failure]`, `[network_failure]`, or `[other_failure]` — to help decide whether to retry, wait, or fall back to a manual push.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -410,7 +410,7 @@ func toolDefinitions() []mcp.ToolDefinition {
 		},
 		{
 			Name:        "iris_fetch",
-			Description: "Run `git fetch origin` in the argus task's source repo under the per-source-repo lock. Returns the list of refs whose tracking SHAs changed.",
+			Description: "Run `git fetch origin` in the argus task's source repo under the per-source-repo lock. Returns the list of refs whose tracking SHAs changed. The fetch runs under iris's own timeout (`git_transfer_timeout_seconds` in the source repo's `.iris.toml`, default 300s) instead of this request's timeout, so a large fetch isn't killed just because the caller stopped waiting. On failure the error is prefixed with a classification — `[timeout]` (iris's own deadline fired), `[auth_failure]`, `[network_failure]`, or `[other_failure]` — to help decide whether to retry, wait, or fall back to a manual fetch.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{

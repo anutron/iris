@@ -767,6 +767,43 @@ func TestResolvedShipCITimeout_DefaultsTo600(t *testing.T) {
 	}
 }
 
+// git_transfer_timeout_seconds defaults to 300 when unset, applied at
+// resolution time (mirrors the build/exec/ship timeout resolver pattern).
+func TestResolvedGitTransferTimeout_DefaultsTo300(t *testing.T) {
+	doc := &IrisToml{SchemaVersion: 1}
+	if got := doc.ResolvedGitTransferTimeoutSeconds(); got != 300 {
+		t.Fatalf("default git_transfer_timeout_seconds = %d, want 300", got)
+	}
+	doc.GitTransferTimeoutSeconds = 45
+	if got := doc.ResolvedGitTransferTimeoutSeconds(); got != 45 {
+		t.Fatalf("explicit git_transfer_timeout_seconds = %d, want 45", got)
+	}
+}
+
+// Scenario: Negative git_transfer_timeout_seconds is invalid.
+func TestValidate_NegativeGitTransferTimeout(t *testing.T) {
+	doc := &IrisToml{
+		SchemaVersion:             1,
+		DefaultBranch:             "main",
+		GitTransferTimeoutSeconds: -1,
+		Build:                     BuildBlock{Command: []string{"make"}},
+		Restart:                   RestartBlock{Mechanism: MechanismNone},
+	}
+	errs := doc.Validate(false)
+	var got *ValidationError
+	for i := range errs {
+		if errs[i].Field == "git_transfer_timeout_seconds" {
+			got = &errs[i]
+		}
+	}
+	if got == nil {
+		t.Fatalf("expected git_transfer_timeout_seconds error, got: %v", errs)
+	}
+	if !strings.Contains(got.Message, "non-negative") {
+		t.Fatalf("message should state the non-negativity rule, got %q", got.Message)
+	}
+}
+
 func TestSignalByName_Aliases(t *testing.T) {
 	cases := []struct {
 		in   string

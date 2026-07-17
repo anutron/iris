@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/anutron/iris/internal/argus"
 )
@@ -422,6 +423,82 @@ func TestPush_NoRemoteDefaultsToOrigin(t *testing.T) {
 // need a second test for this — the merge_to_master serialize test already
 // validates the lock map; this is a coverage check that Push compiles
 // against it.
+// TestPush_CallerContextCancellationDoesNotKillInFlightPush is the
+// end-to-end regression test for the context-decoupling fix: cancelling
+// the ctx passed into Push must not kill an in-flight `git push`, because
+// the transfer runs under iris's own detached timeout.
+func TestPush_CallerContextCancellationDoesNotKillInFlightPush(t *testing.T) {
+	t.Parallel()
+	src, wt, bare := setupRepoWithBareAndWorktree(t, "push-decouple")
+	client := stubArgus(t, src, wt)
+
+	marker := filepath.Join(t.TempDir(), "prereceive-started")
+	setSlowPreReceiveHook(t, bare, marker, 300*time.Millisecond)
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	type outcome struct {
+		result *PushResult
+		err    error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		result, err := Push(ctx, client, "task-push-decouple", PushOptions{})
+		done <- outcome{result, err}
+	}()
+
+	waitForMarker(t, marker, 2*time.Second)
+	cancel() // simulate argus's client giving up and tearing down r.Context()
+
+	select {
+	case o := <-done:
+		if o.err != nil {
+			t.Fatalf("Push returned error after caller ctx cancellation: %v", o.err)
+		}
+		if !o.result.Pushed {
+			t.Fatal("expected Pushed=true")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Push did not return in time")
+	}
+
+	if remoteRef(t, bare, "argus/push-decouple") == "" {
+		t.Fatal("expected argus/push-decouple to have been pushed to bare origin despite caller ctx cancellation")
+	}
+}
+
+// TestPush_ConfiguredGitTransferTimeoutClassifiesAsTimeout proves Push
+// wires the source repo's .iris.toml git_transfer_timeout_seconds into the
+// actual git push invocation, and that a too-short configured timeout
+// surfaces as a classified *GitTransferError, not an opaque failure.
+func TestPush_ConfiguredGitTransferTimeoutClassifiesAsTimeout(t *testing.T) {
+	t.Parallel()
+	src, wt, bare := setupRepoWithBareAndWorktree(t, "push-timeout")
+	client := stubArgus(t, src, wt)
+
+	marker := filepath.Join(t.TempDir(), "prereceive-started")
+	setSlowPreReceiveHook(t, bare, marker, 3*time.Second)
+
+	toml := "schema_version = 1\ngit_transfer_timeout_seconds = 1\n"
+	if err := os.WriteFile(filepath.Join(src, ".iris.toml"), []byte(toml), 0o644); err != nil {
+		t.Fatalf("write .iris.toml: %v", err)
+	}
+
+	start := time.Now()
+	_, err := Push(context.Background(), client, "task-push-timeout", PushOptions{})
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("expected a timeout error, got nil")
+	}
+	if !IsGitTransferTimeout(err) {
+		t.Fatalf("expected IsGitTransferTimeout(err) = true, got err: %v", err)
+	}
+	if elapsed > 2500*time.Millisecond {
+		t.Fatalf("Push took %s; expected it to respect the configured 1s timeout, not the hook's 3s sleep", elapsed)
+	}
+}
+
 func TestPush_AllowlistRejection(t *testing.T) {
 	t.Parallel()
 	src, wt, _ := setupRepoWithBareAndWorktree(t, "push-denied")

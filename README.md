@@ -143,6 +143,7 @@ Optional:
 - `default_branch = "main"` — overrides `git symbolic-ref refs/remotes/origin/HEAD`.
 - `dogfood_branch = "dev"` — opts the developer into `iris:set_dogfood` / `iris:ship_feature`. Unset = both verbs refuse. Must be a valid git branch name and must differ from `default_branch` (the origin-first model keeps the default branch read-only, so the dogfood branch needs a distinct ref to reset). **Lives in `.iris.local.toml`, not `.iris.toml`** — see "Local vs shared config" below.
 - `ship_ci_timeout_seconds = 600` — how long `iris:ship_feature`'s `pr-auto` mode waits for the PR's CI checks before giving up. Defaults to 600; must be non-negative. **Lives in `.iris.local.toml`.**
+- `git_transfer_timeout_seconds = 300` — how long `iris:push`/`iris:fetch` let a single `git push`/`git fetch` run under iris's own deadline before giving up, independent of the caller's request timeout. Defaults to 300; must be non-negative.
 - `[build] timeout_seconds`, `working_directory`, `env` — knobs for the build step.
 - `[pre_flight] command = [...]` — runs after iris's built-in pre-flight refusals, before pull. Non-zero exit aborts.
 - `[verify] command = [...]` — runs after restart (cross-reload only). Non-zero exit reports failure but does NOT roll back.
@@ -203,6 +204,7 @@ Field taxonomy:
 | `[pre_flight]` | `.iris.toml` | Project-wide pre-pull guard. |
 | `[verify]` | `.iris.toml` | Project-wide post-restart check. |
 | `[post_merge]` | `.iris.toml` | Project-wide post-merge hook. |
+| `git_transfer_timeout_seconds` | `.iris.toml` | A property of the repo/remote (size, network characteristics), not the developer — same for every developer and agent pushing/fetching. |
 | `dogfood_branch` | `.iris.local.toml` | Each developer composes onto their own branch (or opts out entirely). |
 | `ship_ci_timeout_seconds` | `.iris.local.toml` | Personal patience threshold for `ship_feature --via pr-auto`. |
 
