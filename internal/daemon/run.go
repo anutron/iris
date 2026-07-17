@@ -340,12 +340,13 @@ func toolDefinitions() []mcp.ToolDefinition {
 		},
 		{
 			Name:        "iris_set_dogfood",
-			Description: "Atomically point the configured dogfood branch at a worker-composed commit SHA, persist a structured manifest of what that SHA contains, and rebuild/restart the service via the existing reload machinery. Iris does NOT compose — the agent builds the SHA (cherry-pick/merge/rebase, conflict resolution) and hands iris the finished commit. Refuses any repo whose .iris.toml does not declare `dogfood_branch`. Writes the manifest before moving the ref (durable-first); a reset failure leaves the manifest ahead, surfaced as drift by iris_status. Returns previous_sha (\"\" when the branch was newly created), new_sha, and the reload result.",
+			Description: "Atomically point the configured dogfood branch at a worker-composed commit SHA, persist a structured manifest of what that SHA contains, and rebuild/restart the service via the existing reload machinery. Iris does NOT compose — the agent builds the SHA (cherry-pick/merge/rebase, conflict resolution) and hands iris the finished commit. Refuses any repo whose .iris.toml does not declare `dogfood_branch`. Refuses a sha that is NOT a descendant of the current dogfood SHA (it would drop commits) unless force=true, which proceeds with a warning. The ref move is worktree-guarded: `git branch -f` normally, but `git reset --hard` in the worktree when the dogfood branch is checked out. Writes the manifest before moving the ref (durable-first); a reset failure leaves the manifest ahead, surfaced as drift by iris_status. Returns previous_sha (\"\" when the branch was newly created), new_sha, and the reload result.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"task_id": map[string]any{"type": "string", "description": "(optional) Argus task ID. Iris resolves the source repo from this; omit for self-target (iris-on-iris)."},
 					"sha":     map[string]any{"type": "string", "description": "Full commit SHA to point the dogfood branch at. MUST be reachable in the source repo's object database."},
+					"force":   map[string]any{"type": "boolean", "description": "(optional, default false) Override the commit-dropping ancestry guard. When the sha is NOT a descendant of the current dogfood SHA, set_dogfood refuses (deploying it would drop commits) unless force is true, in which case it proceeds and emits a prominent warning. Iris never recomposes on your behalf — recompose onto the current dogfood SHA or pass force to intentionally drop."},
 					"manifest": map[string]any{
 						"type":        "object",
 						"description": "Structured record of what composes the SHA. Descriptive only — iris does not validate that layered SHAs are reachable from `sha`.",

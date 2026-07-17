@@ -557,6 +557,12 @@ func recomposeAfterShip(ctx context.Context, client *argus.Client, taskID string
 	// writes the manifest before resetting the ref and reloads with NoPull
 	// (origin-first). The supplied SHA + manifest are real, so SetDogfood's
 	// validation (reachability, dogfood_branch config) applies as intended.
+	//
+	// Force: recompose is an intentional commit-dropping deploy — the new tip is
+	// rebuilt on the fresh base with the just-shipped feature removed, so it is
+	// deliberately NOT a descendant of the current dogfood SHA. iris composed
+	// this tip itself and already reports the drop via RecomposeResult, so it
+	// opts past set_dogfood's ancestry refusal rather than being blocked by it.
 	newManifest := &DogfoodManifest{
 		Base:    ManifestBase{Ref: baseRef, SHA: newBaseSHA},
 		Layered: remaining,
@@ -565,6 +571,7 @@ func recomposeAfterShip(ctx context.Context, client *argus.Client, taskID string
 	if _, err := SetDogfood(ctx, client, taskID, SetDogfoodOpts{
 		Sha:      newTip,
 		Manifest: newManifest,
+		Force:    true,
 	}); err != nil {
 		return nil, nil, fmt.Errorf("apply re-composed dogfood: %w", err)
 	}
