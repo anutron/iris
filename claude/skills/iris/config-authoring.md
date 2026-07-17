@@ -35,6 +35,7 @@ but emits a warning:
 | `[pre_flight]` | shared → `.iris.toml` | optional gate run before build |
 | `[verify]` | shared → `.iris.toml` | optional health check after a cross-reload |
 | `[post_merge]` | shared → `.iris.toml` | optional hook run after `merge_to_master` commits |
+| `git_transfer_timeout_seconds` | shared → `.iris.toml` | how long a single `push`/`fetch` git transfer runs under iris's own deadline before giving up (default 300, non-negative) |
 | `dogfood_branch` | local → `.iris.local.toml` | the branch your dogfood/ship loop resets; must differ from `default_branch` |
 | `ship_ci_timeout_seconds` | local → `.iris.local.toml` | how long `ship_feature` waits on CI (default 600, non-negative) |
 
@@ -232,6 +233,11 @@ Things to keep straight:
   the PR adding `.iris.toml` to the default branch waits for review without blocking
   anything. Once it merges, `dev` (composed from the default branch) inherits the
   config the normal way and this bootstrap is no longer needed.
+- **Subsequent deploys are ancestry-checked.** The first `iris_set_dogfood` call above
+  creates `dev` fresh, so nothing to check yet. Once `dev` exists, iris refuses a
+  `sha` that is not a descendant of `dev`'s current SHA (it would silently drop
+  commits) unless you pass `force=true` — recompose onto the current SHA instead of
+  reaching for `force` as the default move.
 
 ## Common authoring mistakes
 
