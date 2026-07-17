@@ -24,6 +24,13 @@ type GHPRCreateOptions struct {
 	// instead of auto-detecting a fork. It takes precedence over fork
 	// detection: the head is NOT fork-qualified and detection is skipped.
 	BaseRepo string
+	// Base, when non-empty, overrides the target BRANCH within whichever
+	// repo is selected (by BaseRepo, fork detection, or origin). It is
+	// independent of BaseRepo, which selects the target repo. When empty,
+	// each target mode's existing default applies (gh's own default branch
+	// in BaseRepo/fork modes, or the resolved source-repo default branch in
+	// same-repo-on-origin mode).
+	Base string
 }
 
 // baseRepoRegexp matches a GitHub "owner/repo" slug: exactly one slash with
@@ -56,6 +63,9 @@ func GHPRCreate(ctx context.Context, client *argus.Client, taskID string, opts G
 		if !baseRepoRegexp.MatchString(opts.BaseRepo) {
 			return nil, fmt.Errorf("invalid base_repo %q (must be \"owner/repo\")", opts.BaseRepo)
 		}
+	}
+	if strings.HasPrefix(opts.Base, "-") {
+		return nil, fmt.Errorf("invalid base %q (must not begin with '-')", opts.Base)
 	}
 
 	resolved, err := Resolve(ctx, client, taskID)
@@ -94,18 +104,32 @@ func GHPRCreate(ctx context.Context, client *argus.Client, taskID string, opts G
 		// Explicit base repo: open a same-repo PR on that repository and skip
 		// fork detection entirely. The head branch is expected to already exist
 		// on base_repo (typically pushed there via iris:push --remote). The head
-		// is NOT fork-qualified. Omit --base; gh defaults it to base_repo's own
-		// default branch.
-		args = append(args, "--repo", opts.BaseRepo, "--head", effective)
+		// is NOT fork-qualified. Omit --base unless opts.Base overrides it; gh
+		// otherwise defaults it to base_repo's own default branch.
+		args = append(args, "--repo", opts.BaseRepo)
+		if opts.Base != "" {
+			args = append(args, "--base", opts.Base)
+		}
+		args = append(args, "--head", effective)
 	default:
 		if fu := detectForkUpstream(ctx, resolved.SourceRepo); fu != nil {
 			// Cross-fork: origin is a fork, so target the upstream parent and
-			// qualify the effective head with the fork owner. Omit --base; gh
-			// defaults it to the upstream repository's default branch.
-			args = append(args, "--repo", fu.UpstreamRepo, "--head", fu.ForkOwner+":"+effective)
+			// qualify the effective head with the fork owner. Omit --base unless
+			// opts.Base overrides it; gh otherwise defaults it to the upstream
+			// repository's default branch.
+			args = append(args, "--repo", fu.UpstreamRepo)
+			if opts.Base != "" {
+				args = append(args, "--base", opts.Base)
+			}
+			args = append(args, "--head", fu.ForkOwner+":"+effective)
 		} else {
-			// Same-repo: origin is the target.
-			args = append(args, "--base", defaultBranch, "--head", effective)
+			// Same-repo: origin is the target. opts.Base overrides the resolved
+			// default branch when provided.
+			base := defaultBranch
+			if opts.Base != "" {
+				base = opts.Base
+			}
+			args = append(args, "--base", base, "--head", effective)
 		}
 	}
 	if opts.Body != "" {

@@ -64,8 +64,10 @@ iris start --foreground            Run the daemon (called by the LaunchAgent).
 iris stop                          SIGTERM to the running daemon.
 iris status                        Daemon health (no args) OR self-mgmt status (with target).
 iris merge-to-master <task-id>     Merge an argus task's branch into the source repo's default branch (--dry-run previews).
+iris merge-to-branch <task-id> <target-branch> <source-ref>
+                                   Merge an arbitrary source-ref into an arbitrary long-lived target-branch and push, via a scratch worktree that never disturbs the source repo's checkout (--no-ff, -m, --dry-run). Refuses the default/protected branch as target.
 iris push <task-id>                Push the task's branch to origin (host-side; --force-with-lease, --branch, --remote <name>).
-iris gh-pr-create <task-id> -t T   Create a GitHub PR via gh CLI (--title required; --body, --draft, --head, --base-repo <owner/repo>).
+iris gh-pr-create <task-id> -t T   Create a GitHub PR via gh CLI (--title required; --body, --draft, --head, --base-repo <owner/repo>, --base <branch>).
 iris gh-pr-merge <task-id> -p N    Merge a GitHub PR via gh CLI (--strategy squash|merge|rebase).
 iris gh-pr-view <task-id> -p N     Read a GitHub PR's state via gh CLI (--json state/checks/reviews/...).
 iris gh-pr-ready <task-id> -p N    Mark a draft PR as ready for review via gh CLI (idempotent).
@@ -109,6 +111,7 @@ iris gh-pr-create <task-id> --title "..." --base-repo drn/argus
 
 - `--remote` targets any **configured** remote (a name, never a URL — iris validates it exists and never adds remotes). Defaults to `origin`.
 - `--base-repo` opens a same-repo PR on that `owner/repo` and **bypasses fork auto-detection** (the head is not fork-qualified; the branch must already exist there). Without it, `iris:gh_pr_create` opens a same-repo PR on origin, or — when origin is a fork — a cross-fork PR into the upstream parent (which won't run CI).
+- `--base <branch>` independently selects the target **branch** (e.g. a long-lived integration branch) within whichever repo `--base-repo`/fork-detection/origin selected. Omit it and each mode's existing default branch applies unchanged.
 
 ## Self-management
 
@@ -222,6 +225,19 @@ The structured result includes:
 - `dry_run`, `would_succeed`, `files_changed`, `conflicts` — populated only when `dry_run: true`.
 
 `--dry-run` previews the merge: iris runs `git merge --no-commit --no-ff <branch>` under the same lock, captures `files_changed` and `conflicts`, then `merge --abort` unconditionally. No commit, no `[post_merge]` hook. `sha` is empty; `would_succeed` reports whether the real merge would land cleanly.
+
+## `iris:merge_to_branch`
+
+Merges an arbitrary `source_ref` (branch, tag, or SHA) into an arbitrary long-lived, **non-default** `target_branch` and pushes it — for integration/staging branches that repeatedly absorb whole feature branches over their lifetime. Unlike `iris:merge_to_master`, the merge runs in a **scratch `git worktree add`** in a temp directory (removed on exit), so the source repo's currently checked-out branch and working tree are never touched. Neither `target_branch` nor `source_ref` is scoped to the `argus/` prefix `iris:merge_to_master` requires of its source — but merging into the default/protected branch itself is refused (that's what `iris:merge_to_master` is for).
+
+```
+iris merge-to-branch <task-id> integration/big-feature feature-x --no-ff
+iris merge-to-branch <task-id> integration/big-feature v1.2.0-rc --dry-run
+```
+
+- If the target branch's local ref doesn't track `origin` (or is stale relative to it), iris resets the scratch worktree to `origin/<target_branch>` before merging, so the branch never tracking origin doesn't produce a rejected push. If `origin/<target_branch>` doesn't exist yet, iris merges from local state and the push creates it.
+- A `.iris.toml` `[post_merge]` hook is read from **`target_branch`'s own tree** (post-merge, pre-cleanup) — not the source repo's untouched checkout — with env vars `IRIS_TASK_ID`, `IRIS_SOURCE_REPO`, `IRIS_TARGET_BRANCH`, `IRIS_SOURCE_REF`, `IRIS_MERGE_SHA`.
+- `--dry-run` mirrors `iris:merge_to_master`'s preview: `git merge --no-commit --no-ff` in the scratch worktree, capture `files_changed`/`conflicts`, abort. No push, no hook.
 
 ## Dogfood and ship
 

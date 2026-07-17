@@ -20,6 +20,7 @@ func newGHPRCreateCmd() *cobra.Command {
 		draft    bool
 		head     string
 		baseRepo string
+		base     string
 	)
 
 	cmd := &cobra.Command{
@@ -50,6 +51,7 @@ func newGHPRCreateCmd() *cobra.Command {
 				Draft:    draft,
 				Head:     head,
 				BaseRepo: baseRepo,
+				Base:     base,
 			})
 			if err != nil {
 				return err
@@ -64,6 +66,7 @@ func newGHPRCreateCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&draft, "draft", false, "Open the PR as a draft")
 	cmd.Flags().StringVar(&head, "head", "", "(optional) head branch to open the PR for instead of the task's resolved branch. MUST NOT be the default branch.")
 	cmd.Flags().StringVar(&baseRepo, "base-repo", "", "(optional) open a same-repo PR on this owner/repo (e.g. drn/argus) instead of auto-detecting a fork.")
+	cmd.Flags().StringVar(&base, "base", "", "(optional) target branch within whichever repo is selected (independent of --base-repo, which selects the target repo) — e.g. a long-lived integration branch.")
 	_ = cmd.MarkFlagRequired("title")
 	return cmd
 }
