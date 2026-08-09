@@ -77,6 +77,7 @@ type IrisToml struct {
 	PreFlight                 *HookBlock   `toml:"pre_flight"              json:"pre_flight,omitempty"            kind:"shared"`
 	Verify                    *HookBlock   `toml:"verify"                  json:"verify,omitempty"                kind:"shared"`
 	PostMerge                 *HookBlock   `toml:"post_merge"              json:"post_merge,omitempty"            kind:"shared"`
+	Secrets                   SecretsBlock `toml:"secrets"                 json:"secrets,omitempty"                kind:"local"`
 }
 
 // BuildBlock declares the build step.
@@ -107,6 +108,47 @@ type HookBlock struct {
 	Command          []string `toml:"command"           json:"command"`
 	TimeoutSeconds   int      `toml:"timeout_seconds"   json:"timeout_seconds,omitempty"`
 	WorkingDirectory string   `toml:"working_directory" json:"working_directory,omitempty"`
+}
+
+// SecretsBlock declares the per-developer secret-source configuration
+// consumed by the `internal/secrets` resolver registry. It is `kind:"local"`
+// on IrisToml (see the field's struct tag) and belongs in `.iris.local.toml`,
+// never `.iris.toml`: a Keychain service name or 1Password vault/item is
+// specific to one developer's own credential-store layout, exactly like
+// `dogfood_branch`. See design.md, "Decision: [secrets] lives in
+// .iris.local.toml, not .iris.toml".
+//
+// Env and Op are sibling fields decoding from their own nested TOML
+// sub-tables ([secrets.env], [secrets.op]), mirroring the existing
+// `BuildBlock.Env` / `[build.env]` convention — the same shape already
+// established in this file for "a map field nested under its own sub-table,
+// sibling to scalar fields on the same parent struct".
+type SecretsBlock struct {
+	// Env maps a target environment variable name to a secret source
+	// descriptor string (e.g. "op://vault/item/field", "env://FOO",
+	// "keychain://service/account"). Resolved fresh, at the point of use,
+	// by internal/secrets.ResolveEnv — never written to iris's own process
+	// environment.
+	Env map[string]string `toml:"env" json:"env,omitempty"`
+
+	// Op configures how the `op` scheme resolver bootstraps its own
+	// authentication credential before shelling out to `op read`.
+	Op OpSecretConfig `toml:"op" json:"op,omitempty"`
+}
+
+// OpSecretConfig configures the `op` scheme resolver's bootstrap step: it
+// must obtain its own credential (typically OP_SERVICE_ACCOUNT_TOKEN) from
+// somewhere before it can run `op read`.
+type OpSecretConfig struct {
+	// BootstrapSource is a secret source descriptor resolved through the
+	// same registry `Resolve` function (typically `keychain://...`, but any
+	// scheme is legal EXCEPT `op://` — see (*SecretsBlock).validate).
+	BootstrapSource string `toml:"bootstrap_source" json:"bootstrap_source,omitempty"`
+
+	// BootstrapTarget is the environment variable name the resolved
+	// bootstrap credential is set under, scoped only to the `op`
+	// subprocess's own environment (e.g. "OP_SERVICE_ACCOUNT_TOKEN").
+	BootstrapTarget string `toml:"bootstrap_target" json:"bootstrap_target,omitempty"`
 }
 
 // ValidationError describes a single failure surfaced by parse or
@@ -294,6 +336,7 @@ func (c *IrisToml) Validate(isSelf bool) []ValidationError {
 	if c.PostMerge != nil {
 		errs = append(errs, c.PostMerge.validate("post_merge")...)
 	}
+	errs = append(errs, c.Secrets.validate()...)
 
 	return errs
 }
@@ -613,6 +656,28 @@ func (h *HookBlock) validate(blockName string) []ValidationError {
 				Message: "must not escape the source repo root",
 			})
 		}
+	}
+	return errs
+}
+
+// validate cross-validates the [secrets] block.
+//
+// A bootstrap_source that itself begins with the `op://` scheme prefix is
+// rejected as a structural error: the `op` scheme resolver bootstraps its
+// own credential by calling the same Resolve function recursively, so an
+// `op://` bootstrap_source would call opSchemeResolve again against
+// identical arguments and never terminate — either a no-op typo or an
+// infinite self-reference. See design.md, "New guard not present in argus
+// version". This is a config-validation-time check specifically so a
+// stack-overflow footgun becomes a clear iris_validate_config error instead.
+func (s *SecretsBlock) validate() []ValidationError {
+	var errs []ValidationError
+	if strings.HasPrefix(s.Op.BootstrapSource, "op://") {
+		errs = append(errs, ValidationError{
+			Field:   "secrets.op.bootstrap_source",
+			Message: "must not itself use the op:// scheme",
+			Hint:    "resolving op's own bootstrap credential via op recurses forever; use keychain:// or env:// instead",
+		})
 	}
 	return errs
 }

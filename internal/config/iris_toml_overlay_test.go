@@ -463,6 +463,69 @@ dogfood_branch = "dev"
 	}
 }
 
+// TestLoadOverlay_SecretsInSharedFileWarnsButHonored verifies the spec
+// scenario "[secrets] set in the shared .iris.toml warns but is honored":
+// secrets is a kind:"local" field, so setting it in .iris.toml (rather than
+// .iris.local.toml) must be honored (graceful migration) but must also
+// produce a local_field_in_shared_config warning — matching how
+// dogfood_branch already behaves in
+// TestLoadOverlay_LocalFieldInSharedFileMigrates above.
+func TestLoadOverlay_SecretsInSharedFileWarnsButHonored(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, IrisTomlFilename), `
+schema_version = 1
+default_branch = "main"
+
+[build]
+command = ["make", "build"]
+
+[restart]
+mechanism = "exit_code"
+
+[secrets.env]
+FOO = "env://FOO_SOURCE"
+
+[secrets.op]
+bootstrap_source = "keychain://op-service-account-claude"
+bootstrap_target = "OP_SERVICE_ACCOUNT_TOKEN"
+`)
+	// No .iris.local.toml.
+
+	result, err := LoadOverlay(dir, true)
+	if err != nil {
+		t.Fatalf("io error: %v", err)
+	}
+	// Value still honored — graceful migration.
+	if got, want := result.Doc.Secrets.Env["FOO"], "env://FOO_SOURCE"; got != want {
+		t.Fatalf("secrets.env[FOO] = %q, want %q (value must be honored even when in shared file)", got, want)
+	}
+	if got, want := result.Doc.Secrets.Op.BootstrapTarget, "OP_SERVICE_ACCOUNT_TOKEN"; got != want {
+		t.Fatalf("secrets.op.bootstrap_target = %q, want %q", got, want)
+	}
+	// Warning emitted.
+	var got *OverlayWarning
+	for i := range result.Warnings {
+		w := result.Warnings[i]
+		if w.Code == WarnLocalFieldInSharedConfig && w.Field == "secrets" {
+			got = &result.Warnings[i]
+		}
+	}
+	if got == nil {
+		t.Fatalf("expected local_field_in_shared_config warning for secrets; got: %v", result.Warnings)
+	}
+	if got.File != IrisTomlFilename {
+		t.Fatalf("warning file = %q, want %q", got.File, IrisTomlFilename)
+	}
+	if !strings.Contains(got.Hint, "move secrets to .iris.local.toml") {
+		t.Fatalf("warning hint should contain migration text, got %q", got.Hint)
+	}
+	// Provenance: the value came from the shared file even though it's a
+	// local-tagged field.
+	if got, want := result.Provenance["secrets"], SourceShared; got != want {
+		t.Fatalf("provenance[secrets] = %q, want %q (value lives in .iris.toml)", got, want)
+	}
+}
+
 // Helper: tests should be able to construct an explicit absent local file by
 // removing it; verify os.Remove paths cleanly so subsequent test assumptions
 // about missing-file behavior hold.
