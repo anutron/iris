@@ -101,12 +101,16 @@ func RunBuild(ctx context.Context, client *argus.Client, taskID string, opts Run
 	}
 
 	// Resolve [secrets.env] for the resolved source repo, fail-open: a
-	// config-load problem (I/O error or nil Doc — the latter covering both
-	// "no .iris.toml at all" and "shared file failed to parse") never
-	// blocks the build, it just means no secrets get injected. Mirrors
-	// merge_to_branch.go's "post_merge hook skipped: could not load
-	// .iris.toml" fail-open precedent. Only the reason is ever logged —
-	// never a resolved secret value.
+	// config-load problem never blocks the build, it just means no secrets
+	// get injected. Mirrors merge_to_branch.go's "post_merge hook skipped:
+	// could not load .iris.toml" fail-open precedent. A simply-absent
+	// .iris.toml is the normal, unconfigured state for most iris-managed
+	// repos today (RunBuild has always worked by filesystem convention with
+	// no config at all) — matching LoadIrisToml's own "missing is NOT an
+	// error" contract, this stays silent. Only a config that exists but
+	// failed to parse/validate (surfaced via ValidationErrors) or a genuine
+	// I/O error is worth a warning. Only the reason is ever logged — never
+	// a resolved secret value.
 	var secretEnv []string
 	overlay, loadErr := config.LoadOverlay(resolved.SourceRepo, false)
 	switch {
@@ -115,10 +119,13 @@ func RunBuild(ctx context.Context, client *argus.Client, taskID string, opts Run
 			"source_repo", resolved.SourceRepo,
 			"err", loadErr,
 		)
-	case overlay.Doc == nil:
-		slog.Warn("secrets resolution skipped: no .iris.toml found",
+	case overlay.Doc == nil && len(overlay.ValidationErrors) > 0:
+		slog.Warn("secrets resolution skipped: .iris.toml failed to parse",
 			"source_repo", resolved.SourceRepo,
+			"errors", overlay.ValidationErrors,
 		)
+	case overlay.Doc == nil:
+		// No .iris.toml at all — the normal, unconfigured case. Silent.
 	default:
 		secretEnv = secrets.ResolveEnv(ctx, overlay.Doc.Secrets)
 	}

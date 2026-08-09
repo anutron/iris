@@ -92,10 +92,13 @@ func RunChecks(ctx context.Context, client *argus.Client, taskID string, opts Ru
 	// the canonical source repo — never the worktree, since a secret source
 	// descriptor is per-developer, not per-checkout. This is fail-open by
 	// design (see design.md's "Fail-open" goal and the merge_to_branch.go
-	// "skip hook, warn, continue" precedent): an I/O error loading config,
-	// or no .iris.toml at all, must never block the check itself. Only the
-	// reason is ever logged — never a config value, and never a resolved
-	// secret.
+	// "skip hook, warn, continue" precedent): an I/O error loading config
+	// must never block the check itself. A simply-absent .iris.toml is the
+	// normal, unconfigured state (matching LoadIrisToml's own "missing is
+	// NOT an error" contract) and stays silent; only a config that exists
+	// but failed to parse/validate, or a genuine I/O error, is worth a
+	// warning. Only the reason is ever logged — never a config value, and
+	// never a resolved secret.
 	var secretsBlock config.SecretsBlock
 	overlay, cfgErr := config.LoadOverlay(resolved.SourceRepo, false)
 	switch {
@@ -104,10 +107,13 @@ func RunChecks(ctx context.Context, client *argus.Client, taskID string, opts Ru
 			"source_repo", resolved.SourceRepo,
 			"err", cfgErr,
 		)
-	case overlay.Doc == nil:
-		slog.Warn("secrets injection skipped: no .iris.toml found",
+	case overlay.Doc == nil && len(overlay.ValidationErrors) > 0:
+		slog.Warn("secrets injection skipped: .iris.toml failed to parse",
 			"source_repo", resolved.SourceRepo,
+			"errors", overlay.ValidationErrors,
 		)
+	case overlay.Doc == nil:
+		// No .iris.toml at all — the normal, unconfigured case. Silent.
 	default:
 		secretsBlock = overlay.Doc.Secrets
 	}
