@@ -23,6 +23,7 @@ import (
 
 	"github.com/anutron/iris/internal/argus"
 	"github.com/anutron/iris/internal/config"
+	"github.com/anutron/iris/internal/secrets"
 )
 
 // exitFunc is the indirection used for self-reload's os.Exit. Tests
@@ -345,8 +346,18 @@ func Reload(ctx context.Context, client *argus.Client, in ReloadInput) (*ReloadR
 		}
 	}
 
+	// 7a. Peek the source repo's local `[secrets]` overlay (.iris.local.toml
+	// only — never the shared file just loaded above). Fetched once and
+	// reused for both the build and restart steps below, matching the
+	// add-secrets-resolver design: a secret resolves fresh, at the point of
+	// use, inside whichever call actually execs the subprocess that needs
+	// it. A missing or malformed local file yields the zero value here
+	// (silently for missing, with a logged warning for malformed) and never
+	// blocks the reload.
+	localSecrets := config.PeekLocalSecrets(target.SourceRepo)
+
 	// 8. Build
-	buildOutput, err := runBuildBlock(ctx, target.SourceRepo, doc.Build)
+	buildOutput, err := runBuildBlock(ctx, target.SourceRepo, doc.Build, localSecrets)
 	if err != nil {
 		writeAudit(AuditEntry{
 			Caller: caller, TargetSourceRepo: target.SourceRepo, Mode: mode,
@@ -358,7 +369,7 @@ func Reload(ctx context.Context, client *argus.Client, in ReloadInput) (*ReloadR
 	}
 
 	// 8. Restart dispatch
-	restartOutput, restartWarn, err := dispatchRestart(ctx, doc.Restart, isSelf)
+	restartOutput, restartWarn, err := dispatchRestart(ctx, doc.Restart, isSelf, localSecrets)
 	if restartWarn != "" {
 		warnings = append(warnings, restartWarn)
 	}
@@ -547,14 +558,21 @@ func runHook(ctx context.Context, sourceRepo string, hook config.HookBlock, defa
 	}
 }
 
-func runBuildBlock(ctx context.Context, sourceRepo string, b config.BuildBlock) (string, error) {
+// runBuildBlock runs the project's configured build command. sc supplies
+// the source repo's local `[secrets]` overlay (see config.PeekLocalSecrets);
+// every resolvable `[secrets.env]` mapping is appended onto cmd.Env AFTER
+// mergedEnv's static `[build].env` entries — distinct from, but ending up
+// alongside, those static entries in the same subprocess environment. This
+// is one of the four secrets-injection call sites covering iris:reload and
+// iris:publish (both call this function directly).
+func runBuildBlock(ctx context.Context, sourceRepo string, b config.BuildBlock, sc config.SecretsBlock) (string, error) {
 	timeout := time.Duration(b.ResolvedTimeoutSeconds()) * time.Second
 	buildCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	cmd := exec.CommandContext(buildCtx, b.Command[0], b.Command[1:]...)
 	cmd.Dir = filepath.Join(sourceRepo, b.ResolvedWorkingDirectory())
-	cmd.Env = mergedEnv(b.Env)
+	cmd.Env = append(mergedEnv(b.Env), secrets.ResolveEnv(ctx, sc)...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	var buf bytes.Buffer
@@ -609,8 +627,14 @@ func mergedEnv(extra map[string]string) []string {
 
 // dispatchRestart runs the restart mechanism. Returns (output, warning, err).
 // For mechanism="exit_code" returns ("", "", nil) — the caller schedules
-// the exit AFTER the response is flushed.
-func dispatchRestart(ctx context.Context, r config.RestartBlock, isSelf bool) (string, string, error) {
+// the exit AFTER the response is flushed. sc supplies the source repo's
+// local `[secrets]` overlay (see config.PeekLocalSecrets); it is consulted
+// ONLY by the MechanismExec case — the one restart mechanism that execs a
+// project-configured command with a customizable environment. Other
+// mechanisms (exit_code, none, launchagent, launchdaemon, signal) never
+// attempt secrets resolution, matching the iris-reload spec's "Non-exec
+// mechanisms are unaffected" scenario.
+func dispatchRestart(ctx context.Context, r config.RestartBlock, isSelf bool, sc config.SecretsBlock) (string, string, error) {
 	switch r.Mechanism {
 	case config.MechanismExitCode:
 		if !isSelf {
@@ -621,7 +645,7 @@ func dispatchRestart(ctx context.Context, r config.RestartBlock, isSelf bool) (s
 		return "", "", nil
 	case config.MechanismLaunchAgent:
 		uid := os.Getuid()
-		out, err := runArgv(ctx, 30*time.Second,
+		out, err := runArgv(ctx, 30*time.Second, nil,
 			"launchctl", "kickstart", "-k", fmt.Sprintf("gui/%d/%s", uid, r.Label))
 		if err != nil {
 			return out, "", fmt.Errorf("launchctl kickstart: %w; output:\n%s", err, out)
@@ -632,7 +656,7 @@ func dispatchRestart(ctx context.Context, r config.RestartBlock, isSelf bool) (s
 		if os.Geteuid() != 0 {
 			warn = "launchdaemon mechanism selected but iris is not root; the kickstart may fail"
 		}
-		out, err := runArgv(ctx, 30*time.Second,
+		out, err := runArgv(ctx, 30*time.Second, nil,
 			"launchctl", "kickstart", "-k", fmt.Sprintf("system/%s", r.Label))
 		if err != nil {
 			return out, warn, fmt.Errorf("launchctl kickstart: %w; output:\n%s", err, out)
@@ -642,7 +666,8 @@ func dispatchRestart(ctx context.Context, r config.RestartBlock, isSelf bool) (s
 		return dispatchSignal(r)
 	case config.MechanismExec:
 		timeout := time.Duration(r.ResolvedExecTimeoutSeconds()) * time.Second
-		out, err := runArgv(ctx, timeout, r.Command[0], r.Command[1:]...)
+		extraEnv := secrets.ResolveEnv(ctx, sc)
+		out, err := runArgv(ctx, timeout, extraEnv, r.Command[0], r.Command[1:]...)
 		if err != nil {
 			return out, "", fmt.Errorf("exec %v: %w; output:\n%s", r.Command, err, out)
 		}
@@ -675,13 +700,24 @@ func dispatchSignal(r config.RestartBlock) (string, string, error) {
 	return fmt.Sprintf("sent %s to pid %d", r.Signal, pid), "", nil
 }
 
-func runArgv(ctx context.Context, timeout time.Duration, name string, args ...string) (string, error) {
+// runArgv runs name/args and captures combined stdout+stderr, bounding it
+// with timeout (0 = no timeout) via a process-group kill. extraEnv, when
+// non-empty, is appended onto a copy of the ambient environment (os.Environ())
+// for THIS subprocess only — used by dispatchRestart's MechanismExec case to
+// inject resolved secrets. extraEnv is nil for every other caller (the
+// launchctl kickstart invocations), which leaves cmd.Env unset and preserves
+// today's inherit-everything behavior exactly — those callers gain no new
+// environment variables from this change.
+func runArgv(ctx context.Context, timeout time.Duration, extraEnv []string, name string, args ...string) (string, error) {
 	if timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, timeout)
 		defer cancel()
 	}
 	cmd := exec.CommandContext(ctx, name, args...)
+	if len(extraEnv) > 0 {
+		cmd.Env = append(os.Environ(), extraEnv...)
+	}
 	// Put the child in its own process group so a timeout-kill propagates to
 	// any grandchildren (e.g. a launchctl that forks, an exec script that
 	// spawns helpers). Mirrors runBuildBlock and runHook.

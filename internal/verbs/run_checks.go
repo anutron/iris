@@ -4,11 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 
 	"github.com/anutron/iris/internal/argus"
+	"github.com/anutron/iris/internal/config"
+	"github.com/anutron/iris/internal/secrets"
 )
 
 // RunChecksOptions captures the per-call knobs for RunChecks.
@@ -84,8 +88,33 @@ func RunChecks(ctx context.Context, client *argus.Client, taskID string, opts Ru
 	mu := lockWorktree(resolved.WorktreePath)
 	defer mu.Unlock()
 
+	// Load .iris.local.toml's [secrets] block (merged over .iris.toml) for
+	// the canonical source repo — never the worktree, since a secret source
+	// descriptor is per-developer, not per-checkout. This is fail-open by
+	// design (see design.md's "Fail-open" goal and the merge_to_branch.go
+	// "skip hook, warn, continue" precedent): an I/O error loading config,
+	// or no .iris.toml at all, must never block the check itself. Only the
+	// reason is ever logged — never a config value, and never a resolved
+	// secret.
+	var secretsBlock config.SecretsBlock
+	overlay, cfgErr := config.LoadOverlay(resolved.SourceRepo, false)
+	switch {
+	case cfgErr != nil:
+		slog.Warn("secrets injection skipped: could not load .iris.toml",
+			"source_repo", resolved.SourceRepo,
+			"err", cfgErr,
+		)
+	case overlay.Doc == nil:
+		slog.Warn("secrets injection skipped: no .iris.toml found",
+			"source_repo", resolved.SourceRepo,
+		)
+	default:
+		secretsBlock = overlay.Doc.Secrets
+	}
+
 	cmd := exec.CommandContext(ctx, scriptPath, opts.Check)
 	cmd.Dir = resolved.WorktreePath
+	cmd.Env = append(os.Environ(), secrets.ResolveEnv(ctx, secretsBlock)...)
 	out, runErr := cmd.CombinedOutput()
 
 	exitCode := 0

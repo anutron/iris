@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -36,6 +37,41 @@ func PeekLocalDogfoodBranch(repoRoot string) string {
 		return ""
 	}
 	return doc.DogfoodBranch
+}
+
+// PeekLocalSecrets leniently reads ONLY the `[secrets]` block from the
+// .iris.local.toml at repoRoot — never the shared `.iris.toml`. It exists
+// for reload.go's runBuildBlock/dispatchRestart (covering both iris:reload
+// and iris:publish, which today load only the shared file via
+// LoadIrisTomlMode and never consult the local overlay): secrets is a
+// kind:"local" field (see design.md, "Decision: [secrets] lives in
+// .iris.local.toml, not .iris.toml"), so it must be peeked independently of
+// the shared-file-only load those verbs already do.
+//
+// A missing file returns the zero-value SecretsBlock silently — that's the
+// common case (no [secrets] configured) and matches
+// PeekLocalDogfoodBranch's own silence on absence. A PRESENT but
+// unparseable file ALSO returns the zero-value SecretsBlock (fail-open —
+// this must never block a build/restart), but unlike
+// PeekLocalDogfoodBranch, it logs via slog.Warn naming only the file path —
+// never any file content or resolved secret value — because a silently-
+// empty [secrets] block from a broken file is exactly the kind of failure
+// this feature needs to make visible (see design.md's Risk about this).
+func PeekLocalSecrets(repoRoot string) SecretsBlock {
+	path := filepath.Join(repoRoot, IrisLocalTomlFilename)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return SecretsBlock{}
+	}
+	var doc IrisToml
+	if _, err := toml.Decode(string(data), &doc); err != nil {
+		slog.Warn("failed to parse .iris.local.toml; resolving zero secrets",
+			"file", path,
+			"error", err,
+		)
+		return SecretsBlock{}
+	}
+	return doc.Secrets
 }
 
 // Source identifies which on-disk file a particular field's value came from

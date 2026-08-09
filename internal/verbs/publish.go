@@ -262,8 +262,13 @@ func Publish(ctx context.Context, client *argus.Client, in PublishInput) (*Publi
 		remoteSHA = strings.TrimSpace(sha)
 	}
 
-	// 6. Build — delegate to reload's runBuildBlock.
-	buildOutput, err := runBuildBlock(ctx, src, doc.Build)
+	// 6. Build — delegate to reload's runBuildBlock. localSecrets peeks the
+	// SOURCE repo's (not worktree's) .iris.local.toml — the developer-local
+	// secrets overlay lives at src, matching where runBuildBlock/
+	// dispatchRestart actually exec their subprocesses. Fetched once and
+	// reused for both the build and restart steps below, mirroring reload.go.
+	localSecrets := config.PeekLocalSecrets(src)
+	buildOutput, err := runBuildBlock(ctx, src, doc.Build, localSecrets)
 	if err != nil {
 		writeAudit(AuditEntry{
 			Caller: caller, TargetSourceRepo: src, Mode: "publish", Outcome: "failure",
@@ -275,7 +280,7 @@ func Publish(ctx context.Context, client *argus.Client, in PublishInput) (*Publi
 
 	// 7. Restart dispatch — delegate to reload's dispatchRestart with isSelf=false.
 	// (publish never invokes the self-exit choreography.)
-	restartOutput, restartWarn, err := dispatchRestart(ctx, doc.Restart, false)
+	restartOutput, restartWarn, err := dispatchRestart(ctx, doc.Restart, false, localSecrets)
 	warnings := append([]string{}, tomlWarnings...)
 	if restartWarn != "" {
 		warnings = append(warnings, restartWarn)
