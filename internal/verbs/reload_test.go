@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -19,7 +20,21 @@ import (
 
 	"github.com/anutron/iris/internal/argus"
 	"github.com/anutron/iris/internal/config"
+	"github.com/anutron/iris/internal/secrets"
 )
+
+// captureLogs redirects slog's default logger to an in-memory buffer for
+// the duration of the test, restoring the previous default on cleanup.
+// Mirrors internal/secrets' and internal/config's own captureLogs test
+// helpers.
+func captureLogs(t *testing.T) *strings.Builder {
+	t.Helper()
+	var buf strings.Builder
+	old := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(old) })
+	return &buf
+}
 
 // victim is a long-running child process the signal-mechanism test sends
 // SIGTERM to.
@@ -517,6 +532,73 @@ mechanism = "exit_code"
 	}
 }
 
+// --- Secrets resolution ------------------------------------------------------
+//
+// Covers add-secrets-resolver's iris-reload spec: "Resolved secrets reach the
+// reload build step" and "A malformed .iris.local.toml logs a warning and
+// resolves zero secrets rather than aborting the reload".
+
+// TestReload_SecretsReachBuildEnvironment verifies a resolvable
+// `[secrets.env]` mapping declared in the source repo's `.iris.local.toml`
+// reaches the `[build] command` subprocess's environment, alongside (and
+// without disturbing) the build step's own success path.
+func TestReload_SecretsReachBuildEnvironment(t *testing.T) {
+	secrets.ResetMemoCache()
+	t.Setenv("IRIS_RELOAD_TEST_BUILD_SECRET", "build-secret-value")
+
+	src, client := reloadFixture(t, `schema_version = 1
+[build]
+command = ["sh", "-c", "echo secret=$BUILD_SECRET_TARGET"]
+[restart]
+mechanism = "exit_code"
+`, true)
+	if err := os.WriteFile(filepath.Join(src, ".iris.local.toml"), []byte(`
+[secrets.env]
+BUILD_SECRET_TARGET = "env://IRIS_RELOAD_TEST_BUILD_SECRET"
+`), 0o644); err != nil {
+		t.Fatalf("write .iris.local.toml: %v", err)
+	}
+
+	// Caller "self" — exercise the self-reload build path via MCP (CLI
+	// self-reload is refused at pre-flight).
+	res, err := Reload(context.Background(), client, ReloadInput{NoPull: true, Caller: "self"})
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if !strings.Contains(res.BuildOutput, "secret=build-secret-value") {
+		t.Fatalf("expected resolved secret in BuildOutput, got: %q", res.BuildOutput)
+	}
+}
+
+// TestReload_MalformedLocalSecretsWarnsAndResolvesZero verifies that a
+// PRESENT-but-unparseable `.iris.local.toml` does not abort the reload: the
+// build still runs with zero secrets injected, and a warning names the
+// broken file.
+func TestReload_MalformedLocalSecretsWarnsAndResolvesZero(t *testing.T) {
+	buf := captureLogs(t)
+
+	src, client := reloadFixture(t, `schema_version = 1
+[build]
+command = ["sh", "-c", "echo secret=[$BUILD_SECRET_TARGET]"]
+[restart]
+mechanism = "exit_code"
+`, true)
+	if err := os.WriteFile(filepath.Join(src, ".iris.local.toml"), []byte("secrets = [unclosed\n"), 0o644); err != nil {
+		t.Fatalf("write malformed .iris.local.toml: %v", err)
+	}
+
+	res, err := Reload(context.Background(), client, ReloadInput{NoPull: true, Caller: "self"})
+	if err != nil {
+		t.Fatalf("reload must not abort on a malformed .iris.local.toml: %v", err)
+	}
+	if !strings.Contains(res.BuildOutput, "secret=[]") {
+		t.Fatalf("expected zero (unresolved) secrets in BuildOutput, got: %q", res.BuildOutput)
+	}
+	if !strings.Contains(buf.String(), ".iris.local.toml") {
+		t.Fatalf("expected a warning naming .iris.local.toml, got log: %s", buf.String())
+	}
+}
+
 // --- Pre-flight hook --------------------------------------------------------
 
 func TestReload_PreFlightHookAborts(t *testing.T) {
@@ -630,6 +712,85 @@ signal = "SIGTERM"
 	case <-time.After(3 * time.Second):
 		t.Fatal("victim process did not exit after SIGTERM within 3s")
 	}
+}
+
+// TestReload_SecretsReachExecRestartEnvironment verifies the iris-reload
+// spec's "Resolved secrets reach the exec restart command" scenario: a
+// resolvable `[secrets.env]` mapping declared in the source repo's
+// `.iris.local.toml` reaches the `[restart] mechanism = "exec"` command's
+// subprocess environment. Extends TestReload_ExecMechanismRunsArgv's shape.
+func TestReload_SecretsReachExecRestartEnvironment(t *testing.T) {
+	secrets.ResetMemoCache()
+	t.Setenv("IRIS_RELOAD_TEST_RESTART_SECRET", "restart-secret-value")
+
+	src, client := reloadFixture(t, `schema_version = 1
+[build]
+command = ["true"]
+[restart]
+mechanism = "exec"
+command = ["sh", "-c", "echo secret=$RESTART_SECRET_TARGET"]
+`, false)
+	if err := os.WriteFile(filepath.Join(src, ".iris.local.toml"), []byte(`
+[secrets.env]
+RESTART_SECRET_TARGET = "env://IRIS_RELOAD_TEST_RESTART_SECRET"
+`), 0o644); err != nil {
+		t.Fatalf("write .iris.local.toml: %v", err)
+	}
+
+	res, err := Reload(context.Background(), client, ReloadInput{NoPull: true, Path: src, Caller: "cli"})
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if !strings.Contains(res.RestartOutput, "secret=restart-secret-value") {
+		t.Fatalf("expected resolved secret in RestartOutput, got: %q", res.RestartOutput)
+	}
+}
+
+// TestDispatchRestart_NonExecMechanismsSkipSecretsResolution verifies the
+// iris-reload spec's "Non-exec mechanisms are unaffected" scenario at the
+// unit level: dispatchRestart must not attempt secrets resolution for any
+// mechanism other than "exec". Proven with an UNRESOLVABLE [secrets.env]
+// source that would log a warning if (and only if) ResolveEnv were invoked
+// for that mechanism's dispatch.
+func TestDispatchRestart_NonExecMechanismsSkipSecretsResolution(t *testing.T) {
+	os.Unsetenv("IRIS_RELOAD_TEST_UNSET_SECRET_XYZ")
+	sc := config.SecretsBlock{
+		Env: map[string]string{"SHOULD_NOT_RESOLVE": "env://IRIS_RELOAD_TEST_UNSET_SECRET_XYZ"},
+	}
+
+	t.Run("none", func(t *testing.T) {
+		buf := captureLogs(t)
+		if _, _, err := dispatchRestart(context.Background(), config.RestartBlock{Mechanism: config.MechanismNone}, false, sc); err != nil {
+			t.Fatalf("dispatchRestart: %v", err)
+		}
+		if strings.Contains(buf.String(), "SHOULD_NOT_RESOLVE") {
+			t.Fatalf("mechanism=none must not attempt secrets resolution, got log: %s", buf.String())
+		}
+	})
+
+	t.Run("exit_code", func(t *testing.T) {
+		buf := captureLogs(t)
+		if _, _, err := dispatchRestart(context.Background(), config.RestartBlock{Mechanism: config.MechanismExitCode}, true, sc); err != nil {
+			t.Fatalf("dispatchRestart: %v", err)
+		}
+		if strings.Contains(buf.String(), "SHOULD_NOT_RESOLVE") {
+			t.Fatalf("mechanism=exit_code must not attempt secrets resolution, got log: %s", buf.String())
+		}
+	})
+
+	t.Run("signal", func(t *testing.T) {
+		pidFile := filepath.Join(t.TempDir(), "victim.pid")
+		v := startVictimSleep(t, pidFile)
+		defer v.cleanup()
+		buf := captureLogs(t)
+		r := config.RestartBlock{Mechanism: config.MechanismSignal, PidFile: pidFile, Signal: "SIGTERM"}
+		if _, _, err := dispatchRestart(context.Background(), r, false, sc); err != nil {
+			t.Fatalf("dispatchRestart: %v", err)
+		}
+		if strings.Contains(buf.String(), "SHOULD_NOT_RESOLVE") {
+			t.Fatalf("mechanism=signal must not attempt secrets resolution, got log: %s", buf.String())
+		}
+	})
 }
 
 // --- Audit log -------------------------------------------------------------

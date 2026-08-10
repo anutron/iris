@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/anutron/iris/internal/argus"
+	"github.com/anutron/iris/internal/secrets"
 )
 
 // publishFixture builds:
@@ -714,5 +715,43 @@ command = ["echo", "restart-ok"]
 	}
 	if !strings.Contains(result.RestartOutput, "restart-ok") {
 		t.Fatalf("RestartOutput missing echo output: %q", result.RestartOutput)
+	}
+}
+
+// TestPublish_SecretsReachBuildAndExecRestartEnvironments verifies the
+// iris-publish spec's "Resolved secrets reach a publish's build and
+// exec-restart steps" scenario: a resolvable `[secrets.env]` mapping
+// declared in the source repo's `.iris.local.toml` reaches BOTH the build
+// subprocess and the `mechanism = "exec"` restart subprocess during
+// iris:publish — matching iris:reload exactly, since both delegate to the
+// same runBuildBlock/dispatchRestart implementations.
+func TestPublish_SecretsReachBuildAndExecRestartEnvironments(t *testing.T) {
+	secrets.ResetMemoCache()
+	t.Setenv("IRIS_PUBLISH_TEST_SECRET", "publish-secret-value")
+
+	const tomlSecrets = `schema_version = 1
+[build]
+command = ["sh", "-c", "echo build-secret=$SECRET_TARGET"]
+[restart]
+mechanism = "exec"
+command = ["sh", "-c", "echo restart-secret=$SECRET_TARGET"]
+`
+	src, _, client := publishFixture(t, "secrets-build-restart", tomlSecrets)
+	if err := os.WriteFile(filepath.Join(src, ".iris.local.toml"), []byte(`
+[secrets.env]
+SECRET_TARGET = "env://IRIS_PUBLISH_TEST_SECRET"
+`), 0o644); err != nil {
+		t.Fatalf("write .iris.local.toml: %v", err)
+	}
+
+	result, err := Publish(context.Background(), client, PublishInput{TaskID: "task-secrets"})
+	if err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+	if !strings.Contains(result.BuildOutput, "build-secret=publish-secret-value") {
+		t.Fatalf("expected resolved secret in BuildOutput, got: %q", result.BuildOutput)
+	}
+	if !strings.Contains(result.RestartOutput, "restart-secret=publish-secret-value") {
+		t.Fatalf("expected resolved secret in RestartOutput, got: %q", result.RestartOutput)
 	}
 }

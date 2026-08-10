@@ -1,11 +1,24 @@
 package config
 
 import (
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+// captureLogs redirects slog's default logger to an in-memory buffer for
+// the duration of the test, restoring the previous default on cleanup.
+// Mirrors internal/secrets' own captureLogs test helper.
+func captureLogs(t *testing.T) *strings.Builder {
+	t.Helper()
+	var buf strings.Builder
+	old := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(old) })
+	return &buf
+}
 
 // TestLoadOverlay_SharedOnly verifies the no-local-file path: a repo with
 // only `.iris.toml` resolves to that file's content, provenance is "shared"
@@ -460,6 +473,153 @@ dogfood_branch = "dev"
 	}
 	if result.Doc != nil {
 		t.Fatalf("expected nil doc when only the local file exists, got %+v", result.Doc)
+	}
+}
+
+// TestLoadOverlay_SecretsInSharedFileWarnsButHonored verifies the spec
+// scenario "[secrets] set in the shared .iris.toml warns but is honored":
+// secrets is a kind:"local" field, so setting it in .iris.toml (rather than
+// .iris.local.toml) must be honored (graceful migration) but must also
+// produce a local_field_in_shared_config warning — matching how
+// dogfood_branch already behaves in
+// TestLoadOverlay_LocalFieldInSharedFileMigrates above.
+func TestLoadOverlay_SecretsInSharedFileWarnsButHonored(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, IrisTomlFilename), `
+schema_version = 1
+default_branch = "main"
+
+[build]
+command = ["make", "build"]
+
+[restart]
+mechanism = "exit_code"
+
+[secrets.env]
+FOO = "env://FOO_SOURCE"
+
+[secrets.op]
+bootstrap_source = "keychain://op-service-account-claude"
+bootstrap_target = "OP_SERVICE_ACCOUNT_TOKEN"
+`)
+	// No .iris.local.toml.
+
+	result, err := LoadOverlay(dir, true)
+	if err != nil {
+		t.Fatalf("io error: %v", err)
+	}
+	// Value still honored — graceful migration.
+	if got, want := result.Doc.Secrets.Env["FOO"], "env://FOO_SOURCE"; got != want {
+		t.Fatalf("secrets.env[FOO] = %q, want %q (value must be honored even when in shared file)", got, want)
+	}
+	if got, want := result.Doc.Secrets.Op.BootstrapTarget, "OP_SERVICE_ACCOUNT_TOKEN"; got != want {
+		t.Fatalf("secrets.op.bootstrap_target = %q, want %q", got, want)
+	}
+	// Warning emitted.
+	var got *OverlayWarning
+	for i := range result.Warnings {
+		w := result.Warnings[i]
+		if w.Code == WarnLocalFieldInSharedConfig && w.Field == "secrets" {
+			got = &result.Warnings[i]
+		}
+	}
+	if got == nil {
+		t.Fatalf("expected local_field_in_shared_config warning for secrets; got: %v", result.Warnings)
+	}
+	if got.File != IrisTomlFilename {
+		t.Fatalf("warning file = %q, want %q", got.File, IrisTomlFilename)
+	}
+	if !strings.Contains(got.Hint, "move secrets to .iris.local.toml") {
+		t.Fatalf("warning hint should contain migration text, got %q", got.Hint)
+	}
+	// Provenance: the value came from the shared file even though it's a
+	// local-tagged field.
+	if got, want := result.Provenance["secrets"], SourceShared; got != want {
+		t.Fatalf("provenance[secrets] = %q, want %q (value lives in .iris.toml)", got, want)
+	}
+}
+
+// TestPeekLocalSecrets_ResolvesSecretsBlock verifies the core happy path:
+// [secrets.env] + [secrets.op] set in .iris.local.toml resolve into the
+// returned SecretsBlock.
+func TestPeekLocalSecrets_ResolvesSecretsBlock(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, IrisLocalTomlFilename), `
+[secrets.env]
+FOO = "env://FOO_SOURCE"
+
+[secrets.op]
+bootstrap_source = "keychain://op-service-account-claude"
+bootstrap_target = "OP_SERVICE_ACCOUNT_TOKEN"
+`)
+	got := PeekLocalSecrets(dir)
+	if got.Env["FOO"] != "env://FOO_SOURCE" {
+		t.Fatalf("Env[FOO] = %q, want %q", got.Env["FOO"], "env://FOO_SOURCE")
+	}
+	if got.Op.BootstrapSource != "keychain://op-service-account-claude" {
+		t.Fatalf("Op.BootstrapSource = %q, want %q", got.Op.BootstrapSource, "keychain://op-service-account-claude")
+	}
+	if got.Op.BootstrapTarget != "OP_SERVICE_ACCOUNT_TOKEN" {
+		t.Fatalf("Op.BootstrapTarget = %q, want %q", got.Op.BootstrapTarget, "OP_SERVICE_ACCOUNT_TOKEN")
+	}
+}
+
+// TestPeekLocalSecrets_MissingFileIsZeroValueSilent verifies the common
+// case — no .iris.local.toml at all — returns the zero value and logs
+// nothing (missing is normal, unlike a present-but-broken file).
+func TestPeekLocalSecrets_MissingFileIsZeroValueSilent(t *testing.T) {
+	dir := t.TempDir()
+	buf := captureLogs(t)
+	got := PeekLocalSecrets(dir)
+	if len(got.Env) != 0 || got.Op.BootstrapSource != "" || got.Op.BootstrapTarget != "" {
+		t.Fatalf("expected zero-value SecretsBlock for a missing file, got %+v", got)
+	}
+	if buf.String() != "" {
+		t.Fatalf("expected no log output for a missing file, got: %s", buf.String())
+	}
+}
+
+// TestPeekLocalSecrets_MalformedFileLogsWarningReturnsZeroValue verifies the
+// spec's failure-visibility requirement: a PRESENT but unparseable
+// .iris.local.toml must not silently zero out [secrets] unnoticed — it logs
+// a warning naming the file (never any secret value — none were ever
+// resolved from a file that didn't even parse) and returns the zero value
+// so the caller (runBuildBlock/dispatchRestart) can proceed fail-open.
+func TestPeekLocalSecrets_MalformedFileLogsWarningReturnsZeroValue(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, IrisLocalTomlFilename), "secrets = [unclosed\n")
+	buf := captureLogs(t)
+	got := PeekLocalSecrets(dir)
+	if len(got.Env) != 0 || got.Op.BootstrapSource != "" {
+		t.Fatalf("expected zero-value SecretsBlock on parse failure, got %+v", got)
+	}
+	logged := buf.String()
+	if !strings.Contains(logged, IrisLocalTomlFilename) {
+		t.Fatalf("expected warning naming %q, got log: %s", IrisLocalTomlFilename, logged)
+	}
+}
+
+// TestPeekLocalSecrets_NeverReadsSharedFile verifies PeekLocalSecrets reads
+// ONLY .iris.local.toml, mirroring PeekLocalDogfoodBranch's own scoping — a
+// [secrets] block set in the shared .iris.toml must NOT surface here (the
+// separate LoadOverlay path is what honors that graceful-migration case, via
+// a full merge rather than this lenient single-field peek).
+func TestPeekLocalSecrets_NeverReadsSharedFile(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, IrisTomlFilename), `
+schema_version = 1
+[build]
+command = ["make", "build"]
+[restart]
+mechanism = "exit_code"
+
+[secrets.env]
+FOO = "env://FOO_SOURCE"
+`)
+	// No .iris.local.toml.
+	got := PeekLocalSecrets(dir)
+	if len(got.Env) != 0 {
+		t.Fatalf("PeekLocalSecrets must not read the shared file; got %+v", got)
 	}
 }
 

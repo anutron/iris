@@ -804,6 +804,129 @@ func TestValidate_NegativeGitTransferTimeout(t *testing.T) {
 	}
 }
 
+// --- secrets block (add-secrets-resolver config schema) ---
+
+// TestSecretsBlock_DecodesEnvAndOp verifies [secrets.env] and [secrets.op]
+// decode into SecretsBlock/OpSecretConfig, mirroring the existing
+// [build.env] sub-table convention.
+func TestSecretsBlock_DecodesEnvAndOp(t *testing.T) {
+	data := `
+schema_version = 1
+
+[build]
+command = ["make", "build"]
+
+[restart]
+mechanism = "none"
+
+[secrets.env]
+BUNDLE_PACKAGES__THANX__COM = "op://claude/shell-env/BUNDLE_PACKAGES__THANX__COM"
+
+[secrets.op]
+bootstrap_source = "keychain://op-service-account-claude"
+bootstrap_target = "OP_SERVICE_ACCOUNT_TOKEN"
+`
+	doc, errs, err := DecodeIrisToml([]byte(data), "stub.toml", false)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(errs) != 0 {
+		t.Fatalf("expected no validation errors, got: %v", errs)
+	}
+	if got, want := doc.Secrets.Env["BUNDLE_PACKAGES__THANX__COM"], "op://claude/shell-env/BUNDLE_PACKAGES__THANX__COM"; got != want {
+		t.Fatalf("secrets.env[BUNDLE_PACKAGES__THANX__COM] = %q, want %q", got, want)
+	}
+	if got, want := doc.Secrets.Op.BootstrapSource, "keychain://op-service-account-claude"; got != want {
+		t.Fatalf("secrets.op.bootstrap_source = %q, want %q", got, want)
+	}
+	if got, want := doc.Secrets.Op.BootstrapTarget, "OP_SERVICE_ACCOUNT_TOKEN"; got != want {
+		t.Fatalf("secrets.op.bootstrap_target = %q, want %q", got, want)
+	}
+}
+
+// TestSecretsBlock_AbsentIsNoOp verifies the spec scenario "Absent [secrets]
+// block changes nothing": no [secrets] table at all round-trips to a clean
+// zero-value SecretsBlock with no validation errors.
+func TestSecretsBlock_AbsentIsNoOp(t *testing.T) {
+	data := `
+schema_version = 1
+
+[build]
+command = ["make", "build"]
+
+[restart]
+mechanism = "none"
+`
+	doc, errs, err := DecodeIrisToml([]byte(data), "stub.toml", false)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(errs) != 0 {
+		t.Fatalf("expected no validation errors, got: %v", errs)
+	}
+	if len(doc.Secrets.Env) != 0 {
+		t.Fatalf("expected empty secrets.env, got: %v", doc.Secrets.Env)
+	}
+	if doc.Secrets.Op != (OpSecretConfig{}) {
+		t.Fatalf("expected zero-value secrets.op, got: %+v", doc.Secrets.Op)
+	}
+}
+
+// TestValidate_SecretsOpBootstrapSourceRejectsOpScheme verifies the spec
+// scenario "An op:// bootstrap source is rejected at validation time": using
+// op to bootstrap op's own credential would recurse into opSchemeResolve
+// against identical arguments forever, so it is a structural validation
+// error naming secrets.op.bootstrap_source.
+func TestValidate_SecretsOpBootstrapSourceRejectsOpScheme(t *testing.T) {
+	doc := &IrisToml{
+		SchemaVersion: 1,
+		Build:         BuildBlock{Command: []string{"make"}},
+		Restart:       RestartBlock{Mechanism: MechanismNone},
+		Secrets: SecretsBlock{
+			Op: OpSecretConfig{
+				BootstrapSource: "op://vault/item/field",
+				BootstrapTarget: "OP_SERVICE_ACCOUNT_TOKEN",
+			},
+		},
+	}
+	errs := doc.Validate(false)
+	var got *ValidationError
+	for i := range errs {
+		if errs[i].Field == "secrets.op.bootstrap_source" {
+			got = &errs[i]
+		}
+	}
+	if got == nil {
+		t.Fatalf("expected secrets.op.bootstrap_source error, got: %v", errs)
+	}
+	if got.Hint == "" {
+		t.Fatalf("expected a remediation hint, got empty")
+	}
+}
+
+// TestValidate_SecretsOpBootstrapSourceAllowsNonOpScheme is the sibling
+// negative case: a keychain:// (or env://, or bare-string) bootstrap_source
+// is legal and must not trip the recursion guard.
+func TestValidate_SecretsOpBootstrapSourceAllowsNonOpScheme(t *testing.T) {
+	doc := &IrisToml{
+		SchemaVersion: 1,
+		Build:         BuildBlock{Command: []string{"make"}},
+		Restart:       RestartBlock{Mechanism: MechanismNone},
+		Secrets: SecretsBlock{
+			Op: OpSecretConfig{
+				BootstrapSource: "keychain://op-service-account-claude",
+				BootstrapTarget: "OP_SERVICE_ACCOUNT_TOKEN",
+			},
+		},
+	}
+	errs := doc.Validate(false)
+	for _, e := range errs {
+		if e.Field == "secrets.op.bootstrap_source" {
+			t.Fatalf("unexpected secrets.op.bootstrap_source error for a keychain:// source: %v", e)
+		}
+	}
+}
+
 func TestSignalByName_Aliases(t *testing.T) {
 	cases := []struct {
 		in   string

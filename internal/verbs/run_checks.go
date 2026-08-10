@@ -4,11 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 
 	"github.com/anutron/iris/internal/argus"
+	"github.com/anutron/iris/internal/config"
+	"github.com/anutron/iris/internal/secrets"
 )
 
 // RunChecksOptions captures the per-call knobs for RunChecks.
@@ -84,8 +88,39 @@ func RunChecks(ctx context.Context, client *argus.Client, taskID string, opts Ru
 	mu := lockWorktree(resolved.WorktreePath)
 	defer mu.Unlock()
 
+	// Load .iris.local.toml's [secrets] block (merged over .iris.toml) for
+	// the canonical source repo — never the worktree, since a secret source
+	// descriptor is per-developer, not per-checkout. This is fail-open by
+	// design (see design.md's "Fail-open" goal and the merge_to_branch.go
+	// "skip hook, warn, continue" precedent): an I/O error loading config
+	// must never block the check itself. A simply-absent .iris.toml is the
+	// normal, unconfigured state (matching LoadIrisToml's own "missing is
+	// NOT an error" contract) and stays silent; only a config that exists
+	// but failed to parse/validate, or a genuine I/O error, is worth a
+	// warning. Only the reason is ever logged — never a config value, and
+	// never a resolved secret.
+	var secretsBlock config.SecretsBlock
+	overlay, cfgErr := config.LoadOverlay(resolved.SourceRepo, false)
+	switch {
+	case cfgErr != nil:
+		slog.Warn("secrets injection skipped: could not load .iris.toml",
+			"source_repo", resolved.SourceRepo,
+			"err", cfgErr,
+		)
+	case overlay.Doc == nil && len(overlay.ValidationErrors) > 0:
+		slog.Warn("secrets injection skipped: .iris.toml failed to parse",
+			"source_repo", resolved.SourceRepo,
+			"errors", overlay.ValidationErrors,
+		)
+	case overlay.Doc == nil:
+		// No .iris.toml at all — the normal, unconfigured case. Silent.
+	default:
+		secretsBlock = overlay.Doc.Secrets
+	}
+
 	cmd := exec.CommandContext(ctx, scriptPath, opts.Check)
 	cmd.Dir = resolved.WorktreePath
+	cmd.Env = append(os.Environ(), secrets.ResolveEnv(ctx, secretsBlock)...)
 	out, runErr := cmd.CombinedOutput()
 
 	exitCode := 0

@@ -125,6 +125,7 @@ func TestLocalFields_MatchesExpectedSet(t *testing.T) {
 	got := append([]string(nil), LocalFields()...)
 	want := []string{
 		"dogfood_branch",
+		"secrets",
 		"ship_ci_timeout_seconds",
 	}
 	sortStrings(got)

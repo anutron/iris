@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/anutron/iris/internal/argus"
+	"github.com/anutron/iris/internal/config"
 )
 
 // writeExecScript writes body as an executable script at path, creating
@@ -147,6 +148,115 @@ func TestRunBuild_TargetArgument(t *testing.T) {
 	}
 	if !strings.Contains(result.Command, "release") {
 		t.Fatalf("expected Command to include target, got: %q", result.Command)
+	}
+}
+
+// Delta scenario ("Resolved secrets reach the build subprocess via
+// script/iris-build"): a resolvable [secrets.env] mapping in
+// .iris.local.toml on the resolved SOURCE REPO reaches the script/iris-build
+// subprocess's own environment.
+func TestRunBuild_SecretsInjectedScript(t *testing.T) {
+	// No t.Parallel(): t.Setenv forbids it.
+	src, wt := setupRepoWithWorktree(t, "build-secrets-script")
+	t.Setenv("IRIS_TEST_SECRET_RUNBUILD_SCRIPT_SRC", "resolved-script-value")
+	writeFileT(t, src, config.IrisTomlFilename, "schema_version = 1\n")
+	writeFileT(t, src, config.IrisLocalTomlFilename, `
+[secrets.env]
+IRIS_TEST_SECRET_RUNBUILD_SCRIPT = "env://IRIS_TEST_SECRET_RUNBUILD_SCRIPT_SRC"
+`)
+	writeExecScript(t, filepath.Join(wt, "script", "iris-build"),
+		"#!/usr/bin/env bash\necho \"secret-is $IRIS_TEST_SECRET_RUNBUILD_SCRIPT\"\n")
+	client := stubArgus(t, src, wt)
+
+	result, err := RunBuild(context.Background(), client, "task-build-secrets-script", RunBuildOptions{})
+	if err != nil {
+		t.Fatalf("run build: %v", err)
+	}
+	if result.ExitCode != 0 {
+		t.Fatalf("expected ExitCode=0, got %d (output: %q)", result.ExitCode, result.Output)
+	}
+	if !strings.Contains(result.Output, "secret-is resolved-script-value") {
+		t.Fatalf("expected resolved secret in output, got: %q", result.Output)
+	}
+}
+
+// Delta scenario ("Resolved secrets reach the build subprocess via the
+// Makefile fallback"): same shape as above, but through `make build`.
+func TestRunBuild_SecretsInjectedMakefile(t *testing.T) {
+	// No t.Parallel(): t.Setenv forbids it.
+	src, wt := setupRepoWithWorktree(t, "build-secrets-make")
+	t.Setenv("IRIS_TEST_SECRET_RUNBUILD_MAKE_SRC", "resolved-make-value")
+	writeFileT(t, src, config.IrisTomlFilename, "schema_version = 1\n")
+	writeFileT(t, src, config.IrisLocalTomlFilename, `
+[secrets.env]
+IRIS_TEST_SECRET_RUNBUILD_MAKE = "env://IRIS_TEST_SECRET_RUNBUILD_MAKE_SRC"
+`)
+	// Tab-indented recipe is required by make. "$$" escapes to a literal
+	// "$" so make hands the shell "$IRIS_TEST_SECRET_RUNBUILD_MAKE".
+	makefile := "build:\n\t@echo \"secret-is $$IRIS_TEST_SECRET_RUNBUILD_MAKE\"\n"
+	if err := os.WriteFile(filepath.Join(wt, "Makefile"), []byte(makefile), 0o644); err != nil {
+		t.Fatalf("write Makefile: %v", err)
+	}
+	client := stubArgus(t, src, wt)
+
+	result, err := RunBuild(context.Background(), client, "task-build-secrets-make", RunBuildOptions{})
+	if err != nil {
+		t.Fatalf("run build: %v", err)
+	}
+	if result.ExitCode != 0 {
+		t.Fatalf("expected ExitCode=0, got %d (output: %q)", result.ExitCode, result.Output)
+	}
+	if !strings.Contains(result.Output, "secret-is resolved-make-value") {
+		t.Fatalf("expected resolved secret in output, got: %q", result.Output)
+	}
+}
+
+// Delta scenario ("No config present changes nothing"): no .iris.toml/
+// .iris.local.toml anywhere is a full no-op, matching pre-existing behavior
+// exactly.
+func TestRunBuild_NoConfigIsNoOp(t *testing.T) {
+	t.Parallel()
+	src, wt := setupRepoWithWorktree(t, "build-secrets-noconfig")
+	writeExecScript(t, filepath.Join(wt, "script", "iris-build"),
+		"#!/usr/bin/env bash\necho built-no-config\n")
+	client := stubArgus(t, src, wt)
+
+	result, err := RunBuild(context.Background(), client, "task-build-noconfig", RunBuildOptions{})
+	if err != nil {
+		t.Fatalf("run build: %v", err)
+	}
+	if result.ExitCode != 0 {
+		t.Fatalf("expected ExitCode=0, got %d (output: %q)", result.ExitCode, result.Output)
+	}
+	if !strings.Contains(result.Output, "built-no-config") {
+		t.Fatalf("expected output to contain 'built-no-config', got: %q", result.Output)
+	}
+}
+
+// Delta scenario ("An unresolved secret does not block the build"): a
+// [secrets.env] mapping whose source fails to resolve leaves that one
+// target variable unset and does not fail the build.
+func TestRunBuild_UnresolvedSecretDoesNotBlockBuild(t *testing.T) {
+	t.Parallel()
+	src, wt := setupRepoWithWorktree(t, "build-secrets-unresolved")
+	writeFileT(t, src, config.IrisTomlFilename, "schema_version = 1\n")
+	writeFileT(t, src, config.IrisLocalTomlFilename, `
+[secrets.env]
+IRIS_TEST_SECRET_RUNBUILD_UNRESOLVED = "env://IRIS_TEST_SECRET_RUNBUILD_UNRESOLVED_SRC_DOES_NOT_EXIST"
+`)
+	writeExecScript(t, filepath.Join(wt, "script", "iris-build"),
+		"#!/usr/bin/env bash\necho \"secret-was [$IRIS_TEST_SECRET_RUNBUILD_UNRESOLVED]\"\n")
+	client := stubArgus(t, src, wt)
+
+	result, err := RunBuild(context.Background(), client, "task-build-unresolved", RunBuildOptions{})
+	if err != nil {
+		t.Fatalf("run build: %v", err)
+	}
+	if result.ExitCode != 0 {
+		t.Fatalf("expected ExitCode=0 (unresolved secret must not block the build), got %d (output: %q)", result.ExitCode, result.Output)
+	}
+	if !strings.Contains(result.Output, "secret-was []") {
+		t.Fatalf("expected target var to be left unset (empty), got: %q", result.Output)
 	}
 }
 
