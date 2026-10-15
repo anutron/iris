@@ -211,6 +211,15 @@ func Reload(ctx context.Context, client *argus.Client, in ReloadInput) (*ReloadR
 	}
 	defer releaseLock()
 
+	// Preserve pre-flight cancellation, including callers cancelled while
+	// queued for the lock. After this point the host operation must finish
+	// independently of the transport, with per-command Iris-owned deadlines.
+	if err := ctx.Err(); err != nil {
+		writeAudit(AuditEntry{Caller: caller, TargetSourceRepo: target.SourceRepo, Mode: mode, Outcome: "failure", FailureReason: err.Error()})
+		return nil, err
+	}
+	ctx = context.WithoutCancel(ctx)
+
 	// 4a. Optional build-branch checkout. When the caller supplied a branch to
 	// build (set_dogfood building the composed dogfood SHA), check it out now —
 	// after the entry pre-flight passed and the lock is held — so the config
@@ -226,7 +235,7 @@ func Reload(ctx context.Context, client *argus.Client, in ReloadInput) (*ReloadR
 			return
 		}
 		restoredBuildBranch = true
-		if out, rerr := runGit(context.Background(), target.SourceRepo, "checkout", entryBranch); rerr != nil {
+		if out, rerr := runDeploymentGit(ctx, target.SourceRepo, "checkout", entryBranch); rerr != nil {
 			warnings = append(warnings, fmt.Sprintf(
 				"failed to restore branch %q after building %q (repo left on %q): %v; output:\n%s",
 				entryBranch, in.BuildBranch, in.BuildBranch, rerr, out))
@@ -234,7 +243,7 @@ func Reload(ctx context.Context, client *argus.Client, in ReloadInput) (*ReloadR
 	}
 	defer restoreBuildBranch()
 	if in.BuildBranch != "" {
-		if out, coErr := runGit(ctx, target.SourceRepo, "checkout", in.BuildBranch); coErr != nil {
+		if out, coErr := runDeploymentGit(ctx, target.SourceRepo, "checkout", in.BuildBranch); coErr != nil {
 			err := fmt.Errorf("checkout build branch %q: %w; output:\n%s", in.BuildBranch, coErr, out)
 			writeAudit(AuditEntry{
 				Caller: caller, TargetSourceRepo: target.SourceRepo, Mode: mode,
@@ -246,7 +255,7 @@ func Reload(ctx context.Context, client *argus.Client, in ReloadInput) (*ReloadR
 	}
 
 	// 5. Pull (fetch + ff-only merge) unless no_pull
-	prePullSha, err := runGit(ctx, target.SourceRepo, "rev-parse", "HEAD")
+	prePullSha, err := runDeploymentGit(ctx, target.SourceRepo, "rev-parse", "HEAD")
 	if err != nil {
 		writeAudit(AuditEntry{
 			Caller: caller, TargetSourceRepo: target.SourceRepo, Mode: mode,
@@ -258,7 +267,7 @@ func Reload(ctx context.Context, client *argus.Client, in ReloadInput) (*ReloadR
 	postPullSha := prePullSha
 	pulled := false
 	if !in.NoPull {
-		if _, err := runGit(ctx, target.SourceRepo, "fetch", "origin", defaultBranch); err != nil {
+		if _, err := runDeploymentGit(ctx, target.SourceRepo, "fetch", "origin", defaultBranch); err != nil {
 			writeAudit(AuditEntry{
 				Caller: caller, TargetSourceRepo: target.SourceRepo, Mode: mode,
 				PrePullSha: prePullSha, PostPullSha: prePullSha,
@@ -268,8 +277,8 @@ func Reload(ctx context.Context, client *argus.Client, in ReloadInput) (*ReloadR
 		}
 		// remote SHA for the diverge-check error message
 		remoteRef := "origin/" + defaultBranch
-		if _, err := runGit(ctx, target.SourceRepo, "merge", "--ff-only", remoteRef); err != nil {
-			remoteSha, _ := runGit(ctx, target.SourceRepo, "rev-parse", remoteRef)
+		if _, err := runDeploymentGit(ctx, target.SourceRepo, "merge", "--ff-only", remoteRef); err != nil {
+			remoteSha, _ := runDeploymentGit(ctx, target.SourceRepo, "rev-parse", remoteRef)
 			reason := fmt.Sprintf("fast-forward not possible: local=%s remote=%s",
 				prePullSha, strings.TrimSpace(remoteSha))
 			writeAudit(AuditEntry{
@@ -279,7 +288,7 @@ func Reload(ctx context.Context, client *argus.Client, in ReloadInput) (*ReloadR
 			})
 			return nil, fmt.Errorf("%s", reason)
 		}
-		sha, err := runGit(ctx, target.SourceRepo, "rev-parse", "HEAD")
+		sha, err := runDeploymentGit(ctx, target.SourceRepo, "rev-parse", "HEAD")
 		if err != nil {
 			writeAudit(AuditEntry{
 				Caller: caller, TargetSourceRepo: target.SourceRepo, Mode: mode,
@@ -379,7 +388,8 @@ func Reload(ctx context.Context, client *argus.Client, in ReloadInput) (*ReloadR
 			Pulled: pulled, PrePullSha: prePullSha, PostPullSha: postPullSha,
 			PreFlightOutput: preFlightOutput, BuildOutput: buildOutput,
 			RestartMechanism: string(doc.Restart.Mechanism), RestartOutput: restartOutput,
-			Outcome: "failure", FailureReason: err.Error(),
+			RestartAttempted: true,
+			Outcome:          "failure", FailureReason: err.Error(),
 			Warnings: warnings,
 		})
 		return nil, err
@@ -397,8 +407,10 @@ func Reload(ctx context.Context, client *argus.Client, in ReloadInput) (*ReloadR
 				Pulled: pulled, PrePullSha: prePullSha, PostPullSha: postPullSha,
 				PreFlightOutput: preFlightOutput, BuildOutput: buildOutput,
 				RestartMechanism: string(doc.Restart.Mechanism), RestartOutput: restartOutput,
-				VerifyOutput: verifyOutput,
-				Outcome:      "failure", FailureReason: err.Error(),
+				VerifyOutput:     verifyOutput,
+				RestartAttempted: true,
+				RestartSucceeded: true,
+				Outcome:          "failure", FailureReason: err.Error(),
 				Warnings: warnings,
 			})
 			return nil, err
@@ -440,6 +452,8 @@ func Reload(ctx context.Context, client *argus.Client, in ReloadInput) (*ReloadR
 		RestartPending:   isSelf,
 		Warnings:         warnings,
 		Outcome:          "success",
+		RestartAttempted: true,
+		RestartSucceeded: true,
 	})
 
 	// 10. Self-reload: schedule exit AFTER response is flushed.

@@ -39,9 +39,13 @@ type AuditEntry struct {
 	PreFlightOutput  string    `json:"pre_flight_output"`
 	VerifyOutput     string    `json:"verify_output"`
 	RestartPending   bool      `json:"restart_pending"`
-	Warnings         []string  `json:"warnings,omitempty"`
-	Outcome          string    `json:"outcome"`
-	FailureReason    string    `json:"failure_reason,omitempty"`
+	// These describe dispatch, not service health. Historical records decode
+	// as false; self-reload still reports RestartPending until scheduled exit.
+	RestartAttempted bool     `json:"restart_attempted"`
+	RestartSucceeded bool     `json:"restart_succeeded"`
+	Warnings         []string `json:"warnings,omitempty"`
+	Outcome          string   `json:"outcome"`
+	FailureReason    string   `json:"failure_reason,omitempty"`
 }
 
 // AggregateEntry collapses many audit entries for one source repo into a

@@ -186,8 +186,16 @@ func Publish(ctx context.Context, client *argus.Client, in PublishInput) (*Publi
 	preSHA = strings.TrimSpace(preSHA)
 
 	// 4. Git update: ff-only by default; --reset opts into hard reset.
+	// Once mutation starts, Iris owns completion. Check after waiting for the
+	// lock, then detach before the first write (including cancellation races
+	// while reset/merge runs). Build and restart retain independent timeouts.
+	if err := ctx.Err(); err != nil {
+		writeAudit(AuditEntry{Caller: caller, TargetSourceRepo: src, Mode: "publish", Outcome: "failure", FailureReason: err.Error()})
+		return nil, err
+	}
+	ctx = context.WithoutCancel(ctx)
 	if in.Reset {
-		if out, err := runGit(ctx, src, "reset", "--hard", wtSHA); err != nil {
+		if out, err := runDeploymentGit(ctx, src, "reset", "--hard", wtSHA); err != nil {
 			reason := fmt.Errorf("git reset --hard %s: %w; log:\n%s", wtSHA, err, out)
 			writeAudit(AuditEntry{
 				Caller: caller, TargetSourceRepo: src, Mode: "publish", Outcome: "failure",
@@ -197,7 +205,7 @@ func Publish(ctx context.Context, client *argus.Client, in PublishInput) (*Publi
 			return nil, reason
 		}
 	} else {
-		if out, err := runGit(ctx, src, "merge", "--ff-only", wtSHA); err != nil {
+		if out, err := runDeploymentGit(ctx, src, "merge", "--ff-only", wtSHA); err != nil {
 			reason := fmt.Errorf("git merge --ff-only %s: %w; (pass --reset to allow non-fast-forward); log:\n%s", wtSHA, err, out)
 			writeAudit(AuditEntry{
 				Caller: caller, TargetSourceRepo: src, Mode: "publish", Outcome: "failure",
@@ -207,7 +215,7 @@ func Publish(ctx context.Context, client *argus.Client, in PublishInput) (*Publi
 			return nil, reason
 		}
 	}
-	postSHA, err := runGit(ctx, src, "rev-parse", "HEAD")
+	postSHA, err := runDeploymentGit(ctx, src, "rev-parse", "HEAD")
 	if err != nil {
 		writeAudit(AuditEntry{
 			Caller: caller, TargetSourceRepo: src, Mode: "publish", Outcome: "failure",
@@ -222,7 +230,9 @@ func Publish(ctx context.Context, client *argus.Client, in PublishInput) (*Publi
 	pushed := false
 	remoteSHA := ""
 	if in.Push {
-		defaultBranch, err := DefaultBranch(ctx, src)
+		readCtx, readCancel := context.WithTimeout(ctx, postTransferReadTimeout)
+		defaultBranch, err := DefaultBranch(readCtx, src)
+		readCancel()
 		if err != nil {
 			writeAudit(AuditEntry{
 				Caller: caller, TargetSourceRepo: src, Mode: "publish", Outcome: "failure",
@@ -240,7 +250,7 @@ func Publish(ctx context.Context, client *argus.Client, in PublishInput) (*Publi
 			})
 			return nil, err
 		}
-		if out, err := runGit(ctx, src, "push", "origin", targetBranch); err != nil {
+		if out, err := runDeploymentGit(ctx, src, "push", "origin", targetBranch); err != nil {
 			reason := fmt.Errorf("git push origin %s: %w; log:\n%s", targetBranch, err, out)
 			writeAudit(AuditEntry{
 				Caller: caller, TargetSourceRepo: src, Mode: "publish", Outcome: "failure",
@@ -249,7 +259,7 @@ func Publish(ctx context.Context, client *argus.Client, in PublishInput) (*Publi
 			})
 			return nil, reason
 		}
-		sha, err := runGit(ctx, src, "rev-parse", "origin/"+targetBranch)
+		sha, err := runDeploymentGit(ctx, src, "rev-parse", "origin/"+targetBranch)
 		if err != nil {
 			writeAudit(AuditEntry{
 				Caller: caller, TargetSourceRepo: src, Mode: "publish", Outcome: "failure",
@@ -292,6 +302,7 @@ func Publish(ctx context.Context, client *argus.Client, in PublishInput) (*Publi
 			BuildOutput:      buildOutput,
 			RestartMechanism: string(doc.Restart.Mechanism),
 			RestartOutput:    restartOutput,
+			RestartAttempted: true,
 			Warnings:         warnings,
 			FailureReason:    err.Error(),
 		})
@@ -326,6 +337,8 @@ func Publish(ctx context.Context, client *argus.Client, in PublishInput) (*Publi
 		RestartOutput:    restartOutput,
 		Warnings:         warnings,
 		Outcome:          "success",
+		RestartAttempted: true,
+		RestartSucceeded: true,
 	})
 
 	return result, nil
