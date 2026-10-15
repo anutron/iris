@@ -11,4 +11,6 @@
 ## 3. Validation and delivery
 
 - [x] 3.1 Run race tests, vet, strict OpenSpec validation, and review including the test adversary lens.
-- [ ] 3.2 Commit, push, open a non-draft PR, and report tests and URL to the coordinator.
+- [x] 3.2 Commit, push, open a non-draft PR, and report tests and URL to the coordinator.
+
+Validation: 18 cancellation cases pass under the race detector; vet and all 32 strict OpenSpec checks pass. One full race run passed; two later full runs exceeded the unchanged push timeout test's 2.5-second timing threshold (2.54s and 2.68s). That test passes alone. The timing failure is documented in PR #15 rather than changing unrelated push behavior.
