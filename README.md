@@ -168,6 +168,8 @@ Optional:
 - **`iris:ls`** — Reads the audit log and projects managed systems iris has touched recently (reloads and publishes both appear).
 - **`iris:status`** — For one managed system: the resolved `.iris.toml`, current HEAD, default branch, origin SHA, working-tree-clean state, and the most recent reload/publish outcome.
 
+Publish and reload continue independently of caller cancellation once the locked host mutation sequence starts. Builds, restart commands, hooks, and git steps retain Iris-owned timeouts. If your MCP wait times out, use `iris_status` for the target and inspect `last_reload`: match its `caller`, `timestamp`, and `post_pull_sha` to your operation. `restart_attempted` means restart dispatch was entered; `restart_succeeded` means it returned successfully. These flags describe dispatch, including a configured no-op, rather than service health; reload verification failures retain a successful restart flag, and self-reload still uses `restart_pending` for its scheduled exit. Historical audit records lack these flags and decode as false. While an operation is running, status can still show the previous terminal result; an old result does not confirm completion. The append-only history is at `~/.iris/reload-history.jsonl` (best-effort; write errors are logged). This survives a caller disconnect, but not termination of the Iris process itself.
+
 ### Audit log
 
 Every reload (success and failure) appends one JSON line to `~/.iris/reload-history.jsonl`. The file is append-only and operator-rotated; iris does not rotate it.
