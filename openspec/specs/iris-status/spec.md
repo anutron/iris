@@ -1,7 +1,9 @@
 # iris-status Specification
 
 ## Purpose
-TBD - created by archiving change add-daemon-self-management. Update Purpose after archive.
+
+Reports a managed system's resolved config, git state, last reload outcome, dogfood manifest, and config sources, without side effects.
+
 ## Requirements
 ### Requirement: `iris:status` verb
 

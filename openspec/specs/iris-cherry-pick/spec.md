@@ -1,7 +1,9 @@
 # iris-cherry-pick Specification
 
 ## Purpose
-TBD - created by archiving change add-branch-cherry-pick-checkout-verbs. Update Purpose after archive.
+
+Lets a sandboxed agent cherry-pick a commit onto a target branch in its task's source repo on the host.
+
 ## Requirements
 ### Requirement: `iris:cherry_pick` verb
 

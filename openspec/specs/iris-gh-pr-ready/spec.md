@@ -1,7 +1,9 @@
 # iris-gh-pr-ready Specification
 
 ## Purpose
-TBD - created by archiving change add-pr-management-verbs. Update Purpose after archive.
+
+Lets a sandboxed agent take a draft GitHub pull request out of draft via the host `gh` CLI.
+
 ## Requirements
 ### Requirement: `iris:gh_pr_ready` verb
 

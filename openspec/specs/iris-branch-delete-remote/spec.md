@@ -1,7 +1,9 @@
 # iris-branch-delete-remote Specification
 
 ## Purpose
-TBD - created by archiving change add-source-repo-utility-verbs. Update Purpose after archive.
+
+Lets a sandboxed agent delete a branch on origin for its task's source repo, refusing the default branch and branches that do not exist.
+
 ## Requirements
 ### Requirement: `iris:branch_delete_remote` verb
 

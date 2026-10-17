@@ -1,7 +1,9 @@
 # iris-set-dogfood Specification
 
 ## Purpose
-TBD - created by archiving change add-dogfood-and-ship-verbs. Update Purpose after archive.
+
+Points a managed system's dogfood branch at a worker-supplied commit, records a manifest of what that commit contains, and reloads the system.
+
 ## Requirements
 ### Requirement: `iris:set_dogfood` verb
 

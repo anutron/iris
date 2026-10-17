@@ -1,7 +1,9 @@
 # iris-checkout Specification
 
 ## Purpose
-TBD - created by archiving change add-branch-cherry-pick-checkout-verbs. Update Purpose after archive.
+
+Lets a sandboxed agent switch its task's source repo on the host to a given branch, optionally forcing past local changes.
+
 ## Requirements
 ### Requirement: `iris:checkout` verb
 

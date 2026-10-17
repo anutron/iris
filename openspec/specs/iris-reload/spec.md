@@ -1,7 +1,9 @@
 # iris-reload Specification
 
 ## Purpose
-TBD - created by archiving change add-daemon-self-management. Update Purpose after archive.
+
+Live-upgrades an iris-managed daemon by pulling its default branch, running its declared build, and restarting it as configured in `.iris.toml`.
+
 ## Requirements
 ### Requirement: `iris:reload` verb
 

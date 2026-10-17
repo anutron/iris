@@ -1,7 +1,9 @@
 # iris-gh-pr-close Specification
 
 ## Purpose
-TBD - created by archiving change add-pr-management-verbs. Update Purpose after archive.
+
+Lets a sandboxed agent close a GitHub pull request without merging it, via the host `gh` CLI, optionally deleting its branch.
+
 ## Requirements
 ### Requirement: `iris:gh_pr_close` verb
 

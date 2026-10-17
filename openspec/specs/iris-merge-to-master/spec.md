@@ -1,7 +1,9 @@
 # iris-merge-to-master Specification
 
 ## Purpose
-TBD - created by archiving change bootstrap-iris-plugin. Update Purpose after archive.
+
+Lets a sandboxed agent merge its task branch into the source repo's default branch on the host, with dry-run and post-merge hook support.
+
 ## Requirements
 ### Requirement: `iris:merge_to_master` verb
 

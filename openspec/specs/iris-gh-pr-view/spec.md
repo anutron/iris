@@ -1,7 +1,9 @@
 # iris-gh-pr-view Specification
 
 ## Purpose
-TBD - created by archiving change add-pr-management-verbs. Update Purpose after archive.
+
+Lets a sandboxed agent read a GitHub pull request's state, checks, reviews, and mergeability via the host `gh` CLI.
+
 ## Requirements
 ### Requirement: `iris:gh_pr_view` verb
 

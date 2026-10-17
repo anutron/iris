@@ -1,7 +1,9 @@
 # iris-run-build Specification
 
 ## Purpose
-TBD - created by archiving change add-run-build-verb. Update Purpose after archive.
+
+Lets a sandboxed agent run its project's build in the task worktree on the host and get back the command, exit code, and output.
+
 ## Requirements
 ### Requirement: `iris:run_build` verb
 

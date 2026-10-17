@@ -1,7 +1,9 @@
 # iris-ls Specification
 
 ## Purpose
-TBD - created by archiving change add-daemon-self-management. Update Purpose after archive.
+
+Lists the managed systems iris has reloaded recently, with counts and last-reload details, read from the reload audit log.
+
 ## Requirements
 ### Requirement: `iris:ls` verb
 

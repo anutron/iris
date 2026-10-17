@@ -1,7 +1,9 @@
 # iris-set-local-config Specification
 
 ## Purpose
-TBD - created by archiving change add-iris-local-toml-overlay. Update Purpose after archive.
+
+Lets a worker write per-developer fields into a source repo's `.iris.local.toml`, refusing any field that is not classified as local.
+
 ## Requirements
 ### Requirement: `iris:set_local_config` verb
 

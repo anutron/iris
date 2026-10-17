@@ -1,7 +1,9 @@
 # iris-validate-config Specification
 
 ## Purpose
-TBD - created by archiving change add-daemon-self-management. Update Purpose after archive.
+
+Parses and cross-validates a source repo's `.iris.toml` (and optional local overlay) without side effects, returning errors with remediation hints.
+
 ## Requirements
 ### Requirement: `iris:validate_config` verb
 

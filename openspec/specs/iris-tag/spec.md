@@ -1,7 +1,9 @@
 # iris-tag Specification
 
 ## Purpose
-TBD - created by archiving change add-source-repo-utility-verbs. Update Purpose after archive.
+
+Lets a sandboxed agent create an annotated release tag at origin's default branch and push it, refusing tags that already exist.
+
 ## Requirements
 ### Requirement: `iris:tag` verb
 

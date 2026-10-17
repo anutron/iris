@@ -1,7 +1,9 @@
 # iris-gh-pr-comment Specification
 
 ## Purpose
-TBD - created by archiving change add-pr-management-verbs. Update Purpose after archive.
+
+Lets a sandboxed agent post a comment on a GitHub pull request via the host `gh` CLI and get back the comment URL.
+
 ## Requirements
 ### Requirement: `iris:gh_pr_comment` verb
 

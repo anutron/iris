@@ -1,7 +1,9 @@
 # secrets-resolution Specification
 
 ## Purpose
-TBD - created by archiving change add-secrets-resolver. Update Purpose after archive.
+
+Defines how iris resolves secret descriptors (env, keychain, 1Password) for builds and checks, failing open and never logging secret values.
+
 ## Requirements
 ### Requirement: Scheme-prefixed secret source resolution
 

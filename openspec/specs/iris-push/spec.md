@@ -1,7 +1,9 @@
 # iris-push Specification
 
 ## Purpose
-TBD - created by archiving change add-push-verb. Update Purpose after archive.
+
+Lets a sandboxed agent push its task branch (or a named branch) from the host, with optional force-with-lease and guardrails on protected branches.
+
 ## Requirements
 ### Requirement: `iris:push` verb
 

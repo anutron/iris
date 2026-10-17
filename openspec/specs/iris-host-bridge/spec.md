@@ -1,7 +1,9 @@
 # iris-host-bridge Specification
 
 ## Purpose
-TBD - created by archiving change bootstrap-iris-plugin. Update Purpose after archive.
+
+Defines the iris daemon that bridges argus sandboxes to host-side git and gh: lifecycle, authentication, source-repo resolution, per-repo locking, and MCP tool registration.
+
 ## Requirements
 ### Requirement: Daemon lifecycle
 

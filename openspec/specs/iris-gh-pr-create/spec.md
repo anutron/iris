@@ -1,7 +1,9 @@
 # iris-gh-pr-create Specification
 
 ## Purpose
-TBD - created by archiving change add-gh-pr-create-verb. Update Purpose after archive.
+
+Lets a sandboxed agent open a GitHub pull request for its task branch (or a named head, including cross-fork) via the host `gh` CLI.
+
 ## Requirements
 ### Requirement: `iris:gh_pr_create` verb
 

@@ -1,7 +1,9 @@
 # iris-complete-task Specification
 
 ## Purpose
-TBD - created by archiving change add-complete-task-verb. Update Purpose after archive.
+
+Ships a finished argus task in one call: merges its branch into the default branch, pushes, deletes the remote task branch, and reports each checkpoint reached.
+
 ## Requirements
 ### Requirement: `iris:complete_task` verb
 

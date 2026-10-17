@@ -1,7 +1,9 @@
 # iris-branch-create Specification
 
 ## Purpose
-TBD - created by archiving change add-branch-cherry-pick-checkout-verbs. Update Purpose after archive.
+
+Lets a sandboxed agent create a branch from any ref in its task's source repo on the host, without changing the repo's checked-out branch.
+
 ## Requirements
 ### Requirement: `iris:branch_create` verb
 

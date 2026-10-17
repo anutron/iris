@@ -1,7 +1,9 @@
 # iris-gh-pr-merge Specification
 
 ## Purpose
-TBD - created by archiving change add-gh-pr-merge-verb. Update Purpose after archive.
+
+Lets a sandboxed agent merge a GitHub pull request with a squash, merge, or rebase strategy via the host `gh` CLI.
+
 ## Requirements
 ### Requirement: `iris:gh_pr_merge` verb
 

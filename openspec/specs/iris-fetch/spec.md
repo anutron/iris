@@ -1,7 +1,9 @@
 # iris-fetch Specification
 
 ## Purpose
-TBD - created by archiving change add-source-repo-utility-verbs. Update Purpose after archive.
+
+Lets a sandboxed agent run `git fetch origin` in its task's source repo on the host and see which refs were updated.
+
 ## Requirements
 ### Requirement: `iris:fetch` verb
 

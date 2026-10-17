@@ -1,7 +1,9 @@
 # iris-publish Specification
 
 ## Purpose
-TBD - created by archiving change add-publish-verb. Update Purpose after archive.
+
+Publishes a worktree's HEAD to a managed system's source repo branch, then builds and restarts the system, with pre-flight refusals and an audit log.
+
 ## Requirements
 ### Requirement: `iris:publish` verb
 

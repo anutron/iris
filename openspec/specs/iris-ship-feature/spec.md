@@ -1,7 +1,9 @@
 # iris-ship-feature Specification
 
 ## Purpose
-TBD - created by archiving change add-dogfood-and-ship-verbs. Update Purpose after archive.
+
+Ships a feature branch to origin's default branch through a GitHub pull request, waiting on CI with a timeout from the merged config.
+
 ## Requirements
 ### Requirement: `iris:ship_feature` verb
 
