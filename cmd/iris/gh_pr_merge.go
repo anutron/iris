@@ -15,8 +15,9 @@ import (
 
 func newGHPRMergeCmd() *cobra.Command {
 	var (
-		prNumber int
-		strategy string
+		prNumber     int
+		strategy     string
+		expectedRepo string
 	)
 
 	cmd := &cobra.Command{
@@ -42,8 +43,9 @@ func newGHPRMergeCmd() *cobra.Command {
 			client := argus.New(fmt.Sprintf("http://127.0.0.1:%d", apiPort), token)
 
 			result, err := verbs.GHPRMerge(cmd.Context(), client, taskID, verbs.GHPRMergeOptions{
-				PRNumber: prNumber,
-				Strategy: strategy,
+				PRNumber:     prNumber,
+				Strategy:     strategy,
+				ExpectedRepo: expectedRepo,
 			})
 			if err != nil {
 				return err
@@ -55,6 +57,7 @@ func newGHPRMergeCmd() *cobra.Command {
 	}
 	cmd.Flags().IntVar(&prNumber, "pr", 0, "PR number to merge (required)")
 	cmd.Flags().StringVar(&strategy, "strategy", "squash", "merge strategy: squash | merge | rebase")
+	cmd.Flags().StringVar(&expectedRepo, "expected-repo", "", "refuse unless the PR belongs to this owner/name")
 	_ = cmd.MarkFlagRequired("pr")
 	return cmd
 }

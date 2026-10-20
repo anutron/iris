@@ -477,7 +477,7 @@ func TestPush_ConfiguredGitTransferTimeoutClassifiesAsTimeout(t *testing.T) {
 	client := stubArgus(t, src, wt)
 
 	marker := filepath.Join(t.TempDir(), "prereceive-started")
-	setSlowPreReceiveHook(t, bare, marker, 3*time.Second)
+	setSlowPreReceiveHook(t, bare, marker, slowRemoteForTimeoutTests)
 
 	toml := "schema_version = 1\ngit_transfer_timeout_seconds = 1\n"
 	if err := os.WriteFile(filepath.Join(src, ".iris.toml"), []byte(toml), 0o644); err != nil {
@@ -488,15 +488,7 @@ func TestPush_ConfiguredGitTransferTimeoutClassifiesAsTimeout(t *testing.T) {
 	_, err := Push(context.Background(), client, "task-push-timeout", PushOptions{})
 	elapsed := time.Since(start)
 
-	if err == nil {
-		t.Fatal("expected a timeout error, got nil")
-	}
-	if !IsGitTransferTimeout(err) {
-		t.Fatalf("expected IsGitTransferTimeout(err) = true, got err: %v", err)
-	}
-	if elapsed > 2500*time.Millisecond {
-		t.Fatalf("Push took %s; expected it to respect the configured 1s timeout, not the hook's 3s sleep", elapsed)
-	}
+	assertTimedOutBeforeRemote(t, err, time.Second, elapsed, marker)
 }
 
 func TestPush_AllowlistRejection(t *testing.T) {

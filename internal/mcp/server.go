@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/anutron/iris/internal/verbs"
 )
 
 // Server hosts the HTTP listener that argus POSTs MCP tool callbacks into.
@@ -136,7 +138,10 @@ func (s *Server) handleCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp := h.Handle(r.Context(), env.Input)
+	// Verbs record the repo they resolve; name it in the response so a
+	// caller passing another project's task_id sees which repo was acted on.
+	ctx, rec := verbs.WithRepoRecorder(r.Context())
+	resp := AnnotateRepo(h.Handle(ctx, env.Input), rec.Ref())
 	writeJSON(w, http.StatusOK, resp)
 }
 

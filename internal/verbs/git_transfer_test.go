@@ -29,7 +29,7 @@ func setSlowPreReceiveHook(t *testing.T, bareDir, markerPath string, sleepFor ti
 	if out, err := exec.Command("git", "-C", bareDir, "config", "core.hooksPath", hooksDir).CombinedOutput(); err != nil {
 		t.Fatalf("git config core.hooksPath: %v: %s", err, out)
 	}
-	script := fmt.Sprintf("#!/bin/sh\ntouch '%s'\nsleep %.3f\nexit 0\n", markerPath, sleepFor.Seconds())
+	script := fmt.Sprintf("#!/bin/sh\ntouch '%s'\nsleep %.3f\ntouch '%s'\nexit 0\n", markerPath, sleepFor.Seconds(), completedMarker(markerPath))
 	if err := os.WriteFile(filepath.Join(hooksDir, "pre-receive"), []byte(script), 0o755); err != nil {
 		t.Fatalf("write pre-receive hook: %v", err)
 	}
@@ -42,12 +42,54 @@ func setSlowPreReceiveHook(t *testing.T, bareDir, markerPath string, sleepFor ti
 func setSlowUploadPack(t *testing.T, dir, markerPath string, sleepFor time.Duration) {
 	t.Helper()
 	scriptPath := filepath.Join(t.TempDir(), "slow-upload-pack.sh")
-	script := fmt.Sprintf("#!/bin/sh\ntouch '%s'\nsleep %.3f\nexec git-upload-pack \"$@\"\n", markerPath, sleepFor.Seconds())
+	script := fmt.Sprintf("#!/bin/sh\ntouch '%s'\nsleep %.3f\ntouch '%s'\nexec git-upload-pack \"$@\"\n", markerPath, sleepFor.Seconds(), completedMarker(markerPath))
 	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
 		t.Fatalf("write upload-pack wrapper: %v", err)
 	}
 	if out, err := exec.Command("git", "-C", dir, "config", "remote.origin.uploadpack", scriptPath).CombinedOutput(); err != nil {
 		t.Fatalf("git config remote.origin.uploadpack: %v: %s", err, out)
+	}
+}
+
+// completedMarker is the file the slow-remote helpers touch once their sleep
+// has fully elapsed, i.e. once the remote would have let the transfer finish.
+func completedMarker(markerPath string) string { return markerPath + ".completed" }
+
+// slowRemoteForTimeoutTests is how long the slow remote stalls in the
+// timeout tests. It is deliberately far longer than any configured timeout
+// plus load-induced setup time, so "the verb returned before the remote
+// completed" is a load-independent assertion rather than a wall-clock
+// budget. Orphaned hook processes outlive the test harmlessly (their temp
+// dirs are already gone when they wake).
+const slowRemoteForTimeoutTests = 60 * time.Second
+
+// assertTimedOutBeforeRemote checks a transfer timeout without wall-clock
+// upper bounds, which flaked under -race and full-suite load because the
+// measured span includes resolution, config loading and WaitDelay on top of
+// the timeout. Instead it asserts what the timing stood in for:
+//   - err is iris's own timeout, carrying exactly the configured duration
+//     (proves the configured value was wired in, not the 300s default);
+//   - the slow remote was reached (the transfer actually went on the wire);
+//   - the remote had NOT completed when the call returned (iris did not wait
+//     for the slow remote);
+//   - at least the configured duration elapsed (it did not give up early).
+func assertTimedOutBeforeRemote(t *testing.T, err error, configured, elapsed time.Duration, markerPath string) {
+	t.Helper()
+	var gtErr *GitTransferError
+	if !errors.As(err, &gtErr) || gtErr.Reason != GitTransferTimeout {
+		t.Fatalf("expected a *GitTransferError with Reason=timeout, got: %v", err)
+	}
+	if gtErr.Timeout != configured {
+		t.Fatalf("timeout carried %s, want the configured %s", gtErr.Timeout, configured)
+	}
+	if _, statErr := os.Stat(markerPath); statErr != nil {
+		t.Fatalf("slow remote was never reached: %v", statErr)
+	}
+	if _, statErr := os.Stat(completedMarker(markerPath)); statErr == nil {
+		t.Fatal("slow remote completed before the call returned; iris waited for it instead of its own timeout")
+	}
+	if elapsed < configured {
+		t.Fatalf("returned after %s, before the configured %s timeout", elapsed, configured)
 	}
 }
 
@@ -248,7 +290,7 @@ func TestRunGitTransfer_TimesOutWithGitTransferError(t *testing.T) {
 	t.Parallel()
 	_, wt, bare := setupRepoWithBareAndWorktree(t, "transfer-timeout")
 	marker := filepath.Join(t.TempDir(), "prereceive-started")
-	setSlowPreReceiveHook(t, bare, marker, 3*time.Second)
+	setSlowPreReceiveHook(t, bare, marker, slowRemoteForTimeoutTests)
 
 	g := gitRunner(t)
 	g(wt, "checkout", "-b", "feature-timeout")
@@ -258,16 +300,5 @@ func TestRunGitTransfer_TimesOutWithGitTransferError(t *testing.T) {
 	_, err := runGitTransfer(context.Background(), wt, configured, "push", "origin", "feature-timeout")
 	elapsed := time.Since(start)
 
-	if err == nil {
-		t.Fatal("expected a timeout error, got nil")
-	}
-	if !IsGitTransferTimeout(err) {
-		t.Fatalf("expected IsGitTransferTimeout(err) = true, got err: %v", err)
-	}
-	if elapsed < configured {
-		t.Fatalf("runGitTransfer returned in %s, before the configured timeout %s elapsed", elapsed, configured)
-	}
-	if elapsed > 2*time.Second {
-		t.Fatalf("runGitTransfer took %s, expected it to respect the configured %s timeout (not the hook's 3s sleep)", elapsed, configured)
-	}
+	assertTimedOutBeforeRemote(t, err, configured, elapsed, marker)
 }

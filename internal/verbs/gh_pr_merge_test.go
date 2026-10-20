@@ -135,7 +135,7 @@ func TestGHPRMerge_RestoresDefaultBranchWhenOnStrayBranch(t *testing.T) {
 	g(src, "branch", "stray-old-feature")
 	g(src, "checkout", "stray-old-feature")
 
-	writeFakeGH(t, fakeGHCaptureArgv+"\nexit 0\n")
+	writeFakeGH(t, fakeGHPRIdentity)
 
 	result, err := GHPRMerge(context.Background(), client, "task-restore", GHPRMergeOptions{PRNumber: 1, Strategy: "squash"})
 	if err != nil {
@@ -166,7 +166,7 @@ func TestGHPRMerge_PullsWhenAlreadyOnDefaultBranch(t *testing.T) {
 	src, wt, _ := setupRepoWithBareAndWorktree(t, "ghmerge-pull")
 	client := stubArgus(t, src, wt)
 
-	writeFakeGH(t, fakeGHCaptureArgv+"\nexit 0\n")
+	writeFakeGH(t, fakeGHPRIdentity)
 
 	// src is already on main (setupRepoWithBareAndWorktree leaves it there).
 	result, err := GHPRMerge(context.Background(), client, "task-pull", GHPRMergeOptions{PRNumber: 2, Strategy: "squash"})

@@ -10,9 +10,10 @@ import (
 )
 
 type ghPRMergeInput struct {
-	TaskID   string `json:"task_id"`
-	PRNumber int    `json:"pr_number"`
-	Strategy string `json:"strategy,omitempty"`
+	TaskID       string `json:"task_id"`
+	PRNumber     int    `json:"pr_number"`
+	Strategy     string `json:"strategy,omitempty"`
+	ExpectedRepo string `json:"expected_repo,omitempty"`
 }
 
 // NewGHPRMergeHandler returns a Handler that decodes the envelope input
@@ -39,8 +40,9 @@ func NewGHPRMergeHandler(client *argus.Client) Handler {
 		}
 
 		result, err := verbs.GHPRMerge(ctx, client, in.TaskID, verbs.GHPRMergeOptions{
-			PRNumber: in.PRNumber,
-			Strategy: in.Strategy,
+			PRNumber:     in.PRNumber,
+			Strategy:     in.Strategy,
+			ExpectedRepo: in.ExpectedRepo,
 		})
 		if err != nil {
 			return ErrorResponse(fmt.Sprintf("iris:gh_pr_merge: %v", err))

@@ -13,12 +13,17 @@ import (
 type GHPRMergeOptions struct {
 	PRNumber int
 	Strategy string // "squash" | "merge" | "rebase"
+	// ExpectedRepo, when set, is the "owner/name" the PR must belong to;
+	// the merge is refused on a mismatch.
+	ExpectedRepo string
 }
 
 // GHPRMergeResult is the structured success payload.
 type GHPRMergeResult struct {
 	Merged        bool     `json:"merged"`
 	Strategy      string   `json:"strategy"`
+	PRURL         string   `json:"pr_url,omitempty"`
+	PRTitle       string   `json:"pr_title,omitempty"`
 	DefaultBranch string   `json:"default_branch,omitempty"`
 	Warnings      []string `json:"warnings,omitempty"`
 }
@@ -50,13 +55,22 @@ func GHPRMerge(ctx context.Context, client *argus.Client, taskID string, opts GH
 	if !IsValidGHPRMergeStrategy(opts.Strategy) {
 		return nil, fmt.Errorf("invalid strategy %q (must be one of squash|merge|rebase)", opts.Strategy)
 	}
+	if err := validateExpectedRepo(opts.ExpectedRepo); err != nil {
+		return nil, err
+	}
 
 	resolved, err := Resolve(ctx, client, taskID)
 	if err != nil {
 		return nil, err
 	}
 
+	id, idWarning, err := identifyPR(ctx, resolved.SourceRepo, opts.PRNumber, opts.ExpectedRepo)
+	if err != nil {
+		return nil, err
+	}
+
 	args := []string{"pr", "merge", fmt.Sprintf("%d", opts.PRNumber), "--" + opts.Strategy}
+	args = append(args, repoArgs(id)...)
 
 	cmd := exec.CommandContext(ctx, "gh", args...)
 	cmd.Dir = resolved.SourceRepo
@@ -66,6 +80,12 @@ func GHPRMerge(ctx context.Context, client *argus.Client, taskID string, opts GH
 	}
 
 	result := &GHPRMergeResult{Merged: true, Strategy: opts.Strategy}
+	if id != nil {
+		result.PRURL, result.PRTitle = id.URL, id.Title
+	}
+	if idWarning != "" {
+		result.Warnings = append(result.Warnings, idWarning)
+	}
 
 	// After merging on GitHub, restore the canonical source repo to the default
 	// branch and pull so a subsequent iris_reload (which requires default-branch

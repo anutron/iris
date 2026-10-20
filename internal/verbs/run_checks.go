@@ -2,11 +2,9 @@ package verbs
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -85,9 +83,6 @@ func RunChecks(ctx context.Context, client *argus.Client, taskID string, opts Ru
 
 	display := "script/iris-check " + opts.Check
 
-	mu := lockWorktree(resolved.WorktreePath)
-	defer mu.Unlock()
-
 	// Load .iris.local.toml's [secrets] block (merged over .iris.toml) for
 	// the canonical source repo — never the worktree, since a secret source
 	// descriptor is per-developer, not per-checkout. This is fail-open by
@@ -118,22 +113,13 @@ func RunChecks(ctx context.Context, client *argus.Client, taskID string, opts Ru
 		secretsBlock = overlay.Doc.Secrets
 	}
 
-	cmd := exec.CommandContext(ctx, scriptPath, opts.Check)
-	cmd.Dir = resolved.WorktreePath
-	cmd.Env = append(os.Environ(), secrets.ResolveEnv(ctx, secretsBlock)...)
-	out, runErr := cmd.CombinedOutput()
-
-	exitCode := 0
+	env := append(os.Environ(), secrets.ResolveEnv(ctx, secretsBlock)...)
+	out, exitCode, runErr := runWorktreeCommand(ctx, resolved.WorktreePath, env, scriptPath, opts.Check)
 	if runErr != nil {
-		var exitErr *exec.ExitError
-		if errors.As(runErr, &exitErr) {
-			exitCode = exitErr.ExitCode()
-		} else {
-			// The process failed to start (binary missing, fork error,
-			// context cancelled before exec). No structured result.
-			return nil, fmt.Errorf("run check %s in %s: %w; output:\n%s",
-				display, resolved.WorktreePath, runErr, strings.TrimSpace(string(out)))
-		}
+		// The process failed to start or hit iris's ceiling. No
+		// structured result.
+		return nil, fmt.Errorf("run check %s in %s: %w; output:\n%s",
+			display, resolved.WorktreePath, runErr, strings.TrimSpace(string(out)))
 	}
 
 	result := &RunChecksResult{
@@ -143,7 +129,7 @@ func RunChecks(ctx context.Context, client *argus.Client, taskID string, opts Ru
 	}
 
 	if exitCode != 0 {
-		return result, &CheckExitError{Result: result, Err: runErr}
+		return result, &CheckExitError{Result: result, Err: fmt.Errorf("exit status %d", exitCode)}
 	}
 	return result, nil
 }

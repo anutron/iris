@@ -8,7 +8,7 @@ Greek-pantheon naming continues from [argus](https://github.com/drn/argus) and [
 
 ## Status
 
-The full verb set has shipped and archived: host-side git/gh operations (`merge_to_master`, `merge_to_branch`, `push`, `gh_pr_*`, `branch_*`, `cherry_pick`, `checkout`, `fetch`, `tag`, `complete_task`), build and check runners (`run_build`, `run_checks`), daemon self-management (`reload`, `publish`, `validate_config`, `ls`, `status`), and the dogfood/ship workflow (`set_dogfood`, `ship_feature`, `set_local_config`). Each verb's base spec lives under [`openspec/specs/`](./openspec/specs/); the change folders that introduced them are archived under [`openspec/changes/archive/`](./openspec/changes/archive/).
+The full verb set has shipped and archived: host-side git/gh operations (`merge_to_master`, `merge_to_branch`, `push`, `gh_pr_*`, `branch_*`, `cherry_pick`, `checkout`, `fetch`, `tag`, `complete_task`), build and check runners (`run_build`, `run_checks`, polled with `run_result` when they outlast a call), daemon self-management (`reload`, `publish`, `validate_config`, `ls`, `status`), and the dogfood/ship workflow (`set_dogfood`, `ship_feature`, `set_local_config`). Each verb's base spec lives under [`openspec/specs/`](./openspec/specs/); the change folders that introduced them are archived under [`openspec/changes/archive/`](./openspec/changes/archive/).
 
 Read [`SKETCH.md`](./SKETCH.md) for the full design context. In-flight work lives in the active change folders under [`openspec/changes/`](./openspec/changes/).
 
