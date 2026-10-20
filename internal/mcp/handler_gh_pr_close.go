@@ -13,6 +13,7 @@ type ghPRCloseInput struct {
 	TaskID       string `json:"task_id"`
 	PRNumber     int    `json:"pr_number"`
 	DeleteBranch bool   `json:"delete_branch,omitempty"`
+	ExpectedRepo string `json:"expected_repo,omitempty"`
 }
 
 // NewGHPRCloseHandler returns a Handler that decodes the envelope input
@@ -35,6 +36,7 @@ func NewGHPRCloseHandler(client *argus.Client) Handler {
 		result, err := verbs.GHPRClose(ctx, client, in.TaskID, verbs.GHPRCloseOptions{
 			PRNumber:     in.PRNumber,
 			DeleteBranch: in.DeleteBranch,
+			ExpectedRepo: in.ExpectedRepo,
 		})
 		if err != nil {
 			return ErrorResponse(fmt.Sprintf("iris:gh_pr_close: %v", err))

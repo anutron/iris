@@ -17,6 +17,7 @@ func newGHPRCloseCmd() *cobra.Command {
 	var (
 		prNumber     int
 		deleteBranch bool
+		expectedRepo string
 	)
 
 	cmd := &cobra.Command{
@@ -44,6 +45,7 @@ func newGHPRCloseCmd() *cobra.Command {
 			result, err := verbs.GHPRClose(cmd.Context(), client, taskID, verbs.GHPRCloseOptions{
 				PRNumber:     prNumber,
 				DeleteBranch: deleteBranch,
+				ExpectedRepo: expectedRepo,
 			})
 			if err != nil {
 				return err
@@ -55,6 +57,7 @@ func newGHPRCloseCmd() *cobra.Command {
 	}
 	cmd.Flags().IntVar(&prNumber, "pr", 0, "PR number to close (required)")
 	cmd.Flags().BoolVar(&deleteBranch, "delete-branch", false, "Delete the source branch after closing the PR (default false)")
+	cmd.Flags().StringVar(&expectedRepo, "expected-repo", "", "refuse unless the PR belongs to this owner/name")
 	_ = cmd.MarkFlagRequired("pr")
 	return cmd
 }

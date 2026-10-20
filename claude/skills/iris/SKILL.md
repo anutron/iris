@@ -187,5 +187,6 @@ iris_checkout(task_id, branch="master", force=true)  # abort in-progress op + di
 - **`task_id` is required** for every ship/PR/branch verb — it's how iris finds the source repo. You cannot pass a path. (Only the self-management verbs `status`/`ls`/`validate_config`/`reload`/`publish` may omit it to target iris itself.)
 - **Branches must be `argus/`-prefixed** for merge/push, and iris refuses to move or delete the default branch.
 - **iris never deletes your worktree or task branch** on merge — that's factual, not a bug. Use `iris_branch_delete_remote` + let argus archive, or `iris_complete_task` for the full cleanup.
+- **A `task_id` from another argus project acts on that project's repo.** That's how a coordinator merges a worker's PRs elsewhere, but PR numbers repeat across repos. Every response names the repo it resolved (`repo: {name, path}` in JSON, or a trailing `repo:` line on errors), so check it. On `iris_gh_pr_merge` and `iris_gh_pr_close`, also pass `expected_repo="owner/name"`: iris then refuses, changing nothing, if the PR belongs to a different repo. Both verbs return `pr_url` and `pr_title` too.
 - **`iris_gh_pr_merge` doesn't pre-check CI** — poll `iris_gh_pr_view` first.
 - Results are structured JSON; on failure you get a structured error (often with captured git/gh output), not a thrown exception — read it.

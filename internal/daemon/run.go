@@ -253,13 +253,14 @@ func toolDefinitions() []mcp.ToolDefinition {
 		},
 		{
 			Name:        "iris_gh_pr_merge",
-			Description: "Merge a GitHub pull request via the host's gh CLI. Caller passes pr_number and strategy (squash|merge|rebase). v1 does not pre-check CI; gh's own merge command surfaces a failure when required checks are red.",
+			Description: "Merge a GitHub pull request via the host's gh CLI. Caller passes pr_number and strategy (squash|merge|rebase). Iris first runs `gh pr view` and returns the PR's `pr_url` and `pr_title`; with `expected_repo` set it refuses, merging nothing, unless the PR belongs to that repo. Like every iris response, the result names the resolved repo (`repo`). PR numbers repeat across repos and a task_id from another project acts on that project's repo, so check `repo`/`pr_url` and pass `expected_repo` for cross-project merges. v1 does not pre-check CI; gh's own merge command surfaces a failure when required checks are red.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"task_id":   map[string]any{"type": "string", "description": "Argus task ID. Iris resolves the source repo from this."},
-					"pr_number": map[string]any{"type": "integer", "minimum": 1, "description": "GitHub PR number to merge."},
-					"strategy":  map[string]any{"type": "string", "enum": []string{"squash", "merge", "rebase"}, "default": "squash", "description": "Merge strategy."},
+					"task_id":       map[string]any{"type": "string", "description": "Argus task ID. Iris resolves the source repo from this."},
+					"pr_number":     map[string]any{"type": "integer", "minimum": 1, "description": "GitHub PR number to merge."},
+					"strategy":      map[string]any{"type": "string", "enum": []string{"squash", "merge", "rebase"}, "default": "squash", "description": "Merge strategy."},
+					"expected_repo": map[string]any{"type": "string", "description": "(optional) owner/name the PR must belong to, e.g. \"acme/video-gen\". Iris looks the PR up first and refuses, changing nothing, if gh resolves it to a different repo. Pass it whenever the task_id is from another project."},
 				},
 				"required": []string{"task_id", "pr_number"},
 			},
@@ -303,13 +304,14 @@ func toolDefinitions() []mcp.ToolDefinition {
 		},
 		{
 			Name:        "iris_gh_pr_close",
-			Description: "Close a GitHub PR without merging via the host's gh CLI. Optional delete_branch flag passes --delete-branch to gh.",
+			Description: "Close a GitHub PR without merging via the host's gh CLI. Optional delete_branch flag passes --delete-branch to gh. Iris first runs `gh pr view` and returns the PR's `pr_url` and `pr_title`; with `expected_repo` set it refuses, closing nothing, unless the PR belongs to that repo.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"task_id":       map[string]any{"type": "string", "description": "Argus task ID. Iris resolves the source repo from this."},
 					"pr_number":     map[string]any{"type": "integer", "minimum": 1, "description": "GitHub PR number to close."},
 					"delete_branch": map[string]any{"type": "boolean", "default": false, "description": "Pass --delete-branch to gh; deletes the source branch after closing."},
+					"expected_repo": map[string]any{"type": "string", "description": "(optional) owner/name the PR must belong to, e.g. \"acme/video-gen\". Iris looks the PR up first and refuses, changing nothing, if gh resolves it to a different repo. Pass it whenever the task_id is from another project."},
 				},
 				"required": []string{"task_id", "pr_number"},
 			},

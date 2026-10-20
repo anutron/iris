@@ -54,6 +54,7 @@ func Resolve(ctx context.Context, client *argus.Client, taskID string) (*Resolve
 	// see the same form (matters on macOS where /var vs /private/var both
 	// reach the same inode).
 	worktreePath := canonicalize(task.WorktreePath)
+	recordResolved(ctx, srcRepo)
 
 	return &ResolvedRepo{
 		Task:         task,

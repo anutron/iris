@@ -37,6 +37,7 @@ func ResolveSelf(ctx context.Context) (*ResolvedRepo, error) {
 		return nil, fmt.Errorf("resolve self from %s: %w", resolved, err)
 	}
 	canonical := canonicalize(root)
+	recordResolved(ctx, canonical)
 	return &ResolvedRepo{
 		Task:         nil,
 		WorktreePath: canonical,
@@ -70,6 +71,7 @@ func ResolvePath(ctx context.Context, client *argus.Client, path string) (*Resol
 		return nil, err
 	}
 	canonical := canonicalize(srcRepo)
+	recordResolved(ctx, canonical)
 	return &ResolvedRepo{
 		Task:         nil,
 		WorktreePath: canonical,
