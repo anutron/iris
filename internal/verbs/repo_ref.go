@@ -72,6 +72,14 @@ func recorderFrom(ctx context.Context) *RepoRecorder {
 	return rec
 }
 
+// RecordedRepo returns the repo recorded in ctx's recorder, or nil.
+func RecordedRepo(ctx context.Context) *RepoRef {
+	if rec := recorderFrom(ctx); rec != nil {
+		return rec.Ref()
+	}
+	return nil
+}
+
 // RecordRepo records ref into ctx's recorder, if ctx carries one.
 func RecordRepo(ctx context.Context, ref *RepoRef) {
 	if ref == nil {

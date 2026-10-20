@@ -128,8 +128,6 @@ func RunBuild(ctx context.Context, client *argus.Client, taskID string, opts Run
 		secretEnv = secrets.ResolveEnv(ctx, overlay.Doc.Secrets)
 	}
 
-	mu := lockWorktree(resolved.WorktreePath)
-	defer mu.Unlock()
 
 	// Seed the env explicitly from os.Environ() so appending the resolved
 	// secrets doesn't silently drop the inherited environment.

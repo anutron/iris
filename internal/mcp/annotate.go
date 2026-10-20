@@ -8,26 +8,36 @@ import (
 )
 
 // AnnotateRepo names ref in resp so a caller can see which repo a verb acted
-// on. A JSON-object success body gains "repo" as its first key with every
-// other byte unchanged; an error or non-JSON body gains a trailing
-// "repo: <name> (<path>)" line. A nil ref leaves resp untouched.
+// on. A body that parses as JSON is never appended to, so callers that
+// decode it (e.g. set_local_config's {code, field, message, hint} error
+// envelope) keep working: a JSON object without a top-level "repo" gains
+// one as its first key, success or error alike, with every other byte
+// unchanged; any other JSON is left alone. A plain-text body gains a final
+// "repo: <name> (<path>)" line, with its existing text (check or build
+// output) untouched. A nil ref leaves resp untouched.
 func AnnotateRepo(resp Response, ref *verbs.RepoRef) Response {
-	if ref == nil {
+	if ref == nil || len(resp.Content) == 0 {
 		return resp
 	}
-	if !resp.IsError && len(resp.Content) == 1 {
-		if body, ok := injectRepoKey(resp.Content[0].Text, ref); ok {
-			resp.Content = []ContentBlock{{Type: resp.Content[0].Type, Text: body}}
-			return resp
-		}
-	}
-	line := "repo: " + ref.String()
 	content := append([]ContentBlock(nil), resp.Content...)
-	if n := len(content); n > 0 && content[n-1].Type == "text" {
-		content[n-1].Text = strings.TrimRight(content[n-1].Text, "\n") + "\n" + line
-	} else {
-		content = append(content, ContentBlock{Type: "text", Text: line})
+	last := &content[len(content)-1]
+	if last.Type != "text" {
+		return resp
 	}
+
+	if json.Valid([]byte(last.Text)) {
+		if body, ok := injectRepoKey(last.Text, ref); ok {
+			last.Text = body
+			resp.Content = content
+		}
+		return resp
+	}
+
+	sep := "\n"
+	if strings.HasSuffix(last.Text, "\n") {
+		sep = ""
+	}
+	last.Text += sep + "repo: " + ref.String()
 	resp.Content = content
 	return resp
 }

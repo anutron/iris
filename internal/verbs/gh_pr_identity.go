@@ -1,6 +1,7 @@
 package verbs
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -17,13 +18,17 @@ type prIdentity struct {
 	Repo  string
 }
 
-// lookupPR runs `gh pr view <n> --json url,title` in sourceRepo.
+// lookupPR runs `gh pr view <n> --json url,title` in sourceRepo. Only
+// stdout is parsed: gh writes notices (upgrade prompts, deprecations) to
+// stderr, and mixing them in would turn a matching repo into a refusal.
 func lookupPR(ctx context.Context, sourceRepo string, prNumber int) (*prIdentity, error) {
 	cmd := exec.CommandContext(ctx, "gh", "pr", "view", fmt.Sprintf("%d", prNumber), "--json", "url,title")
 	cmd.Dir = sourceRepo
-	out, err := cmd.CombinedOutput()
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
 	if err != nil {
-		return nil, fmt.Errorf("gh pr view: %w: %s", err, strings.TrimSpace(string(out)))
+		return nil, fmt.Errorf("gh pr view: %w: %s", err, strings.TrimSpace(stderr.String()+string(out)))
 	}
 	var v struct {
 		URL   string `json:"url"`
@@ -57,6 +62,16 @@ func identifyPR(ctx context.Context, sourceRepo string, prNumber int, expectedRe
 			prNumber, id.URL, id.Title, expectedRepo)
 	}
 	return id, "", nil
+}
+
+// repoArgs binds a gh pr action to the repo the lookup verified, so gh
+// can't resolve a different one on its own between the check and the act.
+// Without an identity (lookup failed, no guard) gh resolves as it always has.
+func repoArgs(id *prIdentity) []string {
+	if id == nil {
+		return nil
+	}
+	return []string{"--repo", id.Repo}
 }
 
 // validateExpectedRepo checks the optional expected_repo shape.

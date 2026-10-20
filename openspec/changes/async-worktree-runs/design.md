@@ -29,7 +29,11 @@ The handler starts the run in a goroutine and waits up to `wait_seconds`. The de
 
 ### Detach and bound inside the verbs
 
-`RunChecks` and `RunBuild` exec under `context.WithTimeout(context.WithoutCancel(ctx), 30m)` with `cmd.WaitDelay = 1s`, following the `runGitTransfer` precedent. The 30-minute ceiling is a hang guard, not a budget. It's a constant rather than `.iris.toml` config because no project has needed a different value yet, and adding a field later is non-breaking. `[build] timeout_seconds` was rejected because it budgets reload's build step, and coupling a test suite's ceiling to it would surprise people. A ceiling hit returns an error that says `[timeout]`.
+`RunChecks` and `RunBuild` exec under `context.WithTimeout(context.WithoutCancel(ctx), 30m)` with `cmd.WaitDelay = 1s`, following the `runGitTransfer` precedent. The same deadline covers waiting for the per-worktree lock: it is acquired by polling `TryLock` against that context, so a run queued behind a hung one gives up at the ceiling rather than waiting up to a full extra ceiling. A run that gives up while waiting returns `[timeout]` naming the lock, and never runs its script. The 30-minute ceiling is a hang guard, not a budget. It's a constant rather than `.iris.toml` config because no project has needed a different value yet, and adding a field later is non-breaking. `[build] timeout_seconds` was rejected because it budgets reload's build step, and coupling a test suite's ceiling to it would surprise people. A ceiling hit returns an error that says `[timeout]`.
+
+### Handles say whether a run is queued or running
+
+A start hook carried in the run's context fires once the run holds the worktree lock. Until then, the handle reports `status: "queued"`, and after that `running`. A caller can then tell "behind another run in this worktree" from "my script is executing", rather than seeing `running` for both. The alternative of bounding the lock wait separately would fail legitimate runs queued behind a slow but healthy build.
 
 ### Deduplicate in-progress runs by (tool, task_id, argument)
 
@@ -41,7 +45,7 @@ While a run with the same key is in progress, a new call joins it and returns it
 
 ### The repo is reported on every response for the run
 
-Each run records its resolution into its own `RepoRecorder`. The run_checks, run_build and run_result handlers copy it into the request's recorder, so the `name-resolved-repo` annotation names the repo on running, finished and polled responses alike.
+The run_checks and run_build handlers resolve the task before detaching. A bad `task_id` fails immediately, and the resolved repo seeds the run's own `RepoRecorder`, so even a `wait_seconds=0` handle names it. This costs one extra resolution (an argus lookup and a few local git calls) per run. The run_checks, run_build and run_result handlers copy it into the request's recorder, so the `name-resolved-repo` annotation names the repo on running, finished and polled responses alike.
 
 ## Risks / Trade-offs
 

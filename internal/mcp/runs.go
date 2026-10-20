@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/anutron/iris/internal/verbs"
@@ -40,9 +41,10 @@ type Run struct {
 	Arg       string
 	StartedAt time.Time
 
-	key  string
-	rec  *verbs.RepoRecorder
-	done chan struct{}
+	key     string
+	rec     *verbs.RepoRecorder
+	started atomic.Bool // holds the worktree lock and is executing
+	done    chan struct{}
 
 	// Set under RunRegistry.mu before done is closed.
 	resp       Response
@@ -72,7 +74,9 @@ func NewRunRegistry() *RunRegistry {
 // Start launches fn as a run detached from ctx's cancellation, or joins
 // the in-progress run for the same (tool, taskID, arg) so a retry doesn't
 // queue a second run behind the worktree lock. fn's response is stored
-// verbatim and served to every caller of that run.
+// verbatim and served to every caller of that run. A repo already recorded
+// in ctx (the handler resolves before starting) seeds the run's recorder,
+// so even a handle returned before fn resolves names the repo.
 func (r *RunRegistry) Start(ctx context.Context, tool, taskID, arg string, fn func(ctx context.Context) Response) *Run {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -84,6 +88,7 @@ func (r *RunRegistry) Start(ctx context.Context, tool, taskID, arg string, fn fu
 	}
 
 	runCtx, rec := verbs.WithRepoRecorder(context.WithoutCancel(ctx))
+	verbs.RecordRepo(runCtx, verbs.RecordedRepo(ctx))
 	run := &Run{
 		ID:        newRunID(),
 		Tool:      tool,
@@ -94,6 +99,7 @@ func (r *RunRegistry) Start(ctx context.Context, tool, taskID, arg string, fn fu
 		rec:       rec,
 		done:      make(chan struct{}),
 	}
+	runCtx = verbs.WithStartHook(runCtx, func() { run.started.Store(true) })
 	r.runs[run.ID] = run
 	r.active[key] = run
 
@@ -155,15 +161,22 @@ func (run *Run) wait(ctx context.Context, d time.Duration) bool {
 	}
 }
 
+// runningResponse is the handle for an unfinished run. status is "queued"
+// while the run waits for the worktree lock (another run_checks/run_build
+// holds it) and "running" once its script is executing.
 func (r *RunRegistry) runningResponse(run *Run) Response {
+	status := "queued"
+	if run.started.Load() {
+		status = "running"
+	}
 	body, _ := json.MarshalIndent(map[string]any{
 		"run_id":          run.ID,
-		"status":          "running",
+		"status":          status,
 		"tool":            run.Tool,
 		"task_id":         run.TaskID,
 		"started_at":      run.StartedAt.UTC().Format(time.RFC3339),
 		"elapsed_seconds": int(r.now().Sub(run.StartedAt).Seconds()),
-		"next":            fmt.Sprintf("Still running. Call iris_run_result(run_id=%q) to wait up to %ds more for the result; repeat until it returns.", run.ID, MaxRunWaitSeconds),
+		"next":            fmt.Sprintf("Not finished (%s). Call iris_run_result(run_id=%q) to wait up to %ds more for the result; repeat until it returns.", status, run.ID, MaxRunWaitSeconds),
 	}, "", "  ")
 	return TextResponse(string(body))
 }

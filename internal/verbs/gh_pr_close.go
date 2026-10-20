@@ -59,6 +59,7 @@ func GHPRClose(ctx context.Context, client *argus.Client, taskID string, opts GH
 	if opts.DeleteBranch {
 		args = append(args, "--delete-branch")
 	}
+	args = append(args, repoArgs(id)...)
 	cmd := exec.CommandContext(ctx, "gh", args...)
 	cmd.Dir = resolved.SourceRepo
 	out, err := cmd.CombinedOutput()

@@ -22,14 +22,39 @@ var worktreeRunTimeout = WorktreeRunTimeout
 // backgrounded server, jest workers) would otherwise hold the run open.
 const worktreeRunWaitDelay = time.Second
 
-// runWorktreeCommand runs name+args in dir, detached from ctx's
-// cancellation and bounded by worktreeRunTimeout. It returns the combined
-// output and exit code. err is non-nil only when the command produced no
-// exit status of its own: it failed to start, or it hit the ceiling (the
-// error then starts with "[timeout]").
+type startHookKey struct{}
+
+// WithStartHook returns a context whose worktree run calls fn once it holds
+// the worktree lock and is about to exec, so a caller can tell a run that
+// is queued behind another from one that is running.
+func WithStartHook(ctx context.Context, fn func()) context.Context {
+	return context.WithValue(ctx, startHookKey{}, fn)
+}
+
+// MarkRunStarted calls ctx's start hook, if any.
+func MarkRunStarted(ctx context.Context) {
+	if fn, ok := ctx.Value(startHookKey{}).(func()); ok {
+		fn()
+	}
+}
+
+// runWorktreeCommand takes the per-worktree lock and runs name+args in dir,
+// detached from ctx's cancellation. One worktreeRunTimeout deadline covers
+// both the lock wait and the run, so a run queued behind a hung one can't
+// wait unboundedly. It returns the combined output and exit code. err is
+// non-nil only when the command produced no exit status of its own: it
+// failed to start, or it hit the ceiling (the error then starts with
+// "[timeout]").
 func runWorktreeCommand(ctx context.Context, dir string, env []string, name string, args ...string) ([]byte, int, error) {
 	runCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), worktreeRunTimeout)
 	defer cancel()
+
+	mu, err := lockWorktreeCtx(runCtx, dir)
+	if err != nil {
+		return nil, -1, fmt.Errorf("[timeout] waited iris's %s ceiling for the worktree lock, held by another run_checks/run_build in this worktree", worktreeRunTimeout)
+	}
+	defer mu.Unlock()
+	MarkRunStarted(ctx)
 
 	cmd := exec.CommandContext(runCtx, name, args...)
 	cmd.Dir = dir

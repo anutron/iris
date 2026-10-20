@@ -42,8 +42,8 @@ func decodeRunning(t *testing.T, resp Response) map[string]any {
 	if err := json.Unmarshal([]byte(resp.Content[0].Text), &m); err != nil {
 		t.Fatalf("decode: %v\n%s", err, resp.Content[0].Text)
 	}
-	if m["status"] != "running" {
-		t.Fatalf("expected status running, got %v", m)
+	if m["status"] != "running" && m["status"] != "queued" {
+		t.Fatalf("expected status running or queued, got %v", m)
 	}
 	return m
 }
@@ -239,5 +239,51 @@ func TestRunResultHandler_ReturnsFinishedResponse(t *testing.T) {
 	got := NewRunResultHandler(reg).Handle(context.Background(), json.RawMessage(`{"run_id":"`+run.ID+`","wait_seconds":5}`))
 	if got.IsError || got.Content[0].Text != `{"command":"make build","exit_code":0}` {
 		t.Fatalf("got %+v", got)
+	}
+}
+
+// A run waiting for the worktree lock reports "queued", then "running".
+func TestRunRegistry_QueuedUntilStarted(t *testing.T) {
+	t.Parallel()
+	reg := NewRunRegistry()
+	start, release := make(chan struct{}), make(chan struct{})
+	run := reg.Start(context.Background(), "iris_run_checks", "T", "test", func(ctx context.Context) Response {
+		<-start
+		verbs.MarkRunStarted(ctx)
+		<-release
+		return TextResponse("{}")
+	})
+	if got := decodeRunning(t, reg.Respond(context.Background(), run, 0)); got["status"] != "queued" {
+		t.Fatalf("before the lock: status %v, want queued", got["status"])
+	}
+	close(start)
+	deadline := time.Now().Add(5 * time.Second)
+	for !run.started.Load() && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if got := decodeRunning(t, reg.Respond(context.Background(), run, 0)); got["status"] != "running" {
+		t.Fatalf("after the lock: status %v, want running", got["status"])
+	}
+	close(release)
+}
+
+// A handle returned before the run resolves (wait_seconds=0) still names
+// the repo the handler resolved.
+func TestRunRegistry_ImmediateHandleNamesSeededRepo(t *testing.T) {
+	t.Parallel()
+	reg := NewRunRegistry()
+	release := make(chan struct{})
+	startCtx, _ := verbs.WithRepoRecorder(context.Background())
+	verbs.RecordRepo(startCtx, testRef)
+	run := reg.Start(startCtx, "iris_run_checks", "T", "test", func(context.Context) Response {
+		<-release
+		return TextResponse("{}")
+	})
+	defer close(release)
+
+	pollCtx, rec := verbs.WithRepoRecorder(context.Background())
+	decodeRunning(t, reg.Respond(pollCtx, reg.Get(run.ID), 0))
+	if ref := rec.Ref(); ref == nil || *ref != *testRef {
+		t.Fatalf("immediate handle not attributed: %+v", ref)
 	}
 }

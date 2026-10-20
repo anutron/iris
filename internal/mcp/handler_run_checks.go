@@ -40,6 +40,11 @@ func NewRunChecksHandler(client *argus.Client, runs *RunRegistry) Handler {
 			return ErrorResponse("iris:run_checks: check is required")
 		}
 
+		// Resolve before detaching: bad task_ids fail fast, and the repo is
+		// recorded so even an immediate handle names it.
+		if _, err := verbs.Resolve(ctx, client, in.TaskID); err != nil {
+			return ErrorResponse(fmt.Sprintf("iris:run_checks: %v", err))
+		}
 		run := runs.Start(ctx, "iris_run_checks", in.TaskID, in.Check, func(ctx context.Context) Response {
 			return runChecks(ctx, client, in)
 		})

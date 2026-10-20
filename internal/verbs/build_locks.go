@@ -1,6 +1,10 @@
 package verbs
 
-import "sync"
+import (
+	"context"
+	"sync"
+	"time"
+)
 
 // buildLocks holds one *sync.Mutex per WORKTREE absolute path. Builds
 // write to the worktree (target/, node_modules/, dist/, etc.), so the
@@ -12,11 +16,19 @@ import "sync"
 // serialize cleanly.
 var buildLocks sync.Map // map[string]*sync.Mutex
 
-// lockWorktree returns the (creating if needed) per-worktree mutex,
-// already held. The caller MUST defer Unlock.
-func lockWorktree(path string) *sync.Mutex {
+// lockWorktreeCtx acquires the (creating if needed) per-worktree mutex,
+// giving up when ctx is done. sync.Mutex has no timed Lock, so it polls
+// TryLock; contention here is a second run in the same worktree, so a
+// short poll interval costs nothing. The caller MUST Unlock on success.
+func lockWorktreeCtx(ctx context.Context, path string) (*sync.Mutex, error) {
 	m, _ := buildLocks.LoadOrStore(path, &sync.Mutex{})
 	mu := m.(*sync.Mutex)
-	mu.Lock()
-	return mu
+	for !mu.TryLock() {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(25 * time.Millisecond):
+		}
+	}
+	return mu, nil
 }

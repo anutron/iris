@@ -70,6 +70,7 @@ func GHPRMerge(ctx context.Context, client *argus.Client, taskID string, opts GH
 	}
 
 	args := []string{"pr", "merge", fmt.Sprintf("%d", opts.PRNumber), "--" + opts.Strategy}
+	args = append(args, repoArgs(id)...)
 
 	cmd := exec.CommandContext(ctx, "gh", args...)
 	cmd.Dir = resolved.SourceRepo

@@ -9,6 +9,7 @@ import (
 // fakeGHPRIdentity records every gh call and answers `gh pr view` with a PR
 // under acme/video-gen titled "Add thumbnails"; merge and close succeed.
 const fakeGHPRIdentity = fakeGHRecordCalls + `
+echo "A new release of gh is available: 2.80.0" >&2
 case "$2" in
   view)  printf '%s' '{"url":"https://github.com/acme/video-gen/pull/11","title":"Add thumbnails"}'; exit 0 ;;
   merge) exit 0 ;;
@@ -56,7 +57,7 @@ func TestGHPRMerge_MatchingExpectedRepoMerges(t *testing.T) {
 	if !result.Merged {
 		t.Fatal("expected merged=true")
 	}
-	if !strings.Contains(readFakeGHCalls(t, dir), "CALL pr merge 11 --squash") {
+	if !strings.Contains(readFakeGHCalls(t, dir), "CALL pr merge 11 --squash --repo acme/video-gen") {
 		t.Fatalf("merge not invoked:\n%s", readFakeGHCalls(t, dir))
 	}
 }
@@ -165,5 +166,31 @@ func TestGHPRClose_LookupFailureWithoutGuardStillCloses(t *testing.T) {
 	}
 	if !result.Closed || result.PRURL != "" || !strings.Contains(readFakeGHCalls(t, dir), "pr close") {
 		t.Fatalf("close should proceed with empty identity: %+v", result)
+	}
+}
+
+func TestGHPRClose_BindsCloseToVerifiedRepo(t *testing.T) {
+	src, wt, _ := setupRepoWithBareAndWorktree(t, "ghclose-bind")
+	client := stubArgus(t, src, wt)
+	dir := writeFakeGH(t, fakeGHPRIdentity)
+
+	if _, err := GHPRClose(context.Background(), client, "task", GHPRCloseOptions{PRNumber: 11, ExpectedRepo: "acme/video-gen"}); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	if !strings.Contains(readFakeGHCalls(t, dir), "CALL pr close 11 --repo acme/video-gen") {
+		t.Fatalf("close not bound to verified repo:\n%s", readFakeGHCalls(t, dir))
+	}
+}
+
+func TestGHPRMerge_LookupFailureLeavesRepoUnbound(t *testing.T) {
+	src, wt, _ := setupRepoWithBareAndWorktree(t, "ghmerge-unbound")
+	client := stubArgus(t, src, wt)
+	dir := writeFakeGH(t, fakeGHViewFails)
+
+	if _, err := GHPRMerge(context.Background(), client, "task", GHPRMergeOptions{PRNumber: 11, Strategy: "squash"}); err != nil {
+		t.Fatalf("merge: %v", err)
+	}
+	if strings.Contains(readFakeGHCalls(t, dir), "--repo") {
+		t.Fatalf("no verified repo, so gh must resolve as before:\n%s", readFakeGHCalls(t, dir))
 	}
 }
