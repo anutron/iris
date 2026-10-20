@@ -83,7 +83,6 @@ func RunChecks(ctx context.Context, client *argus.Client, taskID string, opts Ru
 
 	display := "script/iris-check " + opts.Check
 
-
 	// Load .iris.local.toml's [secrets] block (merged over .iris.toml) for
 	// the canonical source repo — never the worktree, since a secret source
 	// descriptor is per-developer, not per-checkout. This is fail-open by
