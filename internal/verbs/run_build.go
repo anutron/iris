@@ -2,11 +2,9 @@ package verbs
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -133,25 +131,15 @@ func RunBuild(ctx context.Context, client *argus.Client, taskID string, opts Run
 	mu := lockWorktree(resolved.WorktreePath)
 	defer mu.Unlock()
 
-	cmd := exec.CommandContext(ctx, cmdName, cmdArgs...)
-	cmd.Dir = resolved.WorktreePath
-	// cmd.Env is nil by default (Go inherits the whole process
-	// environment); seed it explicitly from os.Environ() so appending the
-	// resolved secrets doesn't silently drop that inheritance.
-	cmd.Env = append(os.Environ(), secretEnv...)
-	out, runErr := cmd.CombinedOutput()
-
-	exitCode := 0
+	// Seed the env explicitly from os.Environ() so appending the resolved
+	// secrets doesn't silently drop the inherited environment.
+	env := append(os.Environ(), secretEnv...)
+	out, exitCode, runErr := runWorktreeCommand(ctx, resolved.WorktreePath, env, cmdName, cmdArgs...)
 	if runErr != nil {
-		var exitErr *exec.ExitError
-		if errors.As(runErr, &exitErr) {
-			exitCode = exitErr.ExitCode()
-		} else {
-			// The process failed to start (binary missing, fork error,
-			// context cancelled before exec). No structured result.
-			return nil, fmt.Errorf("run build %s in %s: %w; output:\n%s",
-				display, resolved.WorktreePath, runErr, strings.TrimSpace(string(out)))
-		}
+		// The process failed to start or hit iris's ceiling. No
+		// structured result.
+		return nil, fmt.Errorf("run build %s in %s: %w; output:\n%s",
+			display, resolved.WorktreePath, runErr, strings.TrimSpace(string(out)))
 	}
 
 	result := &RunBuildResult{
@@ -161,7 +149,7 @@ func RunBuild(ctx context.Context, client *argus.Client, taskID string, opts Run
 	}
 
 	if exitCode != 0 {
-		return result, &BuildExitError{Result: result, Err: runErr}
+		return result, &BuildExitError{Result: result, Err: fmt.Errorf("exit status %d", exitCode)}
 	}
 	return result, nil
 }

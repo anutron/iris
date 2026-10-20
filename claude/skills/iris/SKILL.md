@@ -72,6 +72,8 @@ All tools are registered as `mcp__argus__<name>`. Names below omit the prefix. U
 
 - **`iris_run_build`** — run the project's build in the worktree (`script/iris-build` if present, else the Makefile `build` target). Returns command, exit code, and combined output; non-zero exit still carries the output so you see compile errors. Use to gate a PR/merge on a clean build.
 - **`iris_run_checks`** — run a repo-defined quality check in the worktree via `script/iris-check <check>` (e.g. `check="lint"`, `"test"`, `"security"`). Script-only, no Makefile fallback; errors naming `script/iris-check` if it's absent or non-executable. Returns command, exit code, and combined output; non-zero exit still carries the full output, so you read the real rubocop/rspec/brakeman text host-side instead of waiting on CI. `check` is a single token passed as an argv element to the repo-controlled script, not a shell string.
+- **Long checks and builds return a handle, not a timeout.** Argus caps every iris call at 30 s, so `iris_run_checks` and `iris_run_build` run detached (30-minute ceiling) and wait at most `wait_seconds` (default 20, max 25). If the run finishes in time you get the result directly. Otherwise you get `{run_id, status: "running"}`.
+- **`iris_run_result(run_id)`** — waits up to 25 s more and returns the run's final result (the same response the original call would have given), or the running handle again. Keep calling until it returns. Calling `iris_run_checks` again with the same check while one is running joins it rather than starting a second run. Results are in memory for an hour; an unknown `run_id` means iris restarted, so re-run.
 
 ### Self-management (rarely what a task agent wants)
 

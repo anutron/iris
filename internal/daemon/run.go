@@ -78,8 +78,12 @@ func Start(ctx context.Context, cfg *config.Config, log *slog.Logger) (*Daemon, 
 	mcpSrv.RegisterHandler("iris_gh_pr_ready", mcp.NewGHPRReadyHandler(client))
 	mcpSrv.RegisterHandler("iris_gh_pr_comment", mcp.NewGHPRCommentHandler(client))
 	mcpSrv.RegisterHandler("iris_gh_pr_close", mcp.NewGHPRCloseHandler(client))
-	mcpSrv.RegisterHandler("iris_run_build", mcp.NewRunBuildHandler(client))
-	mcpSrv.RegisterHandler("iris_run_checks", mcp.NewRunChecksHandler(client))
+	// Worktree runs outlive the 30s MCP callback: run_build/run_checks hand
+	// back a run_id that iris_run_result polls.
+	runs := mcp.NewRunRegistry()
+	mcpSrv.RegisterHandler("iris_run_build", mcp.NewRunBuildHandler(client, runs))
+	mcpSrv.RegisterHandler("iris_run_checks", mcp.NewRunChecksHandler(client, runs))
+	mcpSrv.RegisterHandler("iris_run_result", mcp.NewRunResultHandler(runs))
 	mcpSrv.RegisterHandler("iris_set_dogfood", mcp.NewSetDogfoodHandler(client))
 	mcpSrv.RegisterHandler("iris_set_local_config", mcp.NewSetLocalConfigHandler(client))
 	mcpSrv.RegisterHandler("iris_ship_feature", mcp.NewShipFeatureHandler(client))
@@ -318,26 +322,40 @@ func toolDefinitions() []mcp.ToolDefinition {
 		},
 		{
 			Name:        "iris_run_build",
-			Description: "Run the project's build for an argus task in its worktree. Looks for an executable `script/iris-build` first, then `Makefile` (build target). Returns command, exit code, and combined output. On non-zero exit the response is an error that still carries the captured output so callers see compile errors.",
+			Description: "Run the project's build for an argus task in its worktree. Looks for an executable `script/iris-build` first, then `Makefile` (build target). Returns command, exit code, and combined output. On non-zero exit the response is an error that still carries the captured output so callers see compile errors. Runs host-side, detached from this call, under a 30-minute ceiling. Waits up to `wait_seconds` (default 20, max 25): a run that finishes in time returns the result directly; one still going returns `{run_id, status: \"running\"}`, so poll `iris_run_result(run_id)` until it returns the result. A repeat call for the same task and argument while one is running joins it (same run_id).",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"task_id": map[string]any{"type": "string", "description": "Argus task ID. Iris resolves the worktree from this."},
-					"target":  map[string]any{"type": "string", "description": "(optional) Build target/argument passed verbatim to the script or as `make build <target>`."},
+					"task_id":      map[string]any{"type": "string", "description": "Argus task ID. Iris resolves the worktree from this."},
+					"target":       map[string]any{"type": "string", "description": "(optional) Build target/argument passed verbatim to the script or as `make build <target>`."},
+					"wait_seconds": map[string]any{"type": "integer", "minimum": 0, "maximum": 25, "default": 20, "description": "(optional) Seconds to wait for the run before returning a run_id handle. Clamped to 0-25 to stay under the 30s MCP call limit."},
 				},
 				"required": []string{"task_id"},
 			},
 		},
 		{
 			Name:        "iris_run_checks",
-			Description: "Run a repo-defined quality check for an argus task in its worktree, host-side. Runs the executable `script/iris-check <check>` (e.g. check=\"lint\", \"test\", \"security\") and returns command, exit code, and combined output. Script-only — there is no Makefile fallback; if `script/iris-check` is absent or non-executable the call errors naming the expected path. On non-zero exit the response is an error that still carries the full check output (the real rubocop/rspec/brakeman text), so sandboxed agents see check failures verbatim without reading CI logs. `check` is a single token passed as an argv element to the repo-controlled script, not a shell string.",
+			Description: "Run a repo-defined quality check for an argus task in its worktree, host-side. Runs the executable `script/iris-check <check>` (e.g. check=\"lint\", \"test\", \"security\") and returns command, exit code, and combined output. Script-only — there is no Makefile fallback; if `script/iris-check` is absent or non-executable the call errors naming the expected path. On non-zero exit the response is an error that still carries the full check output (the real rubocop/rspec/brakeman text), so sandboxed agents see check failures verbatim without reading CI logs. `check` is a single token passed as an argv element to the repo-controlled script, not a shell string. Runs host-side, detached from this call, under a 30-minute ceiling. Waits up to `wait_seconds` (default 20, max 25): a run that finishes in time returns the result directly; one still going returns `{run_id, status: \"running\"}`, so poll `iris_run_result(run_id)` until it returns the result. A repeat call for the same task and argument while one is running joins it (same run_id).",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"task_id": map[string]any{"type": "string", "description": "Argus task ID. Iris resolves the worktree from this."},
-					"check":   map[string]any{"type": "string", "description": "Check to run, passed as the first positional argument to `script/iris-check` (e.g. \"lint\", \"test\", \"security\"). Required and non-empty."},
+					"task_id":      map[string]any{"type": "string", "description": "Argus task ID. Iris resolves the worktree from this."},
+					"check":        map[string]any{"type": "string", "description": "Check to run, passed as the first positional argument to `script/iris-check` (e.g. \"lint\", \"test\", \"security\"). Required and non-empty."},
+					"wait_seconds": map[string]any{"type": "integer", "minimum": 0, "maximum": 25, "default": 20, "description": "(optional) Seconds to wait for the run before returning a run_id handle. Clamped to 0-25 to stay under the 30s MCP call limit."},
 				},
 				"required": []string{"task_id", "check"},
+			},
+		},
+		{
+			Name:        "iris_run_result",
+			Description: "Get the result of an `iris_run_checks` or `iris_run_build` run that returned `status: \"running\"`. Waits up to `wait_seconds` (default 20, max 25). A finished run returns exactly what the original tool would have returned (an error response, carrying the full output, for a non-zero exit); a run still going returns the same running handle, so call again. Runs are kept in memory for an hour after they finish; an unknown run_id means iris restarted or the run expired, so re-run it.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"run_id":       map[string]any{"type": "string", "description": "run_id from a running iris_run_checks / iris_run_build response."},
+					"wait_seconds": map[string]any{"type": "integer", "minimum": 0, "maximum": 25, "default": 20, "description": "(optional) Seconds to wait for the run before returning a run_id handle. Clamped to 0-25 to stay under the 30s MCP call limit."},
+				},
+				"required": []string{"run_id"},
 			},
 		},
 		{
