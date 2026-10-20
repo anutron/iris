@@ -206,7 +206,7 @@ func TestFetch_ConfiguredGitTransferTimeoutClassifiesAsTimeout(t *testing.T) {
 	client := stubArgus(t, src, wt)
 
 	marker := filepath.Join(t.TempDir(), "uploadpack-started")
-	setSlowUploadPack(t, src, marker, 3*time.Second)
+	setSlowUploadPack(t, src, marker, slowRemoteForTimeoutTests)
 
 	toml := "schema_version = 1\ngit_transfer_timeout_seconds = 1\n"
 	if err := os.WriteFile(filepath.Join(src, ".iris.toml"), []byte(toml), 0o644); err != nil {
@@ -217,15 +217,7 @@ func TestFetch_ConfiguredGitTransferTimeoutClassifiesAsTimeout(t *testing.T) {
 	_, err := Fetch(context.Background(), FetchInput{Client: client, TaskID: "task-fetch-timeout"})
 	elapsed := time.Since(start)
 
-	if err == nil {
-		t.Fatal("expected a timeout error, got nil")
-	}
-	if !IsGitTransferTimeout(err) {
-		t.Fatalf("expected IsGitTransferTimeout(err) = true, got err: %v", err)
-	}
-	if elapsed > 2500*time.Millisecond {
-		t.Fatalf("Fetch took %s; expected it to respect the configured 1s timeout, not the wrapper's 3s sleep", elapsed)
-	}
+	assertTimedOutBeforeRemote(t, err, time.Second, elapsed, marker)
 }
 
 func TestFetch_PerSourceRepoLockHeld(t *testing.T) {
