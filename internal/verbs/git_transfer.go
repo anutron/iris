@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/anutron/iris/internal/config"
+	"github.com/anutron/iris/internal/secrets"
 )
 
 // gitTransferWaitDelay bounds how long runGitTransfer's Wait() call spends
@@ -182,14 +183,27 @@ func gitTransferTimeout(sourceRepo string) time.Duration {
 // docs' recommended pattern) or, via classifyGitFailure, an auth/network/
 // other failure.
 func runGitTransfer(ctx context.Context, dir string, timeout time.Duration, args ...string) (string, error) {
+	return runGitTransferWith(ctx, dir, timeout, secrets.ResolveSource, func(cmd *exec.Cmd) ([]byte, error) { return cmd.CombinedOutput() }, args...)
+}
+
+func runGitTransferWith(ctx context.Context, dir string, timeout time.Duration, resolve tokenResolver, execute transferExecutor, args ...string) (string, error) {
 	transferCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
 	defer cancel()
 
-	full := append([]string{"-C", dir}, args...)
-	cmd := exec.CommandContext(transferCtx, "git", full...)
+	cmd, redact, err := gitTransferCommand(transferCtx, dir, args, resolve)
+	if err != nil {
+		if transferCtx.Err() == context.DeadlineExceeded {
+			op := ""
+			if len(args) > 0 {
+				op = args[0]
+			}
+			return "", &GitTransferError{Op: op, Reason: GitTransferTimeout, Timeout: timeout, Err: err}
+		}
+		return "", err
+	}
 	cmd.WaitDelay = gitTransferWaitDelay
-	rawOut, runErr := cmd.CombinedOutput()
-	out := string(rawOut)
+	rawOut, runErr := execute(cmd)
+	out := redact(string(rawOut))
 	if runErr == nil {
 		return out, nil
 	}
@@ -198,7 +212,9 @@ func runGitTransfer(ctx context.Context, dir string, timeout time.Duration, args
 	if len(args) > 0 {
 		op = args[0]
 	}
-	wrapped := fmt.Errorf("git %s: %w: %s", strings.Join(full, " "), runErr, strings.TrimSpace(out))
+	// Do not stringify exec.Cmd (which includes Env), and sanitize even an
+	// executor error before exposing it. Real exec errors contain no token.
+	wrapped := fmt.Errorf("git %s: %s: %s", strings.Join(args, " "), redact(runErr.Error()), strings.TrimSpace(out))
 
 	if transferCtx.Err() == context.DeadlineExceeded {
 		return out, &GitTransferError{Op: op, Reason: GitTransferTimeout, Timeout: timeout, Err: wrapped}

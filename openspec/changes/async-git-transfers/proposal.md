@@ -7,13 +7,14 @@ Push and fetch can continue after the caller's 30-second deadline, leaving an ag
 - Run MCP push/fetch through the shared run registry with a bounded wait and polling via `iris_run_result`.
 - Preserve inline success payloads and timeout/auth/network/other failure classification.
 - Describe restart recovery and polling in tool and agent documentation.
-- Leave unattended credential configuration for the separately approved Part B decision.
+- Add approved Part B: opt-in HTTPS GitHub authentication through the existing secrets resolver and service-account bootstrap, with credentials only in subprocess memory and fail-closed errors.
 
 ## Capabilities
 
 ### New capabilities
 
 - `iris-git-transfer-runs`: Bounded MCP responses, deduplication, polling and restart semantics for push/fetch.
+- `iris-git-auth`: Local per-repo opt-in authentication for unattended push/fetch.
 
 ### Modified capabilities
 
@@ -21,4 +22,4 @@ None. The synchronous CLI and transfer verbs retain their existing contracts.
 
 ## Impact
 
-MCP push/fetch handlers, shared run registry wiring, transfer start notification, tool descriptions, agent skill and handler tests. No credential or global git/SSH configuration changes.
+MCP push/fetch handlers, shared run registry wiring, transfer command authentication, config schema, secret-source resolution, tool descriptions, agent skill and tests. No real credential or global git/SSH configuration changes.

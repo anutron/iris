@@ -60,6 +60,7 @@ func TestFieldKind_ExpectedShared(t *testing.T) {
 // be classified as local (per-developer).
 func TestFieldKind_ExpectedLocal(t *testing.T) {
 	local := []string{
+		"git_auth_token_source",
 		"dogfood_branch",
 		"ship_ci_timeout_seconds",
 	}
@@ -125,6 +126,7 @@ func TestLocalFields_MatchesExpectedSet(t *testing.T) {
 	got := append([]string(nil), LocalFields()...)
 	want := []string{
 		"dogfood_branch",
+		"git_auth_token_source",
 		"secrets",
 		"ship_ci_timeout_seconds",
 	}

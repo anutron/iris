@@ -247,6 +247,11 @@ func validateLocalConfigValues(ctx context.Context, sourceRepo string, fields ma
 	for _, name := range names {
 		val := fields[name]
 		switch name {
+		case "git_auth_token_source":
+			s, ok := val.(string)
+			if !ok || !config.ValidGitAuthTokenSource(s) {
+				return &SetLocalConfigError{Code: "invalid_value", Field: name, Message: "expected a secret source descriptor", Hint: "use op://vault/item/field, env://NAME or keychain://service/account; empty disables token auth"}
+			}
 		case "dogfood_branch":
 			s, ok := val.(string)
 			if !ok {

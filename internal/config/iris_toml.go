@@ -67,6 +67,7 @@ const (
 // field has a valid classification so adding a new field without one
 // fails CI.
 type IrisToml struct {
+	GitAuthTokenSource        string       `toml:"git_auth_token_source" json:"git_auth_token_source,omitempty" kind:"local"`
 	SchemaVersion             int          `toml:"schema_version"                json:"schema_version"                        kind:"shared"`
 	DefaultBranch             string       `toml:"default_branch"                json:"default_branch,omitempty"              kind:"shared"`
 	DogfoodBranch             string       `toml:"dogfood_branch"                json:"dogfood_branch,omitempty"               kind:"local"`
@@ -325,6 +326,9 @@ func (c *IrisToml) Validate(isSelf bool) []ValidationError {
 
 	errs = append(errs, c.validateDogfood()...)
 	errs = append(errs, c.validateGitTransfer()...)
+	if !ValidGitAuthTokenSource(c.GitAuthTokenSource) {
+		errs = append(errs, ValidationError{Field: "git_auth_token_source", Message: "expected a secret source descriptor", Hint: "use op://vault/item/field, env://NAME or keychain://service/account; empty disables token auth"})
+	}
 	errs = append(errs, c.Build.validate()...)
 	errs = append(errs, c.Restart.validate(isSelf)...)
 	if c.PreFlight != nil {

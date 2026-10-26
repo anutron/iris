@@ -117,6 +117,28 @@ Both `iris push` and `iris fetch` run under iris's own `git_transfer_timeout_sec
 
 The MCP tools `iris_push` and `iris_fetch` wait up to `wait_seconds` (default 20, max 25), then return a non-error `{run_id, status}` handle if still in progress. Status is `queued` before acquiring the source-repo lock and `running` afterward. Poll `iris_run_result(run_id)` until it returns the existing final payload or classified error. Identical in-progress requests join the same run. Handles and results are in memory, retained for one hour after completion; after a restart an unknown handle means the outcome is unknown, so verify remote state before retrying a transfer. `running` does not imply authentication is pending.
 
+### Unattended GitHub push and fetch
+
+To opt a source repo into HTTPS token authentication, set this top-level line in its gitignored `.iris.local.toml` (before any table headers):
+
+```toml
+git_auth_token_source = "op://claude/shell-env/GH_PUSH_TOKEN"
+```
+
+This uses the existing `[secrets.op]` service-account bootstrap. That bootstrap must already be configured for the repo and available to the iris daemon; the token itself stays in 1Password. For example, a daemon with an exported service-account credential can use descriptor-only bootstrap settings:
+
+```toml
+[secrets.op]
+bootstrap_source = "env://OP_SERVICE_ACCOUNT_TOKEN"
+bootstrap_target = "OP_SERVICE_ACCOUNT_TOKEN"
+```
+
+Iris resolves the token at runtime and supplies it only to the git subprocess environment and credential helper. Push/fetch use HTTPS for the same GitHub repository as the selected named remote (`origin` by default), without changing the stored remote. Inherited credential helpers, terminal prompts and askpass prompts are disabled for these commands. Missing/rejected tokens return `[auth_failure]`; they never fall back to interactive SSH. Captured output redacts credentials. Malformed or unreadable auth config also fails closed. Empty/unset `git_auth_token_source` disables the opt-in. This applies to `iris_push`/`iris_fetch` and their CLI counterparts, not other verbs that internally invoke git.
+
+A classic PAT with `repo` and `workflow` scopes can span the different owners `anutron` and `drn`; a fine-grained token is limited to one resource owner. The tradeoff is broader repository access for a classic token ([GitHub token documentation](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens)). Keep it in the service-account-accessible 1Password item, choose an expiry, and rotate it there. Iris does not alter global git, SSH or 1Password configuration.
+
+The existing resolver caches successful resolutions for the daemon's lifetime. Restart iris after rotating the token so it resolves the new value.
+
 ## Self-management
 
 Iris can live-upgrade any daemon it is asked to manage (including itself) via four verbs that share a declarative convention.
@@ -213,6 +235,7 @@ Field taxonomy:
 | `git_transfer_timeout_seconds` | `.iris.toml` | A property of the repo/remote (size, network characteristics), not the developer — same for every developer and agent pushing/fetching. |
 | `dogfood_branch` | `.iris.local.toml` | Each developer composes onto their own branch (or opts out entirely). |
 | `ship_ci_timeout_seconds` | `.iris.local.toml` | Personal patience threshold for `ship_feature --via pr-auto`. |
+| `git_auth_token_source` | `.iris.local.toml` | Opt-in secret descriptor for unattended GitHub HTTPS push/fetch. |
 
 Migration: if your existing `.iris.toml` has `dogfood_branch` or `ship_ci_timeout_seconds`, move those lines to `.iris.local.toml` at the repo root. iris still reads them from the shared file with a warning, so nothing breaks mid-flight, but the warning goes away once they live in the local file. `setup.sh` adds `.iris.local.toml` to your `.gitignore` and offers to scaffold a starter file.
 

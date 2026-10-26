@@ -123,6 +123,13 @@ func resolve(ctx context.Context, sc config.SecretsBlock, source string) (string
 	return v, true
 }
 
+// ResolveSource resolves one descriptor using the same registry and
+// service-account bootstrap as ResolveEnv. Callers needing mandatory auth
+// can fail closed on false without logging or exposing the resolved value.
+func ResolveSource(ctx context.Context, sc config.SecretsBlock, source string) (string, bool) {
+	return resolve(ctx, sc, source)
+}
+
 // envSchemeResolve resolves an env:// (or bare-string) source against
 // iris's own process environment.
 func envSchemeResolve(name string) (string, bool) {

@@ -4,7 +4,7 @@ Git transfer verbs already detach their subprocesses, but synchronous MCP handle
 
 ## Goals / non-goals
 
-Return pollable handles for slow MCP transfers while preserving existing final responses, classification and CLI behavior. Credential changes and reliable detection of interactive prompts are outside Part A.
+Return pollable handles for slow MCP transfers while preserving existing final responses and classification. Part B adds per-repo opt-in HTTPS auth; reliable detection of interactive prompts remains excluded. No real token or host configuration is changed by implementation.
 
 ## Decisions
 
@@ -12,6 +12,8 @@ Return pollable handles for slow MCP transfers while preserving existing final r
 - Include all push options in a JSON deduplication key; exclude wait duration. Fetch has no transfer options. Notify the registry after taking the source lock, preserving queued/running semantics.
 - Preserve the registry's in-memory lifecycle. An unknown transfer outcome requires remote-state verification before retry; change unknown-run guidance to cover transfers safely.
 - Keep completed response encoding unchanged. Raising HTTP timeouts was rejected because it leaves callers waiting and does not address shorter upstream deadlines.
+- Use local scalar `git_auth_token_source` plus existing `[secrets.op]` bootstrap. Load auth settings independently of build/restart validity, including repos lacking a shared config. Malformed config fails closed. Expose a single-source wrapper around the existing resolver; do not use its fail-open bulk env API.
+- Use command-only `url.<https>.insteadOf` and `pushInsteadOf` for the effective remote's fetch/push URL so git still updates that named remote's tracking refs. Clear configured credential helpers, install a static shell helper reading a dedicated subprocess environment variable, and disable terminal/askpass prompts. Never put token values in argv or files. Redact captured output before errors or results leave the subprocess wrapper. Reject non-GitHub, embedded-credential and differing push-URL destinations in opt-in mode rather than redirecting writes.
 
 ## Risks / trade-offs
 
