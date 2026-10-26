@@ -79,6 +79,7 @@ func Push(ctx context.Context, client *argus.Client, taskID string, opts PushOpt
 
 	mu := lockSourceRepo(resolved.SourceRepo)
 	defer mu.Unlock()
+	MarkRunStarted(ctx)
 
 	// The remote must already be configured in the source repo. iris pushes to
 	// named remotes only — never to ad-hoc URLs — so resolve it up front and

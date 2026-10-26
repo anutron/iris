@@ -115,6 +115,8 @@ iris gh-pr-create <task-id> --title "..." --base-repo drn/argus
 
 Both `iris push` and `iris fetch` run under iris's own `git_transfer_timeout_seconds` deadline (default 300s, configurable in `.iris.toml`), independent of the caller's request timeout. A failure names its kind so you know what to do next: `[timeout]` means iris's own deadline fired — check `iris fetch`/`iris status` before assuming success or failure rather than blindly retrying; `[auth_failure]` / `[network_failure]` mean fix credentials/connectivity before retrying; `[other_failure]` covers everything else (e.g. non-fast-forward).
 
+The MCP tools `iris_push` and `iris_fetch` wait up to `wait_seconds` (default 20, max 25), then return a non-error `{run_id, status}` handle if still in progress. Status is `queued` before acquiring the source-repo lock and `running` afterward. Poll `iris_run_result(run_id)` until it returns the existing final payload or classified error. Identical in-progress requests join the same run. Handles and results are in memory, retained for one hour after completion; after a restart an unknown handle means the outcome is unknown, so verify remote state before retrying a transfer. `running` does not imply authentication is pending.
+
 ## Self-management
 
 Iris can live-upgrade any daemon it is asked to manage (including itself) via four verbs that share a declarative convention.

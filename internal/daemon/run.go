@@ -69,9 +69,11 @@ func Start(ctx context.Context, cfg *config.Config, log *slog.Logger) (*Daemon, 
 	}
 
 	// Register handlers for every verb iris exposes.
+	// Transfers, checks and builds share polling through iris_run_result.
+	runs := mcp.NewRunRegistry()
 	mcpSrv.RegisterHandler("iris_merge_to_master", mcp.NewMergeToMasterHandler(client))
 	mcpSrv.RegisterHandler("iris_merge_to_branch", mcp.NewMergeToBranchHandler(client))
-	mcpSrv.RegisterHandler("iris_push", mcp.NewPushHandler(client))
+	mcpSrv.RegisterHandler("iris_push", mcp.NewPushHandler(client, runs))
 	mcpSrv.RegisterHandler("iris_gh_pr_create", mcp.NewGHPRCreateHandler(client))
 	mcpSrv.RegisterHandler("iris_gh_pr_merge", mcp.NewGHPRMergeHandler(client))
 	mcpSrv.RegisterHandler("iris_gh_pr_view", mcp.NewGHPRViewHandler(client))
@@ -80,7 +82,6 @@ func Start(ctx context.Context, cfg *config.Config, log *slog.Logger) (*Daemon, 
 	mcpSrv.RegisterHandler("iris_gh_pr_close", mcp.NewGHPRCloseHandler(client))
 	// Worktree runs outlive the 30s MCP callback: run_build/run_checks hand
 	// back a run_id that iris_run_result polls.
-	runs := mcp.NewRunRegistry()
 	mcpSrv.RegisterHandler("iris_run_build", mcp.NewRunBuildHandler(client, runs))
 	mcpSrv.RegisterHandler("iris_run_checks", mcp.NewRunChecksHandler(client, runs))
 	mcpSrv.RegisterHandler("iris_run_result", mcp.NewRunResultHandler(runs))
@@ -88,7 +89,7 @@ func Start(ctx context.Context, cfg *config.Config, log *slog.Logger) (*Daemon, 
 	mcpSrv.RegisterHandler("iris_set_local_config", mcp.NewSetLocalConfigHandler(client))
 	mcpSrv.RegisterHandler("iris_ship_feature", mcp.NewShipFeatureHandler(client))
 	mcpSrv.RegisterHandler("iris_complete_task", mcp.NewCompleteTaskHandler(client))
-	mcpSrv.RegisterHandler("iris_fetch", mcp.NewFetchHandler(client))
+	mcpSrv.RegisterHandler("iris_fetch", mcp.NewFetchHandler(client, runs))
 	mcpSrv.RegisterHandler("iris_branch_delete_remote", mcp.NewBranchDeleteRemoteHandler(client))
 	mcpSrv.RegisterHandler("iris_branch_create", mcp.NewBranchCreateHandler(client))
 	mcpSrv.RegisterHandler("iris_cherry_pick", mcp.NewCherryPickHandler(client))
@@ -226,7 +227,7 @@ func toolDefinitions() []mcp.ToolDefinition {
 		},
 		{
 			Name:        "iris_push",
-			Description: "Push the argus task's branch to a remote from the canonical source repo. Resolves source repo and branch from task_id. Pushes to `origin` by default; pass `remote` to push to a different CONFIGURED remote (a name, never a URL) — e.g. to push a branch to an upstream you have write access to so its CI runs (cross-fork PRs from a fork don't run CI). Refuses to push the default branch. Returns the effective remote and remote SHA. The push runs under iris's own timeout (`git_transfer_timeout_seconds` in the source repo's `.iris.toml`, default 300s) instead of this request's timeout, so a large or far-diverged push isn't killed just because the caller stopped waiting. On failure the error is prefixed with a classification — `[timeout]` (iris's own deadline fired; check `iris_fetch`/`iris_status` before assuming success or failure), `[auth_failure]`, `[network_failure]`, or `[other_failure]` — to help decide whether to retry, wait, or fall back to a manual push.",
+			Description: "Push the task's branch from the canonical source repo to origin, or to another configured remote by name (never a URL). Refuses the default branch. Runs detached under git_transfer_timeout_seconds (.iris.toml, default 300s). Waits up to wait_seconds (default 20, max 25); completed transfers return the effective remote and remote_sha, otherwise returns {run_id, status: queued/running}. Poll iris_run_result(run_id) until it returns the final result; a handle means still in progress, not failure. Identical in-progress calls join the same run. Errors retain [timeout], [auth_failure], [network_failure], [other_failure]. After timeout or an unknown run_id, verify remote state before retrying. No pending-auth state is inferred. Use remote=upstream and a same-repo PR when upstream CI is needed.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -234,6 +235,7 @@ func toolDefinitions() []mcp.ToolDefinition {
 					"force_with_lease": map[string]any{"type": "boolean", "description": "Pass --force-with-lease to git push (default false). Safe form of --force; checks the upstream matches."},
 					"branch":           map[string]any{"type": "string", "description": "(optional) Branch to push instead of the task's resolved branch. MUST NOT be the default branch."},
 					"remote":           map[string]any{"type": "string", "description": "(optional) Push to this remote instead of `origin`. MUST be a remote already configured in the source repo (a name like `upstream`, not a URL); iris validates it exists and never adds remotes."},
+					"wait_seconds":     map[string]any{"type": "integer", "minimum": 0, "maximum": 25, "default": 20, "description": "Seconds to wait before returning a run_id for iris_run_result; clamped to 0-25."},
 				},
 				"required": []string{"task_id"},
 			},
@@ -348,11 +350,11 @@ func toolDefinitions() []mcp.ToolDefinition {
 		},
 		{
 			Name:        "iris_run_result",
-			Description: "Get the result of an `iris_run_checks` or `iris_run_build` run that returned `status: \"running\"`. Waits up to `wait_seconds` (default 20, max 25). A finished run returns exactly what the original tool would have returned (an error response, carrying the full output, for a non-zero exit); a run still going returns the same running handle, so call again. Runs are kept in memory for an hour after they finish; an unknown run_id means iris restarted or the run expired, so re-run it.",
+			Description: "Poll a run_id from iris_push, iris_fetch, iris_run_checks or iris_run_build. Waits up to wait_seconds (default 20, max 25). Finished runs return the original tool's final response, including classified transfer errors. Unfinished runs return the queued/running handle again; keep polling. Results stay in memory for an hour after completion. An unknown run_id means iris restarted or the run expired: the outcome is unknown, so verify remote state before retrying a push/fetch; re-run checks/builds as needed.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"run_id":       map[string]any{"type": "string", "description": "run_id from a running iris_run_checks / iris_run_build response."},
+					"run_id":       map[string]any{"type": "string", "description": "run_id from an iris_push / iris_fetch / iris_run_checks / iris_run_build handle."},
 					"wait_seconds": map[string]any{"type": "integer", "minimum": 0, "maximum": 25, "default": 20, "description": "(optional) Seconds to wait for the run before returning a run_id handle. Clamped to 0-25 to stay under the 30s MCP call limit."},
 				},
 				"required": []string{"run_id"},
@@ -431,11 +433,12 @@ func toolDefinitions() []mcp.ToolDefinition {
 		},
 		{
 			Name:        "iris_fetch",
-			Description: "Run `git fetch origin` in the argus task's source repo under the per-source-repo lock. Returns the list of refs whose tracking SHAs changed. The fetch runs under iris's own timeout (`git_transfer_timeout_seconds` in the source repo's `.iris.toml`, default 300s) instead of this request's timeout, so a large fetch isn't killed just because the caller stopped waiting. On failure the error is prefixed with a classification — `[timeout]` (iris's own deadline fired), `[auth_failure]`, `[network_failure]`, or `[other_failure]` — to help decide whether to retry, wait, or fall back to a manual fetch.",
+			Description: "Run git fetch origin in the task's source repo under the per-source-repo lock, detached under git_transfer_timeout_seconds (.iris.toml, default 300s). Waits up to wait_seconds (default 20, max 25); completed transfers return refs_updated, otherwise returns {run_id, status: queued/running}. Poll iris_run_result(run_id) until the final result; the handle is not failure. Identical in-progress calls join the same run. Errors retain [timeout], [auth_failure], [network_failure], [other_failure]. Unknown run_id after restart means outcome unknown: verify remote state before retrying.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"task_id": map[string]any{"type": "string", "description": "Argus task ID. Iris resolves the source repo from this."},
+					"task_id":      map[string]any{"type": "string", "description": "Argus task ID. Iris resolves the source repo from this."},
+					"wait_seconds": map[string]any{"type": "integer", "minimum": 0, "maximum": 25, "default": 20, "description": "Seconds to wait before returning a run_id for iris_run_result; clamped to 0-25."},
 				},
 				"required": []string{"task_id"},
 			},
