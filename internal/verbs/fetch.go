@@ -42,6 +42,7 @@ func Fetch(ctx context.Context, in FetchInput) (*FetchResult, error) {
 
 	mu := lockSourceRepo(resolved.SourceRepo)
 	defer mu.Unlock()
+	MarkRunStarted(ctx)
 
 	// No mutation has happened yet, so if ctx is already dead this
 	// correctly aborts before fetching — nothing has changed, nothing to

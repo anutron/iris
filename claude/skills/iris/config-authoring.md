@@ -20,6 +20,8 @@ worktree). Iris reads `.iris.toml` first, then overlays the optional
 `.iris.toml` parses successfully, and it may only carry `local`-tagged fields.
 Its absence is silent — never an error. Add `.iris.local.toml` to `.gitignore`.
 
+Git push/fetch auth is an exception to the shared-base requirement: it reads `git_auth_token_source` and `[secrets]` from a standalone local file too, so git-only repos can opt in. Malformed/unreadable auth config fails closed. See the README's unattended-auth section for the enabling line and classic-token scope tradeoff.
+
 ## Field taxonomy — which field goes in which file
 
 Every field is classified `shared` (belongs in `.iris.toml`) or `local` (belongs in
@@ -38,6 +40,7 @@ but emits a warning:
 | `git_transfer_timeout_seconds` | shared → `.iris.toml` | how long a single `push`/`fetch` git transfer runs under iris's own deadline before giving up (default 300, non-negative) |
 | `dogfood_branch` | local → `.iris.local.toml` | the branch your dogfood/ship loop resets; must differ from `default_branch` |
 | `ship_ci_timeout_seconds` | local → `.iris.local.toml` | how long `ship_feature` waits on CI (default 600, non-negative) |
+| `git_auth_token_source` | local → `.iris.local.toml` | opt-in secret descriptor for HTTPS GitHub push/fetch, e.g. `op://claude/shell-env/GH_PUSH_TOKEN`; requires existing `[secrets.op]` bootstrap for op sources; never put the credential value here |
 
 Overlay rules when the same field appears in both files:
 

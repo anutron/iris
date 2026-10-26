@@ -11,8 +11,8 @@ type runResultInput struct {
 	WaitSeconds *int   `json:"wait_seconds,omitempty"`
 }
 
-// NewRunResultHandler returns a Handler that long-polls a worktree run
-// started by iris_run_checks or iris_run_build. A finished run returns the
+// NewRunResultHandler returns a Handler that long-polls a transfer or worktree
+// run. A finished run returns the
 // response the original tool would have returned synchronously.
 func NewRunResultHandler(runs *RunRegistry) Handler {
 	return HandlerFunc(func(ctx context.Context, input json.RawMessage) Response {
@@ -28,7 +28,7 @@ func NewRunResultHandler(runs *RunRegistry) Handler {
 		run := runs.Get(in.RunID)
 		if run == nil {
 			return ErrorResponse(fmt.Sprintf(
-				"iris:run_result: unknown run_id %q. Iris keeps runs in memory for an hour after they finish, so it may have restarted or the run expired; re-run the check or build.",
+				"iris:run_result: unknown run_id %q. Iris keeps runs in memory for an hour after they finish, so it may have restarted or the run expired. The outcome is unknown: verify remote state before retrying a push or fetch; re-run a check or build as needed.",
 				in.RunID,
 			))
 		}

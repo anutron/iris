@@ -14,7 +14,7 @@ import (
 )
 
 // Argus caps every plugin callback at 30s and iris's own listener has a 30s
-// WriteTimeout, so a tool call must answer well inside that. Worktree runs
+// WriteTimeout, so a tool call must answer well inside that. Registered runs
 // wait up to MaxRunWaitSeconds, then hand back a run_id for iris_run_result.
 const (
 	DefaultRunWaitSeconds = 20
@@ -33,7 +33,7 @@ func ClampRunWait(waitSeconds *int) time.Duration {
 	return time.Duration(s) * time.Second
 }
 
-// Run is one in-memory worktree run (iris_run_checks / iris_run_build).
+// Run is one in-memory transfer, check or build.
 type Run struct {
 	ID        string
 	Tool      string
@@ -43,7 +43,7 @@ type Run struct {
 
 	key     string
 	rec     *verbs.RepoRecorder
-	started atomic.Bool // holds the worktree lock and is executing
+	started atomic.Bool // holds its operation's lock and is executing
 	done    chan struct{}
 
 	// Set under RunRegistry.mu before done is closed.
@@ -51,7 +51,7 @@ type Run struct {
 	finishedAt time.Time
 }
 
-// RunRegistry tracks worktree runs so a run can outlive the MCP call that
+// RunRegistry tracks runs so a run can outlive the MCP call that
 // started it. Runs live in memory only: a daemon restart forgets them.
 type RunRegistry struct {
 	mu        sync.Mutex
@@ -73,7 +73,7 @@ func NewRunRegistry() *RunRegistry {
 
 // Start launches fn as a run detached from ctx's cancellation, or joins
 // the in-progress run for the same (tool, taskID, arg) so a retry doesn't
-// queue a second run behind the worktree lock. fn's response is stored
+// queue a second run behind the operation's lock. fn's response is stored
 // verbatim and served to every caller of that run. A repo already recorded
 // in ctx (the handler resolves before starting) seeds the run's recorder,
 // so even a handle returned before fn resolves names the repo.
@@ -162,8 +162,7 @@ func (run *Run) wait(ctx context.Context, d time.Duration) bool {
 }
 
 // runningResponse is the handle for an unfinished run. status is "queued"
-// while the run waits for the worktree lock (another run_checks/run_build
-// holds it) and "running" once its script is executing.
+// while the run waits for its lock and "running" once it is executing.
 func (r *RunRegistry) runningResponse(run *Run) Response {
 	status := "queued"
 	if run.started.Load() {
