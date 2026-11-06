@@ -40,7 +40,7 @@ A real single-file or few-file run passes one to a handful of paths; 64 leaves r
 
 ### `args` join the duplicate-run key
 
-`runs.Start` builds the key as `tool NUL task_id NUL arg`. For `run_checks` the `arg` becomes `check NUL arg1 NUL arg2 ...`. Because NUL is rejected in `check`-adjacent args, the encoding is injective: `check="a"` with `args=["b"]` can't collide with `check="a b"`. Order is significant, so `[a, b]` and `[b, a]` are different runs. The handle's `Arg` display field stays the human-readable `check` plus args joined by spaces.
+`runs.Start` builds the key as `tool NUL task_id NUL arg`. For `run_checks` the `arg` becomes `check NUL arg1 NUL arg2 ...`. Because NUL is rejected in `check`-adjacent args, the encoding is injective: `check="a"` with `args=["b"]` can't collide with `check="a b"`. Order is significant, so `[a, b]` and `[b, a]` are different runs. The key is internal; the handle's fields are unchanged.
 
 ### Process group with a SIGKILL cancel
 

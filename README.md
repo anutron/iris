@@ -16,7 +16,7 @@ Read [`SKETCH.md`](./SKETCH.md) for the full design context. In-flight work live
 
 - Not a remote shell. No generic command-passthrough verb. Ever.
 - Not a worktree-cleanup daemon. Argus owns lifecycle; iris performs the privileged ops cleanup needs.
-- Not a CI runner. `iris:run_build` and `iris:run_checks` invoke a single repo-defined local script on demand (`script/iris-build`, `script/iris-check <check>`) in the task's worktree on the host. They let an agent build or run tests/lint without leaving the sandbox — but there are no triggers, no matrix, no parallelism, and no merge gating. They are a convenience, not a substitute for GitHub Actions; CI remains authoritative.
+- Not a CI runner. `iris:run_build` and `iris:run_checks` invoke a single repo-defined local script on demand (`script/iris-build`, `script/iris-check <check> [args...]`) in the task's worktree on the host. They let an agent build or run tests/lint without leaving the sandbox — but there are no triggers, no matrix, no parallelism, and no merge gating. They are a convenience, not a substitute for GitHub Actions; CI remains authoritative.
 - Not a credential manager. Reuses `~/.ssh`, `~/.gitconfig`, `gh auth` as-is.
 
 ## Install
@@ -74,7 +74,7 @@ iris gh-pr-ready <task-id> -p N    Mark a draft PR as ready for review via gh CL
 iris gh-pr-comment <task-id> -p N --body B   Post a comment to a GitHub PR via gh CLI.
 iris gh-pr-close <task-id> -p N    Close a GitHub PR without merging (--delete-branch optional).
 iris run-build <task-id>           Run the worktree's build (script/iris-build or make build [target]).
-iris run-checks <task-id> <check>  Run a repo-defined check in the worktree (script/iris-check <check>; script-only).
+iris run-checks <task-id> <check> [--arg <path>]...  Run a repo-defined check in the worktree (script/iris-check <check> [args...]; script-only).
 iris complete-task <task-id>       Composite ship-it: merge + push default + delete remote branch + mark complete + archive.
 iris fetch <task-id>               Run `git fetch origin` in the source repo; returns refs whose tracking SHAs changed. Same failure classification as `push`.
 iris branch-delete-remote <task-id> --branch <name>

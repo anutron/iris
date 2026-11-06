@@ -15,8 +15,9 @@ import (
 )
 
 func newRunChecksCmd() *cobra.Command {
+	var checkArgs []string
 	cmd := &cobra.Command{
-		Use:   "run-checks <task-id> <check>",
+		Use:   "run-checks <task-id> <check> [--arg <path>]...",
 		Short: "Run a repo-defined check for an argus task (direct host invocation)",
 		Long: `Run iris:run_checks directly against the host shell. Same Go function the MCP
 handler calls; bypasses argus + MCP. Runs the repo's check script:
@@ -24,7 +25,11 @@ handler calls; bypasses argus + MCP. Runs the repo's check script:
 
 Unlike run-build there is no Makefile fallback — checks are script-only. If
 script/iris-check is absent or non-executable, this errors with an actionable
-message. The check runs in the worktree, not the source repo.`,
+message. The check runs in the worktree, not the source repo.
+
+Repeat --arg to append test paths after the check as separate argv entries
+(script/iris-check <check> <arg>...). No shell is involved. An arg may not
+start with "-", contain NUL, or be empty; at most 64 args of 512 bytes each.`,
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			taskID := args[0]
@@ -45,7 +50,7 @@ message. The check runs in the worktree, not the source repo.`,
 			}
 			client := argus.New(fmt.Sprintf("http://127.0.0.1:%d", apiPort), token)
 
-			result, err := verbs.RunChecks(cmd.Context(), client, taskID, verbs.RunChecksOptions{Check: check})
+			result, err := verbs.RunChecks(cmd.Context(), client, taskID, verbs.RunChecksOptions{Check: check, Args: checkArgs})
 			if result != nil {
 				// Even on non-zero exit, print the structured result so the
 				// caller sees the check output.
@@ -64,5 +69,6 @@ message. The check runs in the worktree, not the source repo.`,
 			return nil
 		},
 	}
+	cmd.Flags().StringArrayVar(&checkArgs, "arg", nil, "extra argument appended after the check (repeatable), e.g. a test file path")
 	return cmd
 }
