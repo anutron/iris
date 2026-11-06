@@ -20,6 +20,43 @@ type RunChecksOptions struct {
 	// Required and non-empty — it is a single token handed to a
 	// repo-controlled script, NOT a shell string.
 	Check string
+
+	// Args are appended after Check as separate argv entries (typically test
+	// paths). They are validated by ValidateCheckArgs and never reach a
+	// shell.
+	Args []string
+}
+
+const (
+	// MaxCheckArgs caps len(RunChecksOptions.Args). Real runs pass one to a
+	// handful of paths; 64 leaves room for a CI-style shard.
+	MaxCheckArgs = 64
+	// MaxCheckArgBytes caps each arg's length, comfortably above any
+	// repo-relative test path and below PATH_MAX.
+	MaxCheckArgBytes = 512
+)
+
+// ValidateCheckArgs rejects args that are unsafe or malformed before
+// anything runs: more than MaxCheckArgs entries; any entry that is empty,
+// longer than MaxCheckArgBytes, contains a NUL byte, or starts with `-`
+// (it would be parsed as an option by rspec/jest rather than a path).
+func ValidateCheckArgs(args []string) error {
+	if len(args) > MaxCheckArgs {
+		return fmt.Errorf("args: at most %d args allowed, got %d", MaxCheckArgs, len(args))
+	}
+	for i, a := range args {
+		switch {
+		case a == "":
+			return fmt.Errorf("args[%d]: an arg may not be empty", i)
+		case len(a) > MaxCheckArgBytes:
+			return fmt.Errorf("args[%d]: an arg may be at most %d bytes, got %d", i, MaxCheckArgBytes, len(a))
+		case strings.ContainsRune(a, 0):
+			return fmt.Errorf("args[%d]: an arg may not contain a NUL byte", i)
+		case a[0] == '-':
+			return fmt.Errorf("args[%d]: an arg may not start with `-` (got %q); pass a path like ./%s", i, a, a)
+		}
+	}
+	return nil
 }
 
 // RunChecksResult is the structured success payload. Populated even when
@@ -67,6 +104,9 @@ func RunChecks(ctx context.Context, client *argus.Client, taskID string, opts Ru
 	if opts.Check == "" {
 		return nil, fmt.Errorf("check is required and must be non-empty")
 	}
+	if err := ValidateCheckArgs(opts.Args); err != nil {
+		return nil, err
+	}
 
 	resolved, err := Resolve(ctx, client, taskID)
 	if err != nil {
@@ -81,7 +121,8 @@ func RunChecks(ctx context.Context, client *argus.Client, taskID string, opts Ru
 		)
 	}
 
-	display := "script/iris-check " + opts.Check
+	argv := append([]string{opts.Check}, opts.Args...)
+	display := "script/iris-check " + strings.Join(argv, " ")
 
 	// Load .iris.local.toml's [secrets] block (merged over .iris.toml) for
 	// the canonical source repo — never the worktree, since a secret source
@@ -114,7 +155,7 @@ func RunChecks(ctx context.Context, client *argus.Client, taskID string, opts Ru
 	}
 
 	env := append(os.Environ(), secrets.ResolveEnv(ctx, secretsBlock)...)
-	out, exitCode, runErr := runWorktreeCommand(ctx, resolved.WorktreePath, env, scriptPath, opts.Check)
+	out, exitCode, runErr := runWorktreeCommand(ctx, resolved.WorktreePath, env, scriptPath, argv...)
 	if runErr != nil {
 		// The process failed to start or hit iris's ceiling. No
 		// structured result.

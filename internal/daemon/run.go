@@ -337,12 +337,18 @@ func toolDefinitions() []mcp.ToolDefinition {
 		},
 		{
 			Name:        "iris_run_checks",
-			Description: "Run a repo-defined quality check for an argus task in its worktree, host-side. Runs the executable `script/iris-check <check>` (e.g. check=\"lint\", \"test\", \"security\") and returns command, exit code, and combined output. Script-only — there is no Makefile fallback; if `script/iris-check` is absent or non-executable the call errors naming the expected path. On non-zero exit the response is an error that still carries the full check output (the real rubocop/rspec/brakeman text), so sandboxed agents see check failures verbatim without reading CI logs. `check` is a single token passed as an argv element to the repo-controlled script, not a shell string. Runs host-side, detached from this call, under a 30-minute ceiling. Waits up to `wait_seconds` (default 20, max 25): a run that finishes in time returns the result directly; one still going returns `{run_id, status: \"running\"}`, so poll `iris_run_result(run_id)` until it returns the result. A repeat call for the same task and argument while one is running joins it (same run_id).",
+			Description: "Run a repo-defined quality check for an argus task in its worktree, host-side. Runs the executable `script/iris-check <check>` (e.g. check=\"lint\", \"test\", \"security\") and returns command, exit code, and combined output. Script-only — there is no Makefile fallback; if `script/iris-check` is absent or non-executable the call errors naming the expected path. On non-zero exit the response is an error that still carries the full check output (the real rubocop/rspec/brakeman text), so sandboxed agents see check failures verbatim without reading CI logs. `check` is a single token passed as an argv element to the repo-controlled script, not a shell string; optional `args` (e.g. test file paths) follow it as separate argv entries, so `script/iris-check <check> [args...]` can run a single spec or test file. Runs host-side, detached from this call, under a 30-minute ceiling; at the ceiling the script's whole process group is SIGKILLed, so no test runner or worker is left behind. Waits up to `wait_seconds` (default 20, max 25): a run that finishes in time returns the result directly; one still going returns `{run_id, status: \"running\"}`, so poll `iris_run_result(run_id)` until it returns the result. A repeat call for the same task, check and args while one is running joins it (same run_id).",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"task_id":      map[string]any{"type": "string", "description": "Argus task ID. Iris resolves the worktree from this."},
-					"check":        map[string]any{"type": "string", "description": "Check to run, passed as the first positional argument to `script/iris-check` (e.g. \"lint\", \"test\", \"security\"). Required and non-empty."},
+					"check":       map[string]any{"type": "string", "description": "Check to run, passed as the first positional argument to `script/iris-check` (e.g. \"lint\", \"test\", \"security\"). Required and non-empty."},
+					"args": map[string]any{
+						"type":        "array",
+						"items":       map[string]any{"type": "string", "minLength": 1, "maxLength": 512},
+						"maxItems":    64,
+						"description": "(optional) Extra arguments appended after `check` as separate argv entries, typically test paths (e.g. [\"spec/models/user_spec.rb\"]). No shell is involved. Rejected before anything runs: an arg that starts with `-`, contains a NUL byte or is empty, more than 64 args, or an arg over 512 bytes. The same check with different args is a different run.",
+					},
 					"wait_seconds": map[string]any{"type": "integer", "minimum": 0, "maximum": 25, "default": 20, "description": "(optional) Seconds to wait for the run before returning a run_id handle. Clamped to 0-25 to stay under the 30s MCP call limit."},
 				},
 				"required": []string{"task_id", "check"},

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/anutron/iris/internal/argus"
 	"github.com/anutron/iris/internal/verbs"
@@ -12,8 +13,20 @@ import (
 
 type runChecksInput struct {
 	TaskID      string `json:"task_id"`
-	Check       string `json:"check"`
-	WaitSeconds *int   `json:"wait_seconds,omitempty"`
+	Check       string   `json:"check"`
+	Args        []string `json:"args,omitempty"`
+	WaitSeconds *int     `json:"wait_seconds,omitempty"`
+}
+
+// runChecksKey is the duplicate-run key argument: the check plus its args,
+// NUL-joined. Args can't contain NUL (ValidateCheckArgs), so the encoding is
+// injective: check "a" with args ["b"] never aliases check "a b". Order is
+// significant.
+func runChecksKey(check string, args []string) string {
+	if len(args) == 0 {
+		return check
+	}
+	return check + "\x00" + strings.Join(args, "\x00")
 }
 
 // NewRunChecksHandler returns a Handler that decodes the envelope input
@@ -39,13 +52,18 @@ func NewRunChecksHandler(client *argus.Client, runs *RunRegistry) Handler {
 		if in.Check == "" {
 			return ErrorResponse("iris:run_checks: check is required")
 		}
+		// Reject bad args before resolving or registering a run, so a bad
+		// call fails now instead of returning a handle that later fails.
+		if err := verbs.ValidateCheckArgs(in.Args); err != nil {
+			return ErrorResponse(fmt.Sprintf("iris:run_checks: %v", err))
+		}
 
 		// Resolve before detaching: bad task_ids fail fast, and the repo is
 		// recorded so even an immediate handle names it.
 		if _, err := verbs.Resolve(ctx, client, in.TaskID); err != nil {
 			return ErrorResponse(fmt.Sprintf("iris:run_checks: %v", err))
 		}
-		run := runs.Start(ctx, "iris_run_checks", in.TaskID, in.Check, func(ctx context.Context) Response {
+		run := runs.Start(ctx, "iris_run_checks", in.TaskID, runChecksKey(in.Check, in.Args), func(ctx context.Context) Response {
 			return runChecks(ctx, client, in)
 		})
 		return runs.Respond(ctx, run, ClampRunWait(in.WaitSeconds))
@@ -53,7 +71,7 @@ func NewRunChecksHandler(client *argus.Client, runs *RunRegistry) Handler {
 }
 
 func runChecks(ctx context.Context, client *argus.Client, in runChecksInput) Response {
-	result, err := verbs.RunChecks(ctx, client, in.TaskID, verbs.RunChecksOptions{Check: in.Check})
+	result, err := verbs.RunChecks(ctx, client, in.TaskID, verbs.RunChecksOptions{Check: in.Check, Args: in.Args})
 	if err != nil {
 		// If the check ran and exited non-zero, surface ExitCode and
 		// Output in the error message so the agent sees the check

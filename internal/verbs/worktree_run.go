@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"syscall"
 	"time"
 )
 
@@ -60,6 +61,18 @@ func runWorktreeCommand(ctx context.Context, dir string, env []string, name stri
 	cmd.Dir = dir
 	cmd.Env = env
 	cmd.WaitDelay = worktreeRunWaitDelay
+	// The script leads its own process group, and the ceiling kills the whole
+	// group: exec.CommandContext alone kills only the script, orphaning the
+	// test runners and workers it spawned (PPID 1). Same pattern as
+	// secrets/resolver.go and reload.go.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error {
+		err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		if errors.Is(err, syscall.ESRCH) {
+			return nil // group already gone
+		}
+		return err
+	}
 	out, err := cmd.CombinedOutput()
 
 	if errors.Is(runCtx.Err(), context.DeadlineExceeded) {
