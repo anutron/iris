@@ -13,4 +13,4 @@
 
 - [x] 3.1 Run formatting, build, vet, targeted tests, installer tests, and strict OpenSpec validation; record full-suite load failures and interruption.
 - [x] 3.2 Review the diff and regression tests, commit, push and open the PR via iris, then report to the coordinator without merging or restarting.
-- [ ] 3.3 Run the full race gate after the coordinator grants a quiet-host slot; this repo has no CI workflow.
+- [x] 3.3 Run the full race gate after the coordinator grants a quiet-host slot; this repo has no CI workflow. Passed `GOFLAGS=-p=2 GOMAXPROCS=4 make test` with race detection; no isolated reruns needed.
