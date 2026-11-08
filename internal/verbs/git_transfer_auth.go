@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/anutron/iris/internal/config"
+	"github.com/anutron/iris/internal/hostexec"
 )
 
 type tokenResolver func(context.Context, config.SecretsBlock, string) (string, bool)
@@ -69,7 +70,7 @@ func gitTransferCommand(ctx context.Context, dir string, args []string, resolve 
 		return fail(err)
 	}
 	if source == "" {
-		return exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...), identity, nil
+		return hostexec.CommandContext(ctx, nil, "git", append([]string{"-C", dir}, args...)...), identity, nil
 	}
 	if len(args) < 2 || (args[0] != "push" && args[0] != "fetch") {
 		return fail(fmt.Errorf("unsupported token-auth transfer"))
@@ -116,7 +117,7 @@ func gitTransferCommand(ctx context.Context, dir string, args []string, resolve 
 		full = append(full, "-c", "url."+https+".insteadOf="+rawURL, "-c", "url."+https+".pushInsteadOf="+rawURL)
 	}
 	full = append(full, args...)
-	cmd := exec.CommandContext(ctx, "git", full...)
+	var env []string
 	// Filter inherited copies so no stale variable overrides the selected
 	// credential or re-enables a prompt. Disable tracing that could capture
 	// the helper's credential-protocol traffic.
@@ -125,9 +126,10 @@ func gitTransferCommand(ctx context.Context, dir string, args []string, resolve 
 		if name == "IRIS_GIT_AUTH_TOKEN" || name == "GIT_TERMINAL_PROMPT" || name == "GIT_ASKPASS" || name == "SSH_ASKPASS" || strings.HasPrefix(name, "GIT_TRACE") || name == "GIT_CURL_VERBOSE" {
 			continue
 		}
-		cmd.Env = append(cmd.Env, entry)
+		env = append(env, entry)
 	}
-	cmd.Env = append(cmd.Env, "IRIS_GIT_AUTH_TOKEN="+token, "GIT_TERMINAL_PROMPT=0", "GIT_ASKPASS=false", "SSH_ASKPASS=false")
+	env = append(env, "IRIS_GIT_AUTH_TOKEN="+token, "GIT_TERMINAL_PROMPT=0", "GIT_ASKPASS=false", "SSH_ASKPASS=false")
+	cmd := hostexec.CommandContext(ctx, env, "git", full...)
 	redactor := strings.NewReplacer(
 		base64.StdEncoding.EncodeToString([]byte("x-access-token:"+token)), "[REDACTED]",
 		url.QueryEscape(token), "[REDACTED]",

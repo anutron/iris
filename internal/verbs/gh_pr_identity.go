@@ -5,8 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os/exec"
 	"strings"
+
+	"github.com/anutron/iris/internal/hostexec"
 )
 
 // prIdentity is what gh reports about a PR before iris acts on it. Repo is
@@ -22,7 +23,7 @@ type prIdentity struct {
 // stdout is parsed: gh writes notices (upgrade prompts, deprecations) to
 // stderr, and mixing them in would turn a matching repo into a refusal.
 func lookupPR(ctx context.Context, sourceRepo string, prNumber int) (*prIdentity, error) {
-	cmd := exec.CommandContext(ctx, "gh", "pr", "view", fmt.Sprintf("%d", prNumber), "--json", "url,title")
+	cmd := hostexec.CommandContext(ctx, nil, "gh", "pr", "view", fmt.Sprintf("%d", prNumber), "--json", "url,title")
 	cmd.Dir = sourceRepo
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr

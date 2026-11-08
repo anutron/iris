@@ -25,13 +25,13 @@ import (
 	"errors"
 	"log/slog"
 	"os"
-	"os/exec"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
 
 	"github.com/anutron/iris/internal/config"
+	"github.com/anutron/iris/internal/hostexec"
 )
 
 // keychainCommandTimeout bounds a `security find-generic-password`
@@ -238,14 +238,16 @@ func ResolveEnv(ctx context.Context, sc config.SecretsBlock) []string {
 // defaultSecretSubprocessRunner.
 var secretSubprocessRunner = defaultSecretSubprocessRunner
 
-// commandResolvable reports whether name is an actually-resolvable,
-// executable command — via exec.LookPath, NOT os.Stat. os.Stat wrongly
-// accepts a directory or a non-executable regular file as a match;
-// exec.LookPath correctly rejects both while still resolving a bare name
-// against PATH or an absolute/relative path directly.
+// commandResolvable reports whether name is an actually-resolvable executable
+// using the shared host PATH. Check explicit paths too: constructing an
+// exec.Cmd alone does not check absolute/relative paths for executability.
 func commandResolvable(name string) bool {
-	_, err := exec.LookPath(name)
-	return err == nil
+	cmd := hostexec.CommandContext(context.Background(), nil, name)
+	if cmd.Err != nil {
+		return false
+	}
+	info, err := os.Stat(cmd.Path)
+	return err == nil && !info.IsDir() && info.Mode()&0o111 != 0
 }
 
 // defaultSecretSubprocessRunner is the real subprocess-execution
@@ -264,10 +266,7 @@ func defaultSecretSubprocessRunner(ctx context.Context, name string, args []stri
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, name, args...)
-	if len(extraEnv) > 0 {
-		cmd.Env = append(os.Environ(), extraEnv...)
-	}
+	cmd := hostexec.CommandContext(ctx, append(os.Environ(), extraEnv...), name, args...)
 	// Put the subprocess (and anything it forks) in its own process group so
 	// a timeout kill can reach descendants, not just the direct child.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}

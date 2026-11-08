@@ -14,7 +14,6 @@ import (
 	"io/fs"
 	"log/slog"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -23,6 +22,7 @@ import (
 
 	"github.com/anutron/iris/internal/argus"
 	"github.com/anutron/iris/internal/config"
+	"github.com/anutron/iris/internal/hostexec"
 	"github.com/anutron/iris/internal/secrets"
 )
 
@@ -543,7 +543,7 @@ func runHook(ctx context.Context, sourceRepo string, hook config.HookBlock, defa
 	hookCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(hookCtx, hook.Command[0], hook.Command[1:]...)
+	cmd := hostexec.CommandContext(hookCtx, nil, hook.Command[0], hook.Command[1:]...)
 	cmd.Dir = sourceRepo
 	if hook.WorkingDirectory != "" {
 		cmd.Dir = filepath.Join(sourceRepo, hook.WorkingDirectory)
@@ -584,9 +584,8 @@ func runBuildBlock(ctx context.Context, sourceRepo string, b config.BuildBlock, 
 	buildCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(buildCtx, b.Command[0], b.Command[1:]...)
+	cmd := hostexec.CommandContext(buildCtx, append(mergedEnv(b.Env), secrets.ResolveEnv(ctx, sc)...), b.Command[0], b.Command[1:]...)
 	cmd.Dir = filepath.Join(sourceRepo, b.ResolvedWorkingDirectory())
-	cmd.Env = append(mergedEnv(b.Env), secrets.ResolveEnv(ctx, sc)...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	var buf bytes.Buffer
@@ -719,19 +718,15 @@ func dispatchSignal(r config.RestartBlock) (string, string, error) {
 // non-empty, is appended onto a copy of the ambient environment (os.Environ())
 // for THIS subprocess only — used by dispatchRestart's MechanismExec case to
 // inject resolved secrets. extraEnv is nil for every other caller (the
-// launchctl kickstart invocations), which leaves cmd.Env unset and preserves
-// today's inherit-everything behavior exactly — those callers gain no new
-// environment variables from this change.
+// launchctl kickstart invocations). All commands also receive the shared host
+// PATH augmentation for Go-installed tools.
 func runArgv(ctx context.Context, timeout time.Duration, extraEnv []string, name string, args ...string) (string, error) {
 	if timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, timeout)
 		defer cancel()
 	}
-	cmd := exec.CommandContext(ctx, name, args...)
-	if len(extraEnv) > 0 {
-		cmd.Env = append(os.Environ(), extraEnv...)
-	}
+	cmd := hostexec.CommandContext(ctx, append(os.Environ(), extraEnv...), name, args...)
 	// Put the child in its own process group so a timeout-kill propagates to
 	// any grandchildren (e.g. a launchctl that forks, an exec script that
 	// spawns helpers). Mirrors runBuildBlock and runHook.

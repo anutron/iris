@@ -27,7 +27,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -35,6 +34,7 @@ import (
 
 	"github.com/anutron/iris/internal/argus"
 	"github.com/anutron/iris/internal/config"
+	"github.com/anutron/iris/internal/hostexec"
 )
 
 // ShipFeatureOpts captures the typed arguments for ShipFeature.
@@ -361,7 +361,7 @@ func waitForChecks(ctx context.Context, sourceRepo string, prNumber int, headSHA
 // passthrough. gh substitutes {owner}/{repo} from the source repo context.
 func queryCheckRuns(ctx context.Context, sourceRepo, headSHA string) ([]checkRun, error) {
 	path := fmt.Sprintf("repos/{owner}/{repo}/commits/%s/check-runs", headSHA)
-	cmd := exec.CommandContext(ctx, "gh", "api", path)
+	cmd := hostexec.CommandContext(ctx, nil, "gh", "api", path)
 	cmd.Dir = sourceRepo
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -398,7 +398,7 @@ func summarizeCheckRuns(runs []checkRun) (failing, pending []string) {
 
 // approvePRForShip approves the PR via the host gh CLI.
 func approvePRForShip(ctx context.Context, sourceRepo string, prNumber int) error {
-	cmd := exec.CommandContext(ctx, "gh", "pr", "review", strconv.Itoa(prNumber), "--approve")
+	cmd := hostexec.CommandContext(ctx, nil, "gh", "pr", "review", strconv.Itoa(prNumber), "--approve")
 	cmd.Dir = sourceRepo
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("gh pr review --approve: %w: %s", err, strings.TrimSpace(string(out)))
@@ -408,7 +408,7 @@ func approvePRForShip(ctx context.Context, sourceRepo string, prNumber int) erro
 
 // mergePRForShip merges the PR with the given strategy via the host gh CLI.
 func mergePRForShip(ctx context.Context, sourceRepo string, prNumber int, method string) error {
-	cmd := exec.CommandContext(ctx, "gh", "pr", "merge", "--"+method, strconv.Itoa(prNumber))
+	cmd := hostexec.CommandContext(ctx, nil, "gh", "pr", "merge", "--"+method, strconv.Itoa(prNumber))
 	cmd.Dir = sourceRepo
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("gh pr merge --%s: %w: %s", method, err, strings.TrimSpace(string(out)))
@@ -419,7 +419,7 @@ func mergePRForShip(ctx context.Context, sourceRepo string, prNumber int, method
 // readMergeCommitSHA reads the merged PR's merge commit SHA via the host gh
 // CLI. Returns "" (no error) when GitHub has not yet recorded a merge commit.
 func readMergeCommitSHA(ctx context.Context, sourceRepo string, prNumber int) (string, error) {
-	cmd := exec.CommandContext(ctx, "gh", "pr", "view", strconv.Itoa(prNumber), "--json", "mergeCommit")
+	cmd := hostexec.CommandContext(ctx, nil, "gh", "pr", "view", strconv.Itoa(prNumber), "--json", "mergeCommit")
 	cmd.Dir = sourceRepo
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -450,7 +450,7 @@ func createPRForBranch(ctx context.Context, sourceRepo, base, head, title, body 
 		args = append(args, "--body", body)
 	}
 
-	cmd := exec.CommandContext(ctx, "gh", args...)
+	cmd := hostexec.CommandContext(ctx, nil, "gh", args...)
 	cmd.Dir = sourceRepo
 	out, err := cmd.CombinedOutput()
 	if err != nil {

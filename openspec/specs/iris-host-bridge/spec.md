@@ -3,7 +3,6 @@
 ## Purpose
 
 Defines the iris daemon that bridges argus sandboxes to host-side git and gh: lifecycle, authentication, source-repo resolution, per-repo locking, and MCP tool registration.
-
 ## Requirements
 ### Requirement: Daemon lifecycle
 
@@ -96,7 +95,6 @@ In v1.1, the self-hosting verbs are: `iris:reload`, `iris:validate_config`, `iri
 - **THEN** the verb does NOT consult argus's `/api/projects/full` (iris's own repo is implicit; the verb is constrained by being self-hosting, not by the allowlist)
 - **AND** when the same verb is invoked with `task_id` or `path` resolving to a NON-self source repo, the argus allowlist enforcement applies as for any other verb
 
-
 ### Requirement: Per-source-repo mutex on git operations
 
 The daemon SHALL hold a per-source-repo mutex for the duration of any git-mutating verb so concurrent calls against the same source repo serialize cleanly.
@@ -153,4 +151,38 @@ For every verb, the `iris` CLI SHALL expose a subcommand that calls the same und
 
 - **WHEN** the user runs `iris merge-to-master <task-id>` from any directory
 - **THEN** the daemon process is bypassed; iris calls `verbs.MergeToMaster(ctx, taskID, opts)` directly and prints the structured result
+
+### Requirement: Go tools in host command PATH
+
+Every iris host command SHALL receive a PATH that includes the user's Go install directory. Cold calls SHALL immediately use exported GOBIN, otherwise the first exported GOPATH entry plus `/bin`, otherwise `$HOME/go/bin`, without waiting for Go. Iris SHALL warm bounded Go directory discovery in the background at daemon startup. Completed discovery SHALL refine later calls from `go env GOBIN`, otherwise the first `go env GOPATH` entry plus `/bin`, otherwise `$HOME/go/bin`. Discovery SHALL NOT depend on a managed repository's module or toolchain. Existing PATH order SHALL be preserved, and the directory SHALL NOT be duplicated. Direct executable lookup SHALL use the same augmented PATH as command descendants. Environment overlays and existing command execution controls SHALL be preserved. Relative PATH lookup SHALL retain Go's ErrDot protection.
+
+#### Scenario: Go install directory configured
+
+- **WHEN** Go reports a nonempty GOBIN, or an empty GOBIN and nonempty GOPATH
+- **THEN** later configured builds, checks, restarts, hooks, git and gh subprocesses can invoke a tool installed in GOBIN or the first GOPATH entry's bin directory both directly and from a child shell
+
+#### Scenario: Go unavailable under launchd
+
+- **WHEN** Go cannot be queried and no exported Go directory exists
+- **THEN** iris appends HOME/go/bin to the command PATH and tools installed there resolve without a login shell
+
+#### Scenario: Existing executable wins
+
+- **WHEN** a command already resolves through inherited or configured PATH
+- **THEN** that executable retains precedence over a same-named tool in the appended Go bin directory
+
+#### Scenario: Explicit child environment
+
+- **WHEN** a build overlays environment variables or a verb injects secrets
+- **THEN** iris preserves those entries and augments the final child PATH before resolving the command
+
+#### Scenario: Command canceled during discovery
+
+- **WHEN** a caller's deadline expires while the shared Go directory query is running
+- **THEN** iris returns promptly under the caller's cancellation and the bounded query cannot delay that command's timeout
+
+#### Scenario: Go discovery hangs on a cold process
+
+- **WHEN** Go discovery hangs on the first verb invocation
+- **THEN** the verb immediately proceeds using the cheap fallback PATH and can resolve a tool in HOME/go/bin without waiting for discovery
 
