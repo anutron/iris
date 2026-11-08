@@ -14,6 +14,7 @@ import (
 
 	"github.com/anutron/iris/internal/argus"
 	"github.com/anutron/iris/internal/config"
+	"github.com/anutron/iris/internal/hostexec"
 )
 
 // MergeToBranchResult is the structured success payload for
@@ -327,12 +328,12 @@ func runMergeToBranchPostMergeHook(ctx context.Context, resolved *ResolvedRepo, 
 	cmdCtx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSec)*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(cmdCtx, hook.Command[0], hook.Command[1:]...)
+	cmd := hostexec.CommandContext(cmdCtx, nil, hook.Command[0], hook.Command[1:]...)
 	cmd.Dir = worktreePath
 	if hook.WorkingDirectory != "" && hook.WorkingDirectory != "." {
 		cmd.Dir = filepath.Join(worktreePath, hook.WorkingDirectory)
 	}
-	cmd.Env = append(os.Environ(),
+	cmd.Env = append(cmd.Env,
 		"IRIS_TASK_ID="+resolved.Task.ID,
 		"IRIS_SOURCE_REPO="+resolved.SourceRepo,
 		"IRIS_TARGET_BRANCH="+targetBranch,

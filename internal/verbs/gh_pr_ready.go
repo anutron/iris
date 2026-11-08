@@ -4,10 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os/exec"
 	"strings"
 
 	"github.com/anutron/iris/internal/argus"
+	"github.com/anutron/iris/internal/hostexec"
 )
 
 // GHPRReadyOptions captures the per-call knobs for GHPRReady.
@@ -41,7 +41,7 @@ func GHPRReady(ctx context.Context, client *argus.Client, taskID string, opts GH
 	// Pre-fetch isDraft. A failure here surfaces with full gh output —
 	// the agent likely can't proceed without knowing PR state anyway.
 	viewArgs := []string{"pr", "view", fmt.Sprintf("%d", opts.PRNumber), "--json", "isDraft"}
-	viewCmd := exec.CommandContext(ctx, "gh", viewArgs...)
+	viewCmd := hostexec.CommandContext(ctx, nil, "gh", viewArgs...)
 	viewCmd.Dir = resolved.SourceRepo
 	viewOut, err := viewCmd.CombinedOutput()
 	if err != nil {
@@ -64,7 +64,7 @@ func GHPRReady(ctx context.Context, client *argus.Client, taskID string, opts GH
 	}
 
 	readyArgs := []string{"pr", "ready", fmt.Sprintf("%d", opts.PRNumber)}
-	readyCmd := exec.CommandContext(ctx, "gh", readyArgs...)
+	readyCmd := hostexec.CommandContext(ctx, nil, "gh", readyArgs...)
 	readyCmd.Dir = resolved.SourceRepo
 	readyOut, err := readyCmd.CombinedOutput()
 	if err != nil {

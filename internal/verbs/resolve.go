@@ -7,11 +7,11 @@ package verbs
 import (
 	"context"
 	"fmt"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
 	"github.com/anutron/iris/internal/argus"
+	"github.com/anutron/iris/internal/hostexec"
 )
 
 // ResolvedRepo is everything a verb needs to safely operate on a
@@ -157,7 +157,7 @@ func DefaultBranch(ctx context.Context, sourceRepo string) (string, error) {
 // runGit runs `git -C <dir> <args>` and returns combined stdout+stderr.
 func runGit(ctx context.Context, dir string, args ...string) (string, error) {
 	full := append([]string{"-C", dir}, args...)
-	cmd := exec.CommandContext(ctx, "git", full...)
+	cmd := hostexec.CommandContext(ctx, nil, "git", full...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return string(out), fmt.Errorf("git %s: %w: %s", strings.Join(full, " "), err, strings.TrimSpace(string(out)))

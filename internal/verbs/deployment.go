@@ -3,8 +3,9 @@ package verbs
 import (
 	"context"
 	"fmt"
-	"os/exec"
 	"strings"
+
+	"github.com/anutron/iris/internal/hostexec"
 )
 
 // runDeploymentGit bounds each git step in an already-detached deployment.
@@ -13,7 +14,7 @@ import (
 func runDeploymentGit(ctx context.Context, dir string, args ...string) (string, error) {
 	commandCtx, cancel := context.WithTimeout(ctx, gitTransferTimeout(dir))
 	defer cancel()
-	cmd := exec.CommandContext(commandCtx, "git", append([]string{"-C", dir}, args...)...)
+	cmd := hostexec.CommandContext(commandCtx, nil, "git", append([]string{"-C", dir}, args...)...)
 	cmd.WaitDelay = gitTransferWaitDelay
 	out, err := cmd.CombinedOutput()
 	if commandCtx.Err() != nil {

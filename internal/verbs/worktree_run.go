@@ -7,6 +7,8 @@ import (
 	"os/exec"
 	"syscall"
 	"time"
+
+	"github.com/anutron/iris/internal/hostexec"
 )
 
 // WorktreeRunTimeout is iris's ceiling on a run_checks or run_build
@@ -57,9 +59,8 @@ func runWorktreeCommand(ctx context.Context, dir string, env []string, name stri
 	defer mu.Unlock()
 	MarkRunStarted(ctx)
 
-	cmd := exec.CommandContext(runCtx, name, args...)
+	cmd := hostexec.CommandContext(runCtx, env, name, args...)
 	cmd.Dir = dir
-	cmd.Env = env
 	cmd.WaitDelay = worktreeRunWaitDelay
 	// The script leads its own process group, and the ceiling kills the whole
 	// group: exec.CommandContext alone kills only the script, orphaning the

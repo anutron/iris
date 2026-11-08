@@ -130,8 +130,16 @@ func TestGitTransferAuth_OptOutUnchanged(t *testing.T) {
 			return "", false
 		},
 		func(cmd *exec.Cmd) ([]byte, error) {
-			if cmd.Env != nil || strings.Join(cmd.Args[1:], " ") != "-C "+dir+" fetch origin" {
+			if strings.Join(cmd.Args[1:], " ") != "-C "+dir+" fetch origin" {
 				t.Fatalf("changed opt-out command: %v", cmd.Args)
+			}
+			for _, entry := range cmd.Env {
+				if strings.HasPrefix(entry, "IRIS_GIT_AUTH_TOKEN=") || strings.HasPrefix(entry, "GIT_TERMINAL_PROMPT=") {
+					name, val, _ := strings.Cut(entry, "=")
+					if inherited, ok := os.LookupEnv(name); !ok || val != inherited {
+						t.Fatalf("auth injected on opt-out: %s", name)
+					}
+				}
 			}
 			return nil, nil
 		}, "fetch", "origin")

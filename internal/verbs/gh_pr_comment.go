@@ -3,11 +3,11 @@ package verbs
 import (
 	"context"
 	"fmt"
-	"os/exec"
 	"regexp"
 	"strings"
 
 	"github.com/anutron/iris/internal/argus"
+	"github.com/anutron/iris/internal/hostexec"
 )
 
 // GHPRCommentOptions captures the per-call knobs for GHPRComment.
@@ -49,7 +49,7 @@ func GHPRComment(ctx context.Context, client *argus.Client, taskID string, opts 
 	defer mu.Unlock()
 
 	args := []string{"pr", "comment", fmt.Sprintf("%d", opts.PRNumber), "--body", opts.Body}
-	cmd := exec.CommandContext(ctx, "gh", args...)
+	cmd := hostexec.CommandContext(ctx, nil, "gh", args...)
 	cmd.Dir = resolved.SourceRepo
 	out, err := cmd.CombinedOutput()
 	if err != nil {

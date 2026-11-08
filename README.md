@@ -100,6 +100,8 @@ iris ls                            List managed systems iris has reloaded (--lim
 
 Direct invocation bypasses argus + MCP and calls the same Go function the MCP handler does — useful when debugging.
 
+Host commands append the user's Go install directory to PATH. Cold calls immediately use exported GOBIN, otherwise the first exported GOPATH entry's `bin`, otherwise `$HOME/go/bin`. Background discovery starts at daemon startup and refines later calls using `go env GOBIN`, otherwise the first `go env GOPATH` entry's `bin`. Calls never wait for discovery. This applies to builds, checks, restart commands, hooks, git/gh, and secret helpers, including direct executable lookup and child processes. Existing PATH entries retain precedence. Discovery is bounded and cached by environment settings; persisted `go env -w` changes take effect in a new iris process. Export GOBIN/GOPATH if a custom directory must be available on the very first call.
+
 ### Pushing to an upstream so CI runs
 
 When `origin` is your fork (e.g. `anutron/argus`) but you have write access to the canonical upstream (`drn/argus`), GitHub will not run CI on a cross-fork PR. The CI-gated motion is to push the branch **to the upstream** and open a **same-repo PR there**:

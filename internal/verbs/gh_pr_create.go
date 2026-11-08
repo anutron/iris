@@ -4,12 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os/exec"
 	"regexp"
 	"strconv"
 	"strings"
 
 	"github.com/anutron/iris/internal/argus"
+	"github.com/anutron/iris/internal/hostexec"
 )
 
 // GHPRCreateOptions captures the per-call knobs for GHPRCreate.
@@ -139,7 +139,7 @@ func GHPRCreate(ctx context.Context, client *argus.Client, taskID string, opts G
 		args = append(args, "--draft")
 	}
 
-	cmd := exec.CommandContext(ctx, "gh", args...)
+	cmd := hostexec.CommandContext(ctx, nil, "gh", args...)
 	cmd.Dir = resolved.SourceRepo
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -178,7 +178,7 @@ type forkUpstream struct {
 // unexpected JSON). Detection must never break the common same-repo case, so
 // every failure path is a silent nil rather than an error.
 func detectForkUpstream(ctx context.Context, sourceRepo string) *forkUpstream {
-	cmd := exec.CommandContext(ctx, "gh", "repo", "view", "--json", "nameWithOwner,parent")
+	cmd := hostexec.CommandContext(ctx, nil, "gh", "repo", "view", "--json", "nameWithOwner,parent")
 	cmd.Dir = sourceRepo
 	out, err := cmd.Output()
 	if err != nil {

@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -14,6 +13,7 @@ import (
 
 	"github.com/anutron/iris/internal/argus"
 	"github.com/anutron/iris/internal/config"
+	"github.com/anutron/iris/internal/hostexec"
 )
 
 // MergeOptions captures the per-call knobs for MergeToMaster.
@@ -342,12 +342,12 @@ func runPostMergeHook(ctx context.Context, resolved *ResolvedRepo, defaultBranch
 	cmdCtx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSec)*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(cmdCtx, hook.Command[0], hook.Command[1:]...)
+	cmd := hostexec.CommandContext(cmdCtx, nil, hook.Command[0], hook.Command[1:]...)
 	cmd.Dir = resolved.SourceRepo
 	if hook.WorkingDirectory != "" && hook.WorkingDirectory != "." {
 		cmd.Dir = filepath.Join(resolved.SourceRepo, hook.WorkingDirectory)
 	}
-	cmd.Env = append(os.Environ(),
+	cmd.Env = append(cmd.Env,
 		"IRIS_TASK_ID="+resolved.Task.ID,
 		"IRIS_TASK_BRANCH="+resolved.Branch,
 		"IRIS_SOURCE_REPO="+resolved.SourceRepo,

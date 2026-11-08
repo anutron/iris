@@ -4,10 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os/exec"
 	"strings"
 
 	"github.com/anutron/iris/internal/argus"
+	"github.com/anutron/iris/internal/hostexec"
 )
 
 // GHPRViewOptions captures the per-call knobs for GHPRView.
@@ -45,7 +45,7 @@ func GHPRView(ctx context.Context, client *argus.Client, taskID string, opts GHP
 	defer mu.Unlock()
 
 	args := []string{"pr", "view", fmt.Sprintf("%d", opts.PRNumber), "--json", ghPRViewJSONFields}
-	cmd := exec.CommandContext(ctx, "gh", args...)
+	cmd := hostexec.CommandContext(ctx, nil, "gh", args...)
 	cmd.Dir = resolved.SourceRepo
 	out, err := cmd.CombinedOutput()
 	if err != nil {

@@ -13,6 +13,7 @@ import (
 
 	"github.com/anutron/iris/internal/argus"
 	"github.com/anutron/iris/internal/config"
+	"github.com/anutron/iris/internal/hostexec"
 	"github.com/anutron/iris/internal/mcp"
 )
 
@@ -30,6 +31,7 @@ type Daemon struct {
 
 // Start brings every subsystem up and returns the live Daemon.
 func Start(ctx context.Context, cfg *config.Config, log *slog.Logger) (*Daemon, error) {
+	hostexec.Warm()
 	if cfg == nil {
 		cfg = config.Default()
 	}
@@ -341,8 +343,8 @@ func toolDefinitions() []mcp.ToolDefinition {
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"task_id":      map[string]any{"type": "string", "description": "Argus task ID. Iris resolves the worktree from this."},
-					"check":       map[string]any{"type": "string", "description": "Check to run, passed as the first positional argument to `script/iris-check` (e.g. \"lint\", \"test\", \"security\"). Required and non-empty."},
+					"task_id": map[string]any{"type": "string", "description": "Argus task ID. Iris resolves the worktree from this."},
+					"check":   map[string]any{"type": "string", "description": "Check to run, passed as the first positional argument to `script/iris-check` (e.g. \"lint\", \"test\", \"security\"). Required and non-empty."},
 					"args": map[string]any{
 						"type":        "array",
 						"items":       map[string]any{"type": "string", "minLength": 1, "maxLength": 512},

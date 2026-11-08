@@ -1,9 +1,9 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"strconv"
 	"strings"
 	"syscall"
@@ -11,6 +11,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/anutron/iris/internal/config"
+	"github.com/anutron/iris/internal/hostexec"
 )
 
 func newStopCmd() *cobra.Command {
@@ -59,7 +60,7 @@ func newStopCmd() *cobra.Command {
 // processName returns the process name (argv[0] basename) for pid on
 // macOS/Linux via `ps -o comm= -p <pid>`. Returns the trimmed value.
 func processName(pid int) (string, error) {
-	out, err := exec.Command("ps", "-o", "comm=", "-p", strconv.Itoa(pid)).Output()
+	out, err := hostexec.CommandContext(context.Background(), nil, "ps", "-o", "comm=", "-p", strconv.Itoa(pid)).Output()
 	if err != nil {
 		return "", fmt.Errorf("ps: %w", err)
 	}
