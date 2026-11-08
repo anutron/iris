@@ -141,6 +141,15 @@ A classic PAT with `repo` and `workflow` scopes can span the different owners `a
 
 The existing resolver caches successful resolutions for the daemon's lifetime. Restart iris after rotating the token so it resolves the new value.
 
+## Signed builds and the Keychain prompt
+
+`make build` (what `.iris.toml` runs) signs `bin/iris` via `scripts/build-signed.sh` with the existing self-signed `Argus Code Signing` identity and the stable identifier `com.anutron.iris`. Keychain "Always Allow" grants are bound to the code signature, and a plain `go build` is ad-hoc signed with a new hash every time, so without this every self-reload would re-prompt for the `keychain://` bootstrap secret.
+
+- **First signed build:** the first time the signed binary reads the Keychain item it prompts once. Click **Always Allow**. Later rebuilds keep the same designated requirement, so it should never prompt again.
+- **Failure is safe:** the build signs a temp file and renames it over `bin/iris` only on success. A locked keychain, a codesign failure or a timeout exits non-zero with a clear message and leaves the existing binary untouched.
+- **Escape hatches:** `IRIS_SKIP_SIGN=1 make build` builds unsigned. If `codesign` is not installed (Linux CI) signing is skipped automatically; if the identity is missing you get a warning and an ad-hoc build.
+- **Tuning:** `IRIS_SIGN_IDENTITY`, `IRIS_SIGN_IDENTIFIER`, `IRIS_SIGN_TIMEOUT` and `IRIS_CODESIGN_TIMEOUT` override the defaults.
+
 ## Self-management
 
 Iris can live-upgrade any daemon it is asked to manage (including itself) via four verbs that share a declarative convention.
