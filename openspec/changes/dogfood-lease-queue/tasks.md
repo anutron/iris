@@ -1,6 +1,6 @@
 ## 1. Specs (spec-first)
 
-- [x] 1.1 `iris-dogfood-lease` delta (new capability): lease and FIFO queue; claim, renew, release and force-release verbs; warmer, silence and idle timers; liveness rules; pane-delivery messaging; persistence; timer config.
+- [x] 1.1 `iris-dogfood-lease` delta (new capability): lease and ordered queue (FIFO by default, with cut-in `position` and human reorder); claim, renew, release, force-release and queue-move verbs; `holder` and `ahead` visibility; warmer, silence and idle timers; liveness rules; pane-delivery messaging; persistence; timer config.
 - [x] 1.2 `iris-set-dogfood` delta: ADDED "Dogfood lease gate" requirement with the `lease_override` input, kept separate from `force`.
 - [x] 1.3 `iris-status`, `iris-ship-feature`, `iris-validate-config` deltas: the lease field, the recompose skip, and `[dogfood_lease]` validation.
 - [ ] 1.4 Resolve design.md Open Questions (a)–(e) with Aaron; update the deltas if any recommendation is overridden.
@@ -18,6 +18,8 @@
 - [ ] 3.2 Timer config: parse `[dogfood_lease]` from the merged overlay (plus the bootstrap read of `.iris.local.toml`), apply defaults 600/30/1800, and fall back to defaults on invalid values with a warning.
 - [ ] 3.3 State machine as pure functions over (state, now, liveness, config) → (new state, messages to send, deliveries to cancel). Tests use an injected clock and cover:
   - grant, queue, poll and re-claim
+  - cut-in `position` (insert, self-move, clamp) and queue-move (reorder, refuse the holder or an unqueued task)
+  - `ahead` lists for queued callers and for unqueued refused callers
   - immediate check-in on a new queue join
   - warmer check-in
   - silence → final warning → release with a waiter
@@ -31,15 +33,15 @@
 
 ## 4. Verbs, handlers, CLI
 
-- [ ] 4.1 `DogfoodClaim` (with the `wait_seconds` long-poll, default 0, clamp 0–25), `DogfoodRenew`, `DogfoodRelease`, `DogfoodForceRelease` (requires `reason`; works when argus is unreachable).
-- [ ] 4.2 MCP handlers `iris_dogfood_claim` / `_renew` / `_release` / `_force_release` and their schemas in `internal/daemon/run.go`.
-- [ ] 4.3 CLI: `iris dogfood claim|renew|release|force-release`.
+- [ ] 4.1 `DogfoodClaim` (with the `wait_seconds` long-poll, default 0, clamp 0–25; optional cut-in `position`; `holder` and `ahead` in the result), `DogfoodQueueMove`, `DogfoodRenew`, `DogfoodRelease`, `DogfoodForceRelease` (requires `reason`; works when argus is unreachable).
+- [ ] 4.2 MCP handlers `iris_dogfood_claim` / `_renew` / `_release` / `_force_release` / `_queue_move` and their schemas in `internal/daemon/run.go`.
+- [ ] 4.3 CLI: `iris dogfood claim|renew|release|force-release|queue-move`.
 - [ ] 4.4 Lease scheduler goroutine in the daemon: at startup, scan `repos/*/dogfood-lease.json`; tick every ≤ 5s; evaluate each lease under its mutex; send and cancel notify deliveries; persist; stop cleanly on shutdown.
 
 ## 5. Integrations
 
 - [ ] 5.1 `set_dogfood.go`: add `SetDogfoodOpts.LeaseOverride`. Add the lease gate after the reachability check and before the ancestry check. Record contact at start and finish, mark the call in flight, add the `LEASE OVERRIDE:` warning first, and message the holder. Tests:
-  - a non-holder is refused with no side effects
+  - a non-holder is refused with no side effects; the error and its structured fields carry `holder` (with argus task name), `ahead`, and `position`
   - a free lease still requires a claim
   - the holder deploys
   - an override warns and notifies the holder

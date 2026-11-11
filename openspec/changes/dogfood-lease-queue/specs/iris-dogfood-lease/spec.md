@@ -1,8 +1,8 @@
 ## ADDED Requirements
 
-### Requirement: Per-source-repo dogfood lease with a FIFO queue
+### Requirement: Per-source-repo dogfood lease with an ordered queue
 
-Iris SHALL keep one dogfood lease for each source repo whose merged configuration declares `dogfood_branch`. At most one argus task SHALL hold the lease at a time. Tasks waiting for it SHALL be kept in a first-in-first-out queue. Lease identities (holder and queue entries) SHALL be argus task IDs. Every lease verb SHALL resolve its source repo the same way `iris:set_dogfood` does (`task_id` → source repo), so all tasks of one argus project share one lease. Iris SHALL keep this invariant: whenever the queue is non-empty, the lease has a holder. A free lease is granted immediately and never leaves anyone queued.
+Iris SHALL keep one dogfood lease for each source repo whose merged configuration declares `dogfood_branch`. At most one argus task SHALL hold the lease at a time. Tasks waiting for it SHALL be kept in an ordered queue. The queue is first-in-first-out by default, and can be reordered by cut-in claims and by `iris:dogfood_queue_move`. The lease SHALL always be granted to the task at position 1. Lease identities (holder and queue entries) SHALL be argus task IDs. Every lease verb SHALL resolve its source repo the same way `iris:set_dogfood` does (`task_id` → source repo), so all tasks of one argus project share one lease. Iris SHALL keep this invariant: whenever the queue is non-empty, the lease has a holder. A free lease is granted immediately and never leaves anyone queued.
 
 #### Scenario: Two tasks in the same project share one lease
 
@@ -24,24 +24,26 @@ Inputs:
 
 - `task_id` (string, required): the claiming argus task.
 - `wait_seconds` (integer, optional, default 0, clamped to 0–25): how long to wait for a grant before returning.
+- `position` (integer, optional, 1-based): cut in line. When omitted, a new claimant is appended to the end of the queue. When given, the claimant is placed at that position, clamped to `[1, queue_length + 1]` (counting the queue without the caller), and every task at or after that position moves back one. An already-queued caller that passes `position` moves itself. Cutting in line SHALL be recorded in the lease history. It SHALL NOT affect the holder.
 
 Behavior:
 
 - If the lease is free, iris SHALL grant it to the caller, record the grant as contact, and message the grant to the caller.
 - If the caller already holds the lease, iris SHALL record contact and return `granted`.
-- If the caller is already queued, iris SHALL return its current position without re-queuing it and without triggering a new check-in.
-- Otherwise iris SHALL first apply the liveness rules to the current holder. A dead holder is released, and the claim is re-evaluated against the freed lease. If the holder is not dead, iris SHALL append the caller to the end of the queue and immediately send the holder a check-in, unless a check-in is already outstanding.
+- If the caller is already queued, iris SHALL return its current position without re-queuing it (moving it first if it passed `position`) and without triggering a new check-in.
+- Otherwise iris SHALL first apply the liveness rules to the current holder. A dead holder is released, and the claim is re-evaluated against the freed lease. If the holder is not dead, iris SHALL insert the caller into the queue (at the end, or at its requested `position`) and immediately send the holder a check-in, unless a check-in is already outstanding.
 - While the caller is queued and `wait_seconds` > 0, iris SHALL wait up to `wait_seconds` for the caller to be granted before responding. A later `claim` call by the same task acts as the poll.
 
 Result shape:
 
 - `status`: `"granted"` or `"queued"`.
 - `dogfood_branch`: the configured dogfood branch.
-- `holder`: `{ task_id, task_name }` of the current holder.
+- `holder`: `{ task_id, task_name }` of the current holder, where `task_name` is the holder's argus task name.
 - `position`: 1-based queue position, or 0 when granted.
+- `ahead`: an ordered array of `{ task_id, task_name, position }` for every queued task in front of the caller. It is empty when granted or at position 1.
 - `queue_length`: the number of queued tasks.
 - `next_checkin_at`: when granted, the time the warmer check-in falls due.
-- `message`: a human-readable line. For `queued` it SHALL say the lease is busy, name the holder, give the position, and say iris will message the caller when the lease is granted.
+- `message`: a human-readable line. For `queued` it SHALL say the lease is busy, name the holder by argus task name, give the position, and say iris will message the caller when the lease is granted.
 
 #### Scenario: Free lease is granted immediately
 
@@ -54,8 +56,26 @@ Result shape:
 
 - **GIVEN** task `A` holds the lease and no check-in is outstanding
 - **WHEN** task `B` calls `iris_dogfood_claim(task_id="B")`
-- **THEN** iris returns `status: "queued"`, `position: 1`, `holder: { task_id: "A", ... }`, and a message that it will notify `B` when the lease frees
+- **THEN** iris returns `status: "queued"`, `position: 1`, `holder: { task_id: "A", task_name: "<A's argus task name>" }`, `ahead: []`, and a message that it will notify `B` when the lease frees
 - **AND** iris immediately sends `A` a check-in that says one agent is waiting
+
+#### Scenario: Queued caller sees everyone ahead of it
+
+- **GIVEN** `A` holds the lease and `B`, then `C`, are queued
+- **WHEN** task `D` calls `iris_dogfood_claim(task_id="D")`
+- **THEN** iris returns `position: 3`, `holder` with `A`'s task ID and argus task name, and `ahead: [{ task_id: "B", task_name, position: 1 }, { task_id: "C", task_name, position: 2 }]`
+
+#### Scenario: Agent cuts in line
+
+- **GIVEN** `A` holds the lease and `B`, then `C`, are queued
+- **WHEN** task `D` calls `iris_dogfood_claim(task_id="D", position=1)`
+- **THEN** iris returns `status: "queued"`, `position: 1`, `ahead: []`; the queue is now `D`, `B`, `C`; `A` still holds the lease; and the lease history records that `D` cut in at position 1
+
+#### Scenario: Cut-in position past the end is clamped
+
+- **GIVEN** `A` holds the lease and `B` is queued
+- **WHEN** task `C` calls `iris_dogfood_claim(task_id="C", position=9)`
+- **THEN** `C` is placed at position 2, the end of the queue
 
 #### Scenario: Re-claim while queued is a poll
 
@@ -80,9 +100,33 @@ Result shape:
 - **WHEN** a queued caller passes `wait_seconds=120`
 - **THEN** iris waits at most 25 seconds before returning `status: "queued"`
 
+### Requirement: `iris:dogfood_queue_move` verb
+
+The plugin SHALL expose `iris:dogfood_queue_move` as an MCP tool (`iris_dogfood_queue_move`) and CLI subcommand (`iris dogfood queue-move <task> <position>`). It lets a human or coordinator reorder the queue.
+
+Inputs:
+
+- `task_id` or `path` (optional): resolved like `iris:status`, to identify the source repo.
+- `move_task_id` (string, required): the queued task to move.
+- `position` (integer, required, 1-based): its new position, clamped to `[1, queue_length]`.
+
+Iris SHALL move the task, shift the others to keep their relative order, record the move in the lease history, and return the new queue as an ordered array of `{ task_id, task_name, position }`. Iris SHALL NOT message tasks whose position changed; they see the new position on their next claim. A `move_task_id` that is not queued (including the holder) SHALL be refused with an error, and no state SHALL change.
+
+#### Scenario: Human moves a task to the front
+
+- **GIVEN** `A` holds the lease and `B`, `C`, `D` are queued in that order
+- **WHEN** a human runs `iris dogfood queue-move D 1`
+- **THEN** the queue becomes `D`, `B`, `C`, `A` still holds the lease, and the move appears in the lease history
+
+#### Scenario: Moving the holder is refused
+
+- **GIVEN** `A` holds the lease and `B` is queued
+- **WHEN** `iris_dogfood_queue_move(move_task_id="A", position=1)` is invoked
+- **THEN** iris returns an error saying `A` holds the lease and is not in the queue, and changes no state
+
 ### Requirement: `iris:dogfood_renew` verb
 
-The plugin SHALL expose `iris:dogfood_renew` as an MCP tool (`iris_dogfood_renew`) and CLI subcommand (`iris dogfood renew`) that accepts `task_id` (string, required). It is the holder's "still using it" reply. When the caller holds the lease, iris SHALL record contact and return `{ renewed: true, next_checkin_at }`. Recording contact restarts the warmer clock, clears any outstanding check-in, final warning and scheduled release, and cancels any undelivered iris messages to the holder. When the caller does not hold the lease, iris SHALL return an error naming the current holder and the caller's queue position, if it has one.
+The plugin SHALL expose `iris:dogfood_renew` as an MCP tool (`iris_dogfood_renew`) and CLI subcommand (`iris dogfood renew`) that accepts `task_id` (string, required). It is the holder's "still using it" reply. When the caller holds the lease, iris SHALL record contact and return `{ renewed: true, next_checkin_at }`. Recording contact restarts the warmer clock, clears any outstanding check-in, final warning and scheduled release, and cancels any undelivered iris messages to the holder. When the caller does not hold the lease, iris SHALL return an error that names the current holder (task ID and argus task name), gives the caller's queue position if it has one, and lists the queued tasks ahead of it.
 
 #### Scenario: Renew restarts the timer
 

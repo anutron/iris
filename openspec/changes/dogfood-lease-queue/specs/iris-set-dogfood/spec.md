@@ -4,7 +4,14 @@
 
 `iris:set_dogfood` SHALL refuse a caller that does not hold the source repo's dogfood lease (see `iris-dogfood-lease`), unless the new `lease_override` input is set. The caller is the `task_id` input. A call with no `task_id` (CLI or iris-on-iris default) has no lease identity and SHALL be treated as not holding the lease. The gate SHALL run after `dogfood_branch` resolution and SHA reachability, and before the ancestry check, the manifest write, any git mutation and any reload, so a refusal has no side effects.
 
-The refusal error SHALL name the current holder (task ID and name) or say that no one holds the lease, give the caller's queue position if it is queued, and point the caller to `iris_dogfood_claim`, or to `lease_override` to bypass the lease.
+The refusal error SHALL:
+
+- name the current holder by task ID and argus task name, or say that no one holds the lease;
+- list every queued task ahead of the caller, by task ID and argus task name in queue order (the whole queue when the caller is not queued);
+- give the caller's own queue position, if it is queued;
+- point the caller to `iris_dogfood_claim`, or to `lease_override` to bypass the lease.
+
+The same information SHALL also be available as structured fields (`holder`, `ahead`, `position`) on the error response, so an agent does not have to parse the text.
 
 New input:
 
@@ -25,8 +32,14 @@ The CLI SHALL expose the input as `--lease-override`, and the MCP tool schema SH
 
 - **GIVEN** task `A` holds the dogfood lease and task `B` is queued at position 1
 - **WHEN** `B` calls `iris_set_dogfood` with a reachable SHA and a well-formed manifest and no `lease_override`
-- **THEN** iris returns an error naming `A` as holder, `B`'s position 1, and `iris_dogfood_claim` / `lease_override`
+- **THEN** iris returns an error naming `A` (task ID and argus task name) as holder, `B`'s position 1, and `iris_dogfood_claim` / `lease_override`
 - **AND** iris writes no manifest, moves no ref, and runs no reload
+
+#### Scenario: Refusal lists everyone ahead of an unqueued caller
+
+- **GIVEN** task `A` holds the dogfood lease and `B`, then `C`, are queued
+- **WHEN** task `D`, which is not queued, calls `iris_set_dogfood` without `lease_override`
+- **THEN** the error names `A` by argus task name as holder and lists `B` then `C` (with their argus task names) as ahead, and the structured `ahead` field carries the same two entries in order
 
 #### Scenario: Free lease still requires a claim
 

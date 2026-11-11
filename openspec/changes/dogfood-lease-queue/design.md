@@ -17,7 +17,8 @@ What already exists that this change builds on:
 
 **Goals:**
 
-- Agents take turns holding a source repo's dogfood branch: one holder at a time, plus a fair FIFO queue.
+- Agents take turns holding a source repo's dogfood branch: one holder at a time, plus a queue that is FIFO by default and can be reordered. Agents may cut in line, and a human may reorder the queue (D1a).
+- A waiting or refused caller can always see who holds the lease, by argus task name, and everyone ahead of it in line (D1b).
 - `iris_set_dogfood` requires the lease. A separate, explicit `lease_override` lets a caller bypass it, loudly.
 - Iris carries the conversation from Aaron's script: grant, "queued, I'll let you know", "still using it?", "timer restarted", "releasing in 30s", "it's yours now".
 - A holder that is merely quiet is not evicted while it is visibly working, according to argus's bridge state. A holder that is dead or finished is released at once.
@@ -28,7 +29,7 @@ What already exists that this change builds on:
 
 - Gating `iris_reload` or `iris_publish`. Only `iris_set_dogfood` moves the dogfood branch. See open question (b).
 - Authenticating callers. Iris cannot verify that a `task_id` belongs to the caller, the same trust model as every other iris verb. The lease coordinates cooperating agents. It is not a security boundary.
-- Priorities, preemption, or a maximum hold time while the holder keeps renewing. A holder that keeps answering can keep the lease, and the queue is visible in `iris_status` for a human to act on.
+- Preemption of the holder, or a maximum hold time while the holder keeps renewing. Cutting in line reorders the queue only; it never takes the lease from the holder. A holder that keeps answering can keep the lease. The queue is visible in `iris_status` for a human to act on.
 - Any change to argus.
 
 ## Decisions
@@ -36,6 +37,25 @@ What already exists that this change builds on:
 ### D1. Lease is per source repo and keyed by argus task ID
 
 The dogfood branch belongs to a source repo, so the lease does too. Every verb resolves its target the same way set_dogfood does (`ResolveTarget(task_id)`). All tasks of one argus project therefore share one lease. The holder and queue entries are argus task IDs, because that is the identity iris can message and check for liveness. `claim`, `renew` and `release` require `task_id`. `force_release` accepts a `task_id` or a `path` target, like `iris_status`, so a human at the CLI can use it.
+
+### D1a. Queue order: FIFO by default, agents may cut in line, a human may reorder
+
+Aaron's review asked for both: he can rearrange the queue himself, and an agent that wants to cut in line is allowed to.
+
+- **Agent cut-in.** `iris_dogfood_claim` takes an optional `position` (1-based). With no `position`, the claimant is appended (FIFO). With one, it is inserted at that position, clamped to `[1, queue_length + 1]`, and everyone at or after that position moves back one. An already-queued agent calling claim with a `position` moves itself. No justification is required. Iris trusts the agent, and the cut is recorded in lease history and shown in `iris_status`, so a human can see it and reverse it.
+- **Human reorder.** A new `iris_dogfood_queue_move` verb (`iris dogfood queue-move <task> <position>` on the CLI) moves any queued task to any position. It resolves the repo like `iris_status` (`task_id` or `path`), so the CLI works without a task.
+- **Messages after a reorder.** Tasks whose position changed are not messaged. They see their new position on their next claim poll. Messaging every shuffle would spam agents.
+- **The holder is untouched.** Cutting in line or reordering never affects the holder. Only the queue is reordered, and position 1 is next in line, not the holder.
+- **Alternative rejected:** priority classes. They add policy without buying anything over explicit positions.
+
+### D1b. Callers can always see the holder and who is ahead
+
+Every response that tells a caller it doesn't have the lease (`claim` → queued, the `set_dogfood` lease refusal, the `renew` refusal) includes:
+
+- `holder` as `{task_id, task_name}`. `task_name` is the argus task name, captured from `GET /api/tasks/{id}` at claim time and refreshed on each liveness check.
+- `ahead`, the ordered list of `{task_id, task_name, position}` for every queued task in front of the caller.
+
+For a caller that isn't queued (a set_dogfood refusal before any claim), `ahead` is the whole queue, because that is who it would wait behind if it claimed now.
 
 ### D2. Messaging goes through argus pane delivery, and agents reply through iris verbs
 
@@ -88,8 +108,8 @@ The timers are the warmer `W`, the grace `G` and the idle-release window `I`. Th
 1. **Claim.**
    - Lease free: grant, set `last_contact_at = now`, and message the grant.
    - Caller already holds the lease: count it as contact and return granted.
-   - Caller already queued: return the current position, with no new check-in.
-   - Otherwise: first run the liveness check on the holder (D5). If the holder is dead, release it and re-evaluate, so the claimant may be granted on the spot. If not, append the claimant to the queue and **trigger an immediate check-in** on the holder, unless a check-in is already outstanding.
+   - Caller already queued: return the current position (after moving it, if it passed a `position`), with no new check-in.
+   - Otherwise: first run the liveness check on the holder (D5). If the holder is dead, release it and re-evaluate, so the claimant may be granted on the spot. If not, insert the claimant into the queue (at the end, or at its requested `position`, D1a) and **trigger an immediate check-in** on the holder, unless a check-in is already outstanding.
 2. **Warmer.** When `now ≥ last_contact_at + W` and no check-in is outstanding, run the liveness check (dead → release), then send a check-in and record `checkin_sent_at`.
 3. **Silence with waiters.** The queue is non-empty, a check-in is outstanding, and there has been no contact for `G` since `checkin_sent_at`. Run the liveness check:
    - Dead: release immediately.
