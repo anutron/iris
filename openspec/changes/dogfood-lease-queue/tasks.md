@@ -7,16 +7,16 @@
 
 ## 2. Argus client (TDD: httptest fakes first)
 
-- [ ] 2.1 `internal/argus/bridge.go`: `GetBridge(ctx, taskID)` returning `{Live, Busy, NeedsInput, LastEventAt, LastHeartbeatAt}`; a 404 maps to a typed "no bridge" result.
-- [ ] 2.2 Extend `argus.Task` with `Archived bool`; confirm a 404 from `GetTask` is detectable as "task gone".
-- [ ] 2.3 `internal/argus/notify.go`: `Notify(ctx, taskID, text, deliveryID, deadline)` (POST `/api/tasks/{id}/notify`, `submit: true`) and `CancelNotify(ctx, taskID, deliveryID)` (DELETE).
-- [ ] 2.4 Liveness classifier: (task, bridge, errors) → dead | busy | silent | unknown-no-bridge | unknown-unreachable, with a table test covering every row of design D5.
+- [x] 2.1 `internal/argus/bridge.go`: `GetBridge(ctx, taskID)` returning `{Live, Busy, NeedsInput, LastEventAt, LastHeartbeatAt}`; a 404 maps to a typed "no bridge" result.
+- [x] 2.2 Extend `argus.Task` with `Archived bool`; confirm a 404 from `GetTask` is detectable as "task gone".
+- [x] 2.3 `internal/argus/notify.go`: `Notify(ctx, taskID, text, deliveryID, deadline)` (POST `/api/tasks/{id}/notify`, `submit: true`) and `CancelNotify(ctx, taskID, deliveryID)` (DELETE).
+- [x] 2.4 Liveness classifier: (task, bridge, errors) → dead | busy | silent | unknown-no-bridge | unknown-unreachable, with a table test covering every row of design D5.
 
 ## 3. Lease state and persistence (TDD)
 
-- [ ] 3.1 `internal/verbs/dogfood_lease.go`: the lease struct (holder, queue, history ≤ 20), load and save of `dogfood-lease.json` in `SourceRepoStateDir` with temp-file-then-rename, and a per-source-repo lease mutex separate from the git mutex.
-- [ ] 3.2 Timer config: parse `[dogfood_lease]` from the merged overlay (plus the bootstrap read of `.iris.local.toml`), apply defaults 600/30/1800, and fall back to defaults on invalid values with a warning.
-- [ ] 3.3 State machine as pure functions over (state, now, liveness, config) → (new state, messages to send, deliveries to cancel). Tests use an injected clock and cover:
+- [x] 3.1 `internal/verbs/dogfood_lease.go`: the lease struct (holder, queue, history ≤ 20), load and save of `dogfood-lease.json` in `SourceRepoStateDir` with temp-file-then-rename, and a per-source-repo lease mutex separate from the git mutex.
+- [x] 3.2 Timer config: parse `[dogfood_lease]` from the merged overlay (plus the bootstrap read of `.iris.local.toml`), apply defaults 600/30/1800, and fall back to defaults on invalid values with a warning.
+- [x] 3.3 State machine as pure functions over (state, now, liveness, config) → (new state, messages to send, deliveries to cancel). Tests use an injected clock and cover:
   - grant, queue, poll and re-claim
   - cut-in `position` (insert, self-move, clamp) and queue-move (reorder, refuse the holder or an unqueued task)
   - `ahead` lists for queued callers and for unqueued refused callers
@@ -29,39 +29,39 @@
   - in-flight set_dogfood defers releases
   - an undelivered check-in doesn't count as silence
   - the overdue check-in when a waiter joins
-- [ ] 3.4 Restart handling: on load, push out `release_at` and outstanding check-in windows to startup + grace; leave `last_contact_at` unchanged. Test with a persisted file and an advanced clock.
+- [x] 3.4 Restart handling: on load, push out `release_at` and outstanding check-in windows to startup + grace; leave `last_contact_at` unchanged. Test with a persisted file and an advanced clock.
 
 ## 4. Verbs, handlers, CLI
 
-- [ ] 4.1 `DogfoodClaim` (with the `wait_seconds` long-poll, default 0, clamp 0–25; optional cut-in `position`; `holder` and `ahead` in the result), `DogfoodQueueMove`, `DogfoodRenew`, `DogfoodRelease`, `DogfoodForceRelease` (requires `reason`; works when argus is unreachable).
-- [ ] 4.2 MCP handlers `iris_dogfood_claim` / `_renew` / `_release` / `_force_release` / `_queue_move` and their schemas in `internal/daemon/run.go`.
-- [ ] 4.3 CLI: `iris dogfood claim|renew|release|force-release|queue-move`.
-- [ ] 4.4 Lease scheduler goroutine in the daemon: at startup, scan `repos/*/dogfood-lease.json`; tick every ≤ 5s; evaluate each lease under its mutex; send and cancel notify deliveries; persist; stop cleanly on shutdown.
+- [x] 4.1 `DogfoodClaim` (with the `wait_seconds` long-poll, default 0, clamp 0–25; optional cut-in `position`; `holder` and `ahead` in the result), `DogfoodQueueMove`, `DogfoodRenew`, `DogfoodRelease`, `DogfoodForceRelease` (requires `reason`; works when argus is unreachable).
+- [x] 4.2 MCP handlers `iris_dogfood_claim` / `_renew` / `_release` / `_force_release` / `_queue_move` and their schemas in `internal/daemon/run.go`.
+- [x] 4.3 CLI: `iris dogfood claim|renew|release|force-release|queue-move`.
+- [x] 4.4 Lease scheduler goroutine in the daemon: at startup, scan `repos/*/dogfood-lease.json`; tick every ≤ 5s; evaluate each lease under its mutex; send and cancel notify deliveries; persist; stop cleanly on shutdown.
 
 ## 5. Integrations
 
-- [ ] 5.1 `set_dogfood.go`: add `SetDogfoodOpts.LeaseOverride`. Add the lease gate after the reachability check and before the ancestry check. Record contact at start and finish, mark the call in flight, add the `LEASE OVERRIDE:` warning first, and message the holder. Tests:
+- [x] 5.1 `set_dogfood.go`: add `SetDogfoodOpts.LeaseOverride`. Add the lease gate after the reachability check and before the ancestry check. Record contact at start and finish, mark the call in flight, add the `LEASE OVERRIDE:` warning first, and message the holder. Tests:
   - a non-holder is refused with no side effects; the error and its structured fields carry `holder` (with argus task name), `ahead`, and `position`
   - a free lease still requires a claim
   - the holder deploys
   - an override warns and notifies the holder
   - `force` and `lease_override` are independent in both directions
   - a no-task_id CLI call needs the override
-- [ ] 5.2 `handler_set_dogfood.go`, `cmd/iris/set_dogfood.go` (`--lease-override`), and the tool schema and description in `run.go`.
-- [ ] 5.3 `ship_feature.go`: the recompose checks the lease. When the lease is free or held by the shipper, recompose as an internal caller. Otherwise skip with a `recompose_skipped` warning and message the holder. Tests for all three cases.
-- [ ] 5.4 `status.go`: the `dogfood_lease` field (holder, queue, timers, history, warnings); read-only, and tolerant of a malformed file. Tests.
-- [ ] 5.5 `internal/config`: the `[dogfood_lease]` block, tagged `local`, with validation (`grace < warmer <= idle_release`, all positive) in `iris:validate_config`. Tests.
+- [x] 5.2 `handler_set_dogfood.go`, `cmd/iris/set_dogfood.go` (`--lease-override`), and the tool schema and description in `run.go`.
+- [x] 5.3 `ship_feature.go`: the recompose checks the lease. When the lease is free or held by the shipper, recompose as an internal caller. Otherwise skip with a `recompose_skipped` warning and message the holder. Tests for all three cases.
+- [x] 5.4 `status.go`: the `dogfood_lease` field (holder, queue, timers, history, warnings); read-only, and tolerant of a malformed file. Tests.
+- [x] 5.5 `internal/config`: the `[dogfood_lease]` block, tagged `local`, with validation (`grace < warmer <= idle_release`, all positive) in `iris:validate_config`. Tests.
 
 ## 6. Agent-facing docs
 
-- [ ] 6.1 `claude/skills/iris/SKILL.md`:
+- [x] 6.1 `claude/skills/iris/SKILL.md`:
   - teach `iris_dogfood_claim` → `iris_set_dogfood` → `iris_dogfood_release`
   - answer `[iris]` check-ins with `iris_dogfood_renew`
   - explain the difference between `lease_override` and `force`
-- [ ] 6.2 Update the `iris_set_dogfood` tool description to say the lease is required.
+- [x] 6.2 Update the `iris_set_dogfood` tool description to say the lease is required.
 
 ## 7. Validation
 
-- [ ] 7.1 `gofmt`, `go build ./...`, `go vet ./...`, `go test ./...` green.
-- [ ] 7.2 `openspec validate dogfood-lease-queue --strict` and `openspec validate --all --strict` clean.
+- [x] 7.1 `gofmt`, `go build ./...`, `go vet ./...`, `go test ./...` green.
+- [x] 7.2 `openspec validate dogfood-lease-queue --strict` and `openspec validate --all --strict` clean.
 - [ ] 7.3 Dogfood it on iris itself: two argus tasks claim, one is queued and receives the hand-off message, and `iris_status` shows the queue.
