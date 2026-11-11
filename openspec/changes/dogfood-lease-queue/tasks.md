@@ -3,7 +3,7 @@
 - [x] 1.1 `iris-dogfood-lease` delta (new capability): lease and ordered queue (FIFO by default, with cut-in `position` and human reorder); claim, renew, release, force-release and queue-move verbs; `holder` and `ahead` visibility; warmer, silence and idle timers; liveness rules; pane-delivery messaging; persistence; timer config.
 - [x] 1.2 `iris-set-dogfood` delta: ADDED "Dogfood lease gate" requirement with the `lease_override` input, kept separate from `force`.
 - [x] 1.3 `iris-status`, `iris-ship-feature`, `iris-validate-config` deltas: the lease field, the recompose skip, and `[dogfood_lease]` validation.
-- [ ] 1.4 Resolve design.md Open Questions (a)–(e) with Aaron; update the deltas if any recommendation is overridden.
+- [x] 1.4 Resolve design.md Open Questions (a)–(e) with Aaron: approved in Plannotator review round 2 with the recommendations as written.
 
 ## 2. Argus client (TDD: httptest fakes first)
 
