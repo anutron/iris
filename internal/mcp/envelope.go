@@ -38,3 +38,14 @@ func ErrorResponse(message string) Response {
 		IsError: true,
 	}
 }
+
+// ErrorResponseWithFields builds an error response whose first block is the
+// human-readable message and whose second block is a JSON object of structured
+// fields, so an agent need not parse the text.
+func ErrorResponseWithFields(message string, fields any) Response {
+	resp := ErrorResponse(message)
+	if b, err := json.Marshal(fields); err == nil {
+		resp.Content = append(resp.Content, ContentBlock{Type: "text", Text: string(b)})
+	}
+	return resp
+}

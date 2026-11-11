@@ -16,6 +16,7 @@ func newSetDogfoodCmd() *cobra.Command {
 	var sha string
 	var manifest string
 	var force bool
+	var leaseOverride bool
 	cmd := &cobra.Command{
 		Use:   "set-dogfood",
 		Short: "Point the dogfood branch at a SHA, record a manifest, and reload",
@@ -30,6 +31,11 @@ declare dogfood_branch.
 Refuses a --sha that is not a descendant of the current dogfood_branch SHA
 (it would silently drop commits) unless --force is passed.
 
+Requires the dogfood lease: the --task must hold it (iris dogfood claim). A
+call with no --task can never hold the lease, so it needs --lease-override.
+--lease-override bypasses ONLY the lease; --force bypasses ONLY the
+commit-dropping guard. Neither implies the other.
+
 --manifest accepts either a path to a JSON file or an inline JSON string (one
 that begins with '{').`,
 		Args: cobra.NoArgs,
@@ -43,9 +49,10 @@ that begins with '{').`,
 				return fmt.Errorf("argus client required for set-dogfood: %w", err)
 			}
 			result, err := verbs.SetDogfood(cmd.Context(), client, taskID, verbs.SetDogfoodOpts{
-				Sha:      sha,
-				Manifest: m,
-				Force:    force,
+				Sha:           sha,
+				Manifest:      m,
+				Force:         force,
+				LeaseOverride: leaseOverride,
 			})
 			if result != nil {
 				body, _ := json.MarshalIndent(result, "", "  ")
@@ -58,6 +65,7 @@ that begins with '{').`,
 	cmd.Flags().StringVar(&sha, "sha", "", "full commit SHA to point the dogfood branch at (required)")
 	cmd.Flags().StringVar(&manifest, "manifest", "", "manifest as a JSON file path or inline JSON string (required)")
 	cmd.Flags().BoolVar(&force, "force", false, "override the commit-dropping ancestry refusal (deploy a --sha that is not a descendant of the current dogfood SHA, dropping commits, with a warning)")
+	cmd.Flags().BoolVar(&leaseOverride, "lease-override", false, "deploy even though --task does not hold the dogfood lease (loud LEASE OVERRIDE warning; the holder is notified). Distinct from --force")
 	_ = cmd.MarkFlagRequired("sha")
 	_ = cmd.MarkFlagRequired("manifest")
 	return cmd

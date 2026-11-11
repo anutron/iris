@@ -488,17 +488,38 @@ func TestTickLease_SilenceHandsOverEndToEnd(t *testing.T) {
 	}
 }
 
-func TestTickLease_FreeLeaseUnregisters(t *testing.T) {
-	src, _, _, _, c := leaseFixture(t, "lv-free")
+func TestActiveLeaseRepos_ListsOnlyHeldOrQueued(t *testing.T) {
+	src, _, _, _, c := leaseFixture(t, "lv-active")
 	canon := canonicalize(src)
+	if got := ActiveLeaseRepos(); len(got) != 0 {
+		t.Fatalf("nothing claimed yet: %v", got)
+	}
 	claim(t, c, "A", 0)
-	if _, ok := leaseRegistry.Load(canon); !ok {
-		t.Fatal("a held lease must be registered with the scheduler")
+	if got := ActiveLeaseRepos(); len(got) != 1 || got[0] != canon {
+		t.Fatalf("held lease must be discovered (even one made by another process): %v", got)
 	}
 	_, _ = DogfoodRelease(context.Background(), c, "A")
-	_ = TickLease(context.Background(), c, canon)
-	if _, ok := leaseRegistry.Load(canon); ok {
-		t.Fatal("a free lease should drop out of the scheduler")
+	if got := ActiveLeaseRepos(); len(got) != 0 {
+		t.Fatalf("a free lease drops out: %v", got)
+	}
+}
+
+func TestLockLease_SerializesAcrossHolders(t *testing.T) {
+	setAuditDir(t)
+	src := t.TempDir()
+	unlock := lockLease(src)
+	got := make(chan struct{})
+	go func() { u := lockLease(src); u(); close(got) }()
+	select {
+	case <-got:
+		t.Fatal("second lock acquired while the first was held")
+	case <-time.After(100 * time.Millisecond):
+	}
+	unlock()
+	select {
+	case <-got:
+	case <-time.After(5 * time.Second):
+		t.Fatal("second lock never acquired after unlock")
 	}
 }
 
@@ -510,13 +531,9 @@ func TestStartupScanLeases_RestartDoesNotReleaseAndKeepsContact(t *testing.T) {
 	ageLease(t, canon, 40*time.Second) // reply window long gone
 	st, _ := loadLease(canon)
 	contact := st.Holder.LastContactAt
-	leaseRegistry.Delete(canon)
 
 	startup := time.Now().UTC()
 	StartupScanLeases(context.Background(), startup)
-	if _, ok := leaseRegistry.Load(canon); !ok {
-		t.Fatal("scan should register the persisted lease")
-	}
 	st, _ = loadLease(canon)
 	if !st.Holder.LastContactAt.Equal(contact) {
 		t.Fatal("last_contact_at must not change")

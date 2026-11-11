@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/anutron/iris/internal/argus"
@@ -124,11 +125,33 @@ func saveLease(sourceRepo string, st *LeaseState) error {
 
 var leaseLocks sync.Map
 
-func lockLease(sourceRepo string) *sync.Mutex {
+// lockLease takes the repo's lease lock and returns its unlock func. It is an
+// in-process mutex plus an flock on a sibling lock file, because CLI commands
+// (iris dogfood ...) run in a different process from the daemon scheduler and
+// both read-modify-write dogfood-lease.json.
+func lockLease(sourceRepo string) func() {
 	m, _ := leaseLocks.LoadOrStore(sourceRepo, &sync.Mutex{})
 	mu := m.(*sync.Mutex)
 	mu.Lock()
-	return mu
+	var lockFile *os.File
+	if p, err := leasePath(sourceRepo); err == nil {
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err == nil {
+			if f, err := os.OpenFile(p+".lock", os.O_CREATE|os.O_RDWR, 0o644); err == nil {
+				if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err == nil {
+					lockFile = f
+				} else {
+					f.Close()
+				}
+			}
+		}
+	}
+	return func() {
+		if lockFile != nil {
+			_ = syscall.Flock(int(lockFile.Fd()), syscall.LOCK_UN)
+			lockFile.Close()
+		}
+		mu.Unlock()
+	}
 }
 
 // ---- per-repo in-memory diagnostics (liveness / delivery errors) ----------
@@ -227,8 +250,8 @@ func resolveLeaseRepo(ctx context.Context, sourceRepo string) (*leaseRepo, error
 // contact can never race a stale check-in onto the wire. Errors from argus
 // delivery never fail the operation; they land in the returned warnings.
 func withLease(ctx context.Context, client *argus.Client, lr *leaseRepo, fn func(m *leaseMachine)) ([]string, error) {
-	mu := lockLease(lr.SourceRepo)
-	defer mu.Unlock()
+	unlock := lockLease(lr.SourceRepo)
+	defer unlock()
 
 	st, err := loadLease(lr.SourceRepo)
 	if err != nil {
@@ -270,9 +293,6 @@ func withLease(ctx context.Context, client *argus.Client, lr *leaseRepo, fn func
 		if err := saveLease(lr.SourceRepo, st); err != nil {
 			return warnings, fmt.Errorf("persist dogfood lease: %w", err)
 		}
-	}
-	if st.Holder != nil || len(st.Queue) > 0 {
-		registerLease(lr.SourceRepo)
 	}
 	return warnings, nil
 }
@@ -321,60 +341,62 @@ func deliverLeaseEffects(ctx context.Context, client *argus.Client, lr *leaseRep
 	return warnings
 }
 
-// ---- scheduler registry & loop --------------------------------------------
+// ---- scheduler ------------------------------------------------------------------
 
-var leaseRegistry sync.Map // sourceRepo → struct{}
+// leaseStateFiles lists every persisted lease file under the audit dir.
+func leaseStateFiles() []string {
+	base, err := AuditDir()
+	if err != nil {
+		return nil
+	}
+	matches, _ := filepath.Glob(filepath.Join(base, "repos", "*", LeaseFilename))
+	return matches
+}
 
-func registerLease(sourceRepo string) { leaseRegistry.Store(sourceRepo, struct{}{}) }
+// ActiveLeaseRepos returns the source repos whose persisted lease has a holder
+// or a queue. The scheduler discovers leases this way (rather than from an
+// in-memory registry) so a claim made by a CLI process is ticked too.
+func ActiveLeaseRepos() []string {
+	var out []string
+	for _, p := range leaseStateFiles() {
+		st, err := readLeaseFile(p)
+		if err != nil || st.SourceRepo == "" || (st.Holder == nil && len(st.Queue) == 0) {
+			continue
+		}
+		out = append(out, st.SourceRepo)
+	}
+	return out
+}
 
-// TickLease evaluates one repo's lease timers. Idempotent and cheap when the
-// lease is free (it unregisters itself).
+// TickLease evaluates one repo's lease timers. Cheap when the lease is free.
 func TickLease(ctx context.Context, client *argus.Client, sourceRepo string) error {
 	lr, err := resolveLeaseRepo(ctx, sourceRepo)
 	if err != nil {
 		return err
 	}
-	var free bool
-	_, err = withLease(ctx, client, lr, func(m *leaseMachine) {
-		m.Tick()
-		free = m.st.Holder == nil && len(m.st.Queue) == 0
-	})
-	if err == nil && free {
-		leaseRegistry.Delete(sourceRepo)
-	}
+	_, err = withLease(ctx, client, lr, func(m *leaseMachine) { m.Tick() })
 	return err
 }
 
-// StartupScanLeases loads every persisted lease that has a holder or queue,
-// applies restart recovery (D4) and registers it with the scheduler.
+// StartupScanLeases applies restart recovery (D4) to every persisted lease
+// that has a holder or queue: an iris restart never counts as holder silence.
 func StartupScanLeases(ctx context.Context, now time.Time) {
-	base, err := AuditDir()
-	if err != nil {
-		return
-	}
-	matches, _ := filepath.Glob(filepath.Join(base, "repos", "*", LeaseFilename))
-	for _, p := range matches {
-		st, err := readLeaseFile(p)
-		if err != nil || st.SourceRepo == "" || (st.Holder == nil && len(st.Queue) == 0) {
-			continue
-		}
-		src := st.SourceRepo
+	for _, src := range ActiveLeaseRepos() {
 		timers := config.DefaultDogfoodLeaseTimers()
 		if lr, err := resolveLeaseRepo(ctx, src); err == nil {
 			timers = lr.Timers
 		}
-		mu := lockLease(src)
+		unlock := lockLease(src)
 		if cur, err := loadLease(src); err == nil {
 			RecoverLeaseAfterRestart(cur, now, timers)
 			_ = saveLease(src, cur)
 		}
-		mu.Unlock()
-		registerLease(src)
+		unlock()
 	}
 }
 
 // RunLeaseScheduler runs the lease scheduler until ctx is cancelled: a startup
-// scan, then a tick over every registered lease each interval.
+// recovery scan, then a tick over every active lease each interval.
 func RunLeaseScheduler(ctx context.Context, client *argus.Client, interval time.Duration) {
 	if interval <= 0 {
 		interval = 5 * time.Second
@@ -387,13 +409,12 @@ func RunLeaseScheduler(ctx context.Context, client *argus.Client, interval time.
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			leaseRegistry.Range(func(k, _ any) bool {
+			for _, src := range ActiveLeaseRepos() {
 				if ctx.Err() != nil {
-					return false
+					return
 				}
-				_ = TickLease(ctx, client, k.(string))
-				return true
-			})
+				_ = TickLease(ctx, client, src)
+			}
 		}
 	}
 }

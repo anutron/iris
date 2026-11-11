@@ -46,6 +46,7 @@ func newRootCmd() *cobra.Command {
 	root.AddCommand(newTagCmd())
 	root.AddCommand(newReloadCmd())
 	root.AddCommand(newSetDogfoodCmd())
+	root.AddCommand(newDogfoodCmd())
 	root.AddCommand(newSetLocalConfigCmd())
 	root.AddCommand(newShipFeatureCmd())
 	root.AddCommand(newPublishCmd())
