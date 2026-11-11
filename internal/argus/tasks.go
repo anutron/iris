@@ -14,6 +14,7 @@ type Task struct {
 	Status       string `json:"status"`
 	WorktreePath string `json:"worktree_path"`
 	Branch       string `json:"branch"`
+	Archived     bool   `json:"archived"`
 }
 
 // listTasksResponse mirrors argus's GET /api/tasks envelope, modelled on

@@ -15,6 +15,7 @@ import (
 	"github.com/anutron/iris/internal/config"
 	"github.com/anutron/iris/internal/hostexec"
 	"github.com/anutron/iris/internal/mcp"
+	"github.com/anutron/iris/internal/verbs"
 )
 
 // Daemon bundles every running component so callers (tests) can poke at
@@ -27,6 +28,9 @@ type Daemon struct {
 	MCPServer *mcp.Server
 	Registrar *mcp.Registrar
 	Watcher   *argus.Watcher
+
+	leaseCancel context.CancelFunc
+	leaseDone   chan struct{}
 }
 
 // Start brings every subsystem up and returns the live Daemon.
@@ -88,6 +92,11 @@ func Start(ctx context.Context, cfg *config.Config, log *slog.Logger) (*Daemon, 
 	mcpSrv.RegisterHandler("iris_run_checks", mcp.NewRunChecksHandler(client, runs))
 	mcpSrv.RegisterHandler("iris_run_result", mcp.NewRunResultHandler(runs))
 	mcpSrv.RegisterHandler("iris_set_dogfood", mcp.NewSetDogfoodHandler(client))
+	mcpSrv.RegisterHandler("iris_dogfood_claim", mcp.NewDogfoodClaimHandler(client))
+	mcpSrv.RegisterHandler("iris_dogfood_renew", mcp.NewDogfoodRenewHandler(client))
+	mcpSrv.RegisterHandler("iris_dogfood_release", mcp.NewDogfoodReleaseHandler(client))
+	mcpSrv.RegisterHandler("iris_dogfood_force_release", mcp.NewDogfoodForceReleaseHandler(client))
+	mcpSrv.RegisterHandler("iris_dogfood_queue_move", mcp.NewDogfoodQueueMoveHandler(client))
 	mcpSrv.RegisterHandler("iris_set_local_config", mcp.NewSetLocalConfigHandler(client))
 	mcpSrv.RegisterHandler("iris_ship_feature", mcp.NewShipFeatureHandler(client))
 	mcpSrv.RegisterHandler("iris_complete_task", mcp.NewCompleteTaskHandler(client))
@@ -134,9 +143,18 @@ func Start(ctx context.Context, cfg *config.Config, log *slog.Logger) (*Daemon, 
 		"state_dir", cfg.StateDir,
 	)
 
+	// Dogfood lease scheduler: startup recovery scan, then a tick every 5s.
+	leaseCtx, leaseCancel := context.WithCancel(ctx)
+	leaseDone := make(chan struct{})
+	go func() {
+		defer close(leaseDone)
+		verbs.RunLeaseScheduler(leaseCtx, client, 5*time.Second)
+	}()
+
 	return &Daemon{
 		Cfg: cfg, Log: log, Argus: client, Ports: ports,
 		MCPServer: mcpSrv, Registrar: registrar, Watcher: watcher,
+		leaseCancel: leaseCancel, leaseDone: leaseDone,
 	}, nil
 }
 
@@ -152,6 +170,14 @@ func (d *Daemon) Stop(ctx context.Context) {
 
 	shutdownCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
+
+	if d.leaseCancel != nil {
+		d.leaseCancel()
+		select {
+		case <-d.leaseDone:
+		case <-shutdownCtx.Done():
+		}
+	}
 
 	var wg sync.WaitGroup
 	if d.Watcher != nil {
@@ -370,13 +396,14 @@ func toolDefinitions() []mcp.ToolDefinition {
 		},
 		{
 			Name:        "iris_set_dogfood",
-			Description: "Atomically point the configured dogfood branch at a worker-composed commit SHA, persist a structured manifest of what that SHA contains, and rebuild/restart the service via the existing reload machinery. Iris does NOT compose — the agent builds the SHA (cherry-pick/merge/rebase, conflict resolution) and hands iris the finished commit. Refuses any repo whose .iris.toml does not declare `dogfood_branch`. Refuses a sha that is NOT a descendant of the current dogfood SHA (it would drop commits) unless force=true, which proceeds with a warning. The ref move is worktree-guarded: `git branch -f` normally, but `git reset --hard` in the worktree when the dogfood branch is checked out. Writes the manifest before moving the ref (durable-first); a reset failure leaves the manifest ahead, surfaced as drift by iris_status. Returns previous_sha (\"\" when the branch was newly created), new_sha, and the reload result.",
+			Description: "Atomically point the configured dogfood branch at a worker-composed commit SHA, persist a structured manifest of what that SHA contains, and rebuild/restart the service via the existing reload machinery. Iris does NOT compose — the agent builds the SHA (cherry-pick/merge/rebase, conflict resolution) and hands iris the finished commit. REQUIRES THE DOGFOOD LEASE: call iris_dogfood_claim first (and iris_dogfood_release when done); a caller that does not hold the lease is refused with the holder, everyone ahead of it, and its own queue position (also as structured fields holder/ahead/position), unless lease_override=true. lease_override bypasses ONLY the lease and force bypasses ONLY the commit-dropping guard — neither implies the other. A holder's call counts as lease contact (resets the check-in timer) at start and finish. Refuses any repo whose .iris.toml does not declare `dogfood_branch`. Refuses a sha that is NOT a descendant of the current dogfood SHA (it would drop commits) unless force=true, which proceeds with a warning. The ref move is worktree-guarded: `git branch -f` normally, but `git reset --hard` in the worktree when the dogfood branch is checked out. Writes the manifest before moving the ref (durable-first); a reset failure leaves the manifest ahead, surfaced as drift by iris_status. Returns previous_sha (\"\" when the branch was newly created), new_sha, and the reload result.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"task_id": map[string]any{"type": "string", "description": "(optional) Argus task ID. Iris resolves the source repo from this; omit for self-target (iris-on-iris)."},
-					"sha":     map[string]any{"type": "string", "description": "Full commit SHA to point the dogfood branch at. MUST be reachable in the source repo's object database."},
-					"force":   map[string]any{"type": "boolean", "description": "(optional, default false) Override the commit-dropping ancestry guard. When the sha is NOT a descendant of the current dogfood SHA, set_dogfood refuses (deploying it would drop commits) unless force is true, in which case it proceeds and emits a prominent warning. Iris never recomposes on your behalf — recompose onto the current dogfood SHA or pass force to intentionally drop."},
+					"task_id":        map[string]any{"type": "string", "description": "(optional) Argus task ID. Iris resolves the source repo from this; omit for self-target (iris-on-iris)."},
+					"sha":            map[string]any{"type": "string", "description": "Full commit SHA to point the dogfood branch at. MUST be reachable in the source repo's object database."},
+					"lease_override": map[string]any{"type": "boolean", "description": "(optional, default false) Deploy even though you do not hold the dogfood lease. DISTINCT from force: it relaxes only the lease gate. Puts a `LEASE OVERRIDE:` warning first in warnings and messages the current holder that its dogfood tree was replaced; the holder keeps the lease and the queue is untouched. A call with no task_id (CLI / iris-on-iris) can never hold the lease and so needs this. Prefer iris_dogfood_claim."},
+					"force":          map[string]any{"type": "boolean", "description": "(optional, default false) Override the commit-dropping ancestry guard. When the sha is NOT a descendant of the current dogfood SHA, set_dogfood refuses (deploying it would drop commits) unless force is true, in which case it proceeds and emits a prominent warning. Iris never recomposes on your behalf — recompose onto the current dogfood SHA or pass force to intentionally drop."},
 					"manifest": map[string]any{
 						"type":        "object",
 						"description": "Structured record of what composes the SHA. Descriptive only — iris does not validate that layered SHAs are reachable from `sha`.",
@@ -585,8 +612,66 @@ func toolDefinitions() []mcp.ToolDefinition {
 			},
 		},
 		{
+			Name:        "iris_dogfood_claim",
+			Description: "Claim the dogfood lease for the caller's source repo, or join its queue. The lease is required by iris_set_dogfood: one holder at a time, plus an ordered queue (FIFO by default). Result: status granted|queued, holder {task_id, task_name}, position (0 when granted), ahead [{task_id, task_name, position}], queue_length, next_checkin_at, message. A queued claimant is messaged in its session when the lease is granted; call this again to poll (re-claiming while queued never re-queues or re-pings the holder). Use position to cut in line (1-based, clamped; moves you if already queued; never affects the holder). wait_seconds long-polls up to 25s for a grant. If you are granted, iris will periodically message `[iris] Still using dogfood?` — answer by calling iris_dogfood_renew (yes) or iris_dogfood_release (done). A holder that is dead or finished is released at once; one that is merely quiet is released only when someone is waiting and it stays silent through the check-in and a final warning.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"task_id":      map[string]any{"type": "string", "description": "The claiming argus task ID. Iris resolves the source repo from this."},
+					"wait_seconds": map[string]any{"type": "integer", "minimum": 0, "maximum": 25, "default": 0, "description": "(optional) Seconds to wait for a grant before returning. Clamped to 0-25."},
+					"position":     map[string]any{"type": "integer", "minimum": 1, "description": "(optional) Cut in line: 1-based queue position, clamped to the queue length + 1. Omit to append (FIFO)."},
+				},
+				"required": []string{"task_id"},
+			},
+		},
+		{
+			Name:        "iris_dogfood_renew",
+			Description: "Holder's reply to an `[iris] Still using dogfood?` check-in (yes): records lease contact, restarts the check-in timer, clears any outstanding check-in/final warning/scheduled release and cancels undelivered iris messages. Returns {renewed: true, next_checkin_at}. A caller that does not hold the lease is refused with the holder, its queue position and everyone ahead of it (also structured).",
+			InputSchema: map[string]any{
+				"type":       "object",
+				"properties": map[string]any{"task_id": map[string]any{"type": "string", "description": "The holder's argus task ID."}},
+				"required":   []string{"task_id"},
+			},
+		},
+		{
+			Name:        "iris_dogfood_release",
+			Description: "Release the dogfood lease (you are done testing) or leave the queue. The lease is granted to the next live queued task, which is messaged. Returns {released, was: holder|queued|none, granted_to?}. A no-op success when you neither hold the lease nor are queued.",
+			InputSchema: map[string]any{
+				"type":       "object",
+				"properties": map[string]any{"task_id": map[string]any{"type": "string", "description": "The releasing argus task ID."}},
+				"required":   []string{"task_id"},
+			},
+		},
+		{
+			Name:        "iris_dogfood_force_release",
+			Description: "Human/coordinator override for a stuck holder: release the current holder whatever its liveness or in-flight state, record the required reason in lease history, message the evicted holder with it, and grant the lease to the next live queued task. Works even when argus is unreachable (messaging is then skipped with a warning). task_id and path are mutually exclusive; both omitted targets iris itself.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"task_id": map[string]any{"type": "string", "description": "(optional) Argus task ID identifying the source repo. Omit for self-target."},
+					"path":    map[string]any{"type": "string", "description": "(optional) Absolute filesystem path of the source repo."},
+					"reason":  map[string]any{"type": "string", "description": "Why the holder is being evicted. Required; shown to the evicted holder and recorded in lease history."},
+				},
+				"required": []string{"reason"},
+			},
+		},
+		{
+			Name:        "iris_dogfood_queue_move",
+			Description: "Reorder the dogfood lease queue: move a queued task to a position (1-based, clamped to the queue length). The holder is never affected and tasks whose position changed are not messaged — they see the new position on their next claim. The holder (or any unqueued task) is refused. Returns the new queue as ordered {task_id, task_name, position}. task_id and path are mutually exclusive; both omitted targets iris itself.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"task_id":      map[string]any{"type": "string", "description": "(optional) Argus task ID identifying the source repo. Omit for self-target."},
+					"path":         map[string]any{"type": "string", "description": "(optional) Absolute filesystem path of the source repo."},
+					"move_task_id": map[string]any{"type": "string", "description": "The queued task to move."},
+					"position":     map[string]any{"type": "integer", "minimum": 1, "description": "Its new 1-based position."},
+				},
+				"required": []string{"move_task_id", "position"},
+			},
+		},
+		{
 			Name:        "iris_status",
-			Description: "For one managed system, report the parsed `.iris.toml`, current git state (HEAD, branch, default branch, origin SHA, working-tree-clean), the matching argus task when iris can find one whose worktree_path equals the resolved source repo (`argus_task`, null otherwise), and the most recent reload outcome from the audit log. A missing `.iris.toml` is silent (`config: null`, no warning); parse errors still surface as warnings. No side effects. task_id and path are mutually exclusive; both omitted targets iris itself.",
+			Description: "For one managed system, report the parsed `.iris.toml`, current git state (HEAD, branch, default branch, origin SHA, working-tree-clean), the matching argus task when iris can find one whose worktree_path equals the resolved source repo (`argus_task`, null otherwise), the most recent reload outcome from the audit log, and `dogfood_lease` (holder, ordered queue, effective timers, history, warnings; null when the repo has no dogfood_branch; read-only, never drives the lease timers). A missing `.iris.toml` is silent (`config: null`, no warning); parse errors still surface as warnings. No side effects. task_id and path are mutually exclusive; both omitted targets iris itself.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{

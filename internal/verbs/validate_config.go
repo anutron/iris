@@ -86,7 +86,11 @@ func ValidateConfig(ctx context.Context, client *argus.Client, in ValidateConfig
 		Warnings: overlay.Warnings,
 	}
 	if result.Valid && overlay.Doc != nil {
-		result.Resolved = overlay.Doc
+		// Report effective lease timers (defaults filled in) on a copy so the
+		// loaded doc is untouched.
+		resolved := *overlay.Doc
+		resolved.DogfoodLease = overlay.Doc.DogfoodLeaseTimers().EffectiveBlock()
+		result.Resolved = &resolved
 	}
 	if result.Errors == nil {
 		result.Errors = []config.ValidationError{}

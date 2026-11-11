@@ -25,6 +25,7 @@ package verbs
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -525,6 +526,28 @@ func recomposeAfterShip(ctx context.Context, client *argus.Client, taskID string
 		}, nil
 	}
 
+	// Dogfood lease (D9): recompose only when the lease is free or held by the
+	// shipper. Another holder is mid-test; rebuilding under them is exactly
+	// what the lease prevents, so skip and tell them.
+	holder, herr := leaseHolderRef(target.SourceRepo)
+	if herr != nil {
+		return nil, nil, fmt.Errorf("read dogfood lease: %w", herr)
+	}
+	if holder != nil && holder.TaskID != taskID {
+		shipper := taskNameOf(target)
+		if shipper == "" {
+			shipper = taskID
+		}
+		noticeHolder(ctx, client, target.SourceRepo, holder.TaskID, leaseMsgRecompose, fmt.Sprintf(
+			"[iris] %s shipped %s to %s; dogfood recompose was skipped because you hold the lease. Recompose and call iris_set_dogfood when convenient.",
+			cleanText(shipper), cleanText(shippedBranch), cleanText(manifest.Base.Ref)))
+		return &RecomposeResult{Attempted: false}, &Warning{
+			Code: "recompose_skipped",
+			Message: fmt.Sprintf("dogfood is leased to %s (%s); recompose skipped for shipped branch %q and the dogfood branch left unchanged",
+				holder.TaskName, holder.TaskID, shippedBranch),
+		}, nil
+	}
+
 	// Remaining layered entries, in order, with the shipped feature removed.
 	remaining := make([]LayeredEntry, 0, len(manifest.Layered)-1)
 	remaining = append(remaining, manifest.Layered[:dropIdx]...)
@@ -572,7 +595,19 @@ func recomposeAfterShip(ctx context.Context, client *argus.Client, taskID string
 		Sha:      newTip,
 		Manifest: newManifest,
 		Force:    true,
+		// The lease was checked above; pass the gate as an internal caller.
+		InternalCaller: true,
 	}); err != nil {
+		// A claim can land between the lease check above and the gate: skip,
+		// as for any other holder, rather than failing the (already merged) ship.
+		var ge *LeaseGateError
+		if errors.As(err, &ge) && ge.Holder != nil {
+			return &RecomposeResult{Attempted: false}, &Warning{
+				Code: "recompose_skipped",
+				Message: fmt.Sprintf("dogfood is leased to %s (%s); recompose skipped for shipped branch %q and the dogfood branch left unchanged",
+					ge.Holder.TaskName, ge.Holder.TaskID, shippedBranch),
+			}, nil
+		}
 		return nil, nil, fmt.Errorf("apply re-composed dogfood: %w", err)
 	}
 

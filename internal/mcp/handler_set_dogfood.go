@@ -14,6 +14,8 @@ type setDogfoodInput struct {
 	Sha      string                 `json:"sha"`
 	Manifest *verbs.DogfoodManifest `json:"manifest"`
 	Force    bool                   `json:"force,omitempty"`
+	// LeaseOverride is separate from Force: it bypasses only the dogfood lease.
+	LeaseOverride bool `json:"lease_override,omitempty"`
 }
 
 // NewSetDogfoodHandler returns a Handler for iris_set_dogfood. The handler is a
@@ -31,12 +33,13 @@ func NewSetDogfoodHandler(client *argus.Client) Handler {
 			return ErrorResponse("iris:set_dogfood: manifest is required")
 		}
 		result, err := verbs.SetDogfood(ctx, client, in.TaskID, verbs.SetDogfoodOpts{
-			Sha:      in.Sha,
-			Manifest: in.Manifest,
-			Force:    in.Force,
+			Sha:           in.Sha,
+			Manifest:      in.Manifest,
+			Force:         in.Force,
+			LeaseOverride: in.LeaseOverride,
 		})
 		if err != nil {
-			return ErrorResponse(fmt.Sprintf("iris:set_dogfood: %v", err))
+			return leaseErr("iris:set_dogfood", err)
 		}
 		body, err := json.MarshalIndent(result, "", "  ")
 		if err != nil {

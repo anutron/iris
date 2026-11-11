@@ -67,18 +67,19 @@ const (
 // field has a valid classification so adding a new field without one
 // fails CI.
 type IrisToml struct {
-	GitAuthTokenSource        string       `toml:"git_auth_token_source" json:"git_auth_token_source,omitempty" kind:"local"`
-	SchemaVersion             int          `toml:"schema_version"                json:"schema_version"                        kind:"shared"`
-	DefaultBranch             string       `toml:"default_branch"                json:"default_branch,omitempty"              kind:"shared"`
-	DogfoodBranch             string       `toml:"dogfood_branch"                json:"dogfood_branch,omitempty"               kind:"local"`
-	ShipCITimeoutSeconds      int          `toml:"ship_ci_timeout_seconds"       json:"ship_ci_timeout_seconds,omitempty"     kind:"local"`
-	GitTransferTimeoutSeconds int          `toml:"git_transfer_timeout_seconds"  json:"git_transfer_timeout_seconds,omitempty" kind:"shared"`
-	Build                     BuildBlock   `toml:"build"                          json:"build"                                 kind:"shared"`
-	Restart                   RestartBlock `toml:"restart"                 json:"restart"                         kind:"shared"`
-	PreFlight                 *HookBlock   `toml:"pre_flight"              json:"pre_flight,omitempty"            kind:"shared"`
-	Verify                    *HookBlock   `toml:"verify"                  json:"verify,omitempty"                kind:"shared"`
-	PostMerge                 *HookBlock   `toml:"post_merge"              json:"post_merge,omitempty"            kind:"shared"`
-	Secrets                   SecretsBlock `toml:"secrets"                 json:"secrets,omitempty"                kind:"local"`
+	GitAuthTokenSource        string             `toml:"git_auth_token_source" json:"git_auth_token_source,omitempty" kind:"local"`
+	SchemaVersion             int                `toml:"schema_version"                json:"schema_version"                        kind:"shared"`
+	DefaultBranch             string             `toml:"default_branch"                json:"default_branch,omitempty"              kind:"shared"`
+	DogfoodBranch             string             `toml:"dogfood_branch"                json:"dogfood_branch,omitempty"               kind:"local"`
+	ShipCITimeoutSeconds      int                `toml:"ship_ci_timeout_seconds"       json:"ship_ci_timeout_seconds,omitempty"     kind:"local"`
+	GitTransferTimeoutSeconds int                `toml:"git_transfer_timeout_seconds"  json:"git_transfer_timeout_seconds,omitempty" kind:"shared"`
+	Build                     BuildBlock         `toml:"build"                          json:"build"                                 kind:"shared"`
+	Restart                   RestartBlock       `toml:"restart"                 json:"restart"                         kind:"shared"`
+	PreFlight                 *HookBlock         `toml:"pre_flight"              json:"pre_flight,omitempty"            kind:"shared"`
+	Verify                    *HookBlock         `toml:"verify"                  json:"verify,omitempty"                kind:"shared"`
+	PostMerge                 *HookBlock         `toml:"post_merge"              json:"post_merge,omitempty"            kind:"shared"`
+	Secrets                   SecretsBlock       `toml:"secrets"                 json:"secrets,omitempty"                kind:"local"`
+	DogfoodLease              *DogfoodLeaseBlock `toml:"dogfood_lease"     json:"dogfood_lease,omitempty"          kind:"local"`
 }
 
 // BuildBlock declares the build step.
@@ -326,6 +327,7 @@ func (c *IrisToml) Validate(isSelf bool) []ValidationError {
 
 	errs = append(errs, c.validateDogfood()...)
 	errs = append(errs, c.validateGitTransfer()...)
+	errs = append(errs, c.DogfoodLease.validate()...)
 	if !ValidGitAuthTokenSource(c.GitAuthTokenSource) {
 		errs = append(errs, ValidationError{Field: "git_auth_token_source", Message: "expected a secret source descriptor", Hint: "use op://vault/item/field, env://NAME or keychain://service/account; empty disables token auth"})
 	}

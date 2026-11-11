@@ -34,6 +34,15 @@ type SetDogfoodOpts struct {
 	// proceeds and a prominent warning is surfaced. Force relaxes ONLY the
 	// ancestry refusal.
 	Force bool
+	// LeaseOverride deploys even though the caller does not hold the dogfood
+	// lease. It is DISTINCT from Force: it relaxes ONLY the lease gate, and
+	// Force relaxes ONLY the commit-dropping ancestry refusal.
+	LeaseOverride bool
+	// InternalCaller marks iris-internal callers (the ship_feature recompose,
+	// which has already checked the lease). Such a caller passes the gate when
+	// the lease is free or held by taskID, without a LEASE OVERRIDE warning.
+	// Never set from an MCP/CLI handler.
+	InternalCaller bool
 }
 
 // SetDogfoodResult is the structured success payload, mirrored to MCP/CLI as
@@ -122,6 +131,20 @@ func SetDogfood(ctx context.Context, client *argus.Client, taskID string, opts S
 		return nil, fmt.Errorf("sha %q is not reachable in %s", opts.Sha, target.SourceRepo)
 	}
 	newSHA := strings.TrimSpace(out)
+
+	// 3b. Dogfood lease gate: after config + reachability, before the ancestry
+	// check, any git mutation, the manifest write or the reload — so a refusal
+	// has no side effects. A holder's call counts as contact at its start and
+	// (via finish) its end, and the holder is not released while it runs.
+	lr, err := resolveLeaseRepo(ctx, target.SourceRepo)
+	if err != nil {
+		return nil, err
+	}
+	gate, err := enterLeaseGate(ctx, client, lr, taskID, opts.LeaseOverride, opts.InternalCaller)
+	if err != nil {
+		return nil, err
+	}
+	defer gate.finish()
 
 	// 4. Acquire the source-repo lock for the atomic manifest-write + reset.
 	mu := lockSourceRepo(target.SourceRepo)
@@ -225,6 +248,9 @@ func SetDogfood(ctx context.Context, client *argus.Client, taskID string, opts S
 	// Surface the forced commit-drop warning prominently (first), ahead of
 	// overlay taxonomy and reload warnings.
 	warnings := []string{}
+	if gate.overrideWarning != "" {
+		warnings = append(warnings, gate.overrideWarning)
+	}
 	if forceWarning != "" {
 		warnings = append(warnings, forceWarning)
 	}
@@ -232,6 +258,8 @@ func SetDogfood(ctx context.Context, client *argus.Client, taskID string, opts S
 	if reload != nil && len(reload.Warnings) > 0 {
 		warnings = append(warnings, reload.Warnings...)
 	}
+
+	gate.notifyOverridden(taskNameOf(target), newSHA)
 
 	return &SetDogfoodResult{
 		Set:           true,

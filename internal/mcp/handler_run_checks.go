@@ -12,7 +12,7 @@ import (
 )
 
 type runChecksInput struct {
-	TaskID      string `json:"task_id"`
+	TaskID      string   `json:"task_id"`
 	Check       string   `json:"check"`
 	Args        []string `json:"args,omitempty"`
 	WaitSeconds *int     `json:"wait_seconds,omitempty"`

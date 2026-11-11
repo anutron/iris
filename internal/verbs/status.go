@@ -16,25 +16,28 @@ type StatusInput struct {
 
 // StatusResult is the structured result.
 type StatusResult struct {
-	SourceRepo       string            `json:"source_repo"`
-	HeadSha          string            `json:"head_sha"`
-	Branch           string            `json:"branch"`
-	DefaultBranch    string            `json:"default_branch"`
-	OriginDefaultSha string            `json:"origin_default_sha"`
-	WorkingTreeClean bool              `json:"working_tree_clean"`
-	Drift            bool              `json:"drift"`
-	UpToDate         bool              `json:"up_to_date"`
-	Config           *config.IrisToml  `json:"config"`
+	SourceRepo       string           `json:"source_repo"`
+	HeadSha          string           `json:"head_sha"`
+	Branch           string           `json:"branch"`
+	DefaultBranch    string           `json:"default_branch"`
+	OriginDefaultSha string           `json:"origin_default_sha"`
+	WorkingTreeClean bool             `json:"working_tree_clean"`
+	Drift            bool             `json:"drift"`
+	UpToDate         bool             `json:"up_to_date"`
+	Config           *config.IrisToml `json:"config"`
 	// ConfigSources maps each top-level TOML field name that was set in at
 	// least one of `.iris.toml` / `.iris.local.toml` to its source — either
 	// "shared" or "local". Fields unset in both files are omitted (no "none"
 	// sentinel). When neither file exists, the field is an empty object
 	// `{}` rather than nil/absent so consumers can rely on the shape.
-	ConfigSources    map[string]string `json:"config_sources"`
-	ArgusTask        *argus.Task       `json:"argus_task"`
-	LastReload       *AuditEntry       `json:"last_reload"`
-	Dogfood          *DogfoodManifest  `json:"dogfood"`
-	Warnings         []string          `json:"warnings"`
+	ConfigSources map[string]string `json:"config_sources"`
+	ArgusTask     *argus.Task       `json:"argus_task"`
+	LastReload    *AuditEntry       `json:"last_reload"`
+	Dogfood       *DogfoodManifest  `json:"dogfood"`
+	// DogfoodLease is the dogfood lease and queue; null when the repo has no
+	// dogfood_branch. Reading it has no side effects.
+	DogfoodLease *DogfoodLeaseView `json:"dogfood_lease"`
+	Warnings     []string          `json:"warnings"`
 }
 
 // Status resolves the target, reads .iris.toml non-fatally, captures git
@@ -169,6 +172,7 @@ func Status(ctx context.Context, client *argus.Client, in StatusInput) (*StatusR
 		ArgusTask:        argusTask,
 		LastReload:       last,
 		Dogfood:          dogfood,
+		DogfoodLease:     ReadDogfoodLeaseView(ctx, target.SourceRepo),
 		Warnings:         warnings,
 	}, nil
 }

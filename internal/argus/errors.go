@@ -1,6 +1,9 @@
 package argus
 
-import "fmt"
+import (
+	"errors"
+	"fmt"
+)
 
 // HTTPError is returned by Client when argus answers with a 4xx/5xx.
 type HTTPError struct {
@@ -15,4 +18,10 @@ func (e *HTTPError) Error() string {
 		return fmt.Sprintf("argus: %s %s: HTTP %d", e.Method, e.Path, e.StatusCode)
 	}
 	return fmt.Sprintf("argus: %s %s: HTTP %d: %s", e.Method, e.Path, e.StatusCode, e.Body)
+}
+
+// IsNotFound reports whether err is (or wraps) an argus HTTP 404.
+func IsNotFound(err error) bool {
+	var he *HTTPError
+	return errors.As(err, &he) && he.StatusCode == 404
 }

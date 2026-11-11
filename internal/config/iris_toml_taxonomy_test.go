@@ -62,6 +62,7 @@ func TestFieldKind_ExpectedLocal(t *testing.T) {
 	local := []string{
 		"git_auth_token_source",
 		"dogfood_branch",
+		"dogfood_lease",
 		"ship_ci_timeout_seconds",
 	}
 	for _, name := range local {
@@ -126,6 +127,7 @@ func TestLocalFields_MatchesExpectedSet(t *testing.T) {
 	got := append([]string(nil), LocalFields()...)
 	want := []string{
 		"dogfood_branch",
+		"dogfood_lease",
 		"git_auth_token_source",
 		"secrets",
 		"ship_ci_timeout_seconds",

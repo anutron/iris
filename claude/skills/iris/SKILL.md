@@ -80,6 +80,18 @@ Host commands include the user's Go bin directory in PATH. Cold calls immediatel
 - **Long checks and builds return a handle, not a timeout.** Argus caps every iris call at 30 s, so `iris_run_checks` and `iris_run_build` run detached (30-minute ceiling) and wait at most `wait_seconds` (default 20, max 25). If the run finishes in time you get the result directly. Otherwise you get `{run_id, status}`, where `status` is `"queued"` while another check or build holds the worktree and `"running"` once yours is executing. The 30-minute ceiling counts time spent queued. At the ceiling iris SIGKILLs the script's whole process group, so test runners and workers it spawned don't leak (a process that deliberately starts its own session escapes).
 - **`iris_run_result(run_id)`** — polls pushes, fetches, checks and builds, waiting up to 25 s more, then returns the original final result (including classified errors) or the handle again. Keep calling until it returns. Calling `iris_run_checks` again with the same check and args while one is running joins it rather than starting a second run. Results are in memory for an hour after completion; an unknown `run_id` means iris may have restarted or the run expired. The outcome is unknown: verify remote state before retrying a push/fetch; re-run checks/builds as needed.
 
+### Dogfood lease (required before `iris_set_dogfood`)
+
+`iris_set_dogfood` replaces the running dogfood build, so only one task may do it at a time. Take turns through the lease:
+
+1. `iris_dogfood_claim(task_id)` — returns `granted`, or `queued` with the `holder` (argus task name), your `position`, and `ahead` (everyone in front of you). When queued, iris types a `[iris]` message into your session when it is your turn; call `iris_dogfood_claim` again to poll, or pass `wait_seconds` (max 25) to long-poll. `position` cuts in line (never affects the holder).
+2. `iris_set_dogfood(task_id, ...)` — refused with the holder, `ahead` and `position` (also as structured fields) unless you hold the lease.
+3. `iris_dogfood_release(task_id)` — when you are done, so the next task gets it.
+
+When an `[iris] Still using dogfood for <repo>?` message appears, answer with a **tool call**, not chat: `iris_dogfood_renew` (still using it) or `iris_dogfood_release` (done). If you are quiet while someone waits, iris warns once and then releases you; a holder with no word for 30 minutes is released regardless.
+
+`lease_override` and `force` are different inputs on `iris_set_dogfood`: `lease_override=true` deploys without holding the lease (loud `LEASE OVERRIDE:` warning; the holder is told its tree was replaced), while `force=true` only allows a commit-dropping deploy. Neither implies the other. Prefer claiming; override only when the human asked. `iris_dogfood_queue_move` and `iris_dogfood_force_release` (needs a `reason`) are for humans/coordinators.
+
 ### Self-management (rarely what a task agent wants)
 
 These manage iris-style daemons via a repo's `.iris.toml` (and the optional per-developer `.iris.local.toml` overlay). A normal task agent shipping code almost never needs them; they're for operating iris (or another iris-managed daemon) itself.
