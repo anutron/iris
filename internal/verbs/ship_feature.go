@@ -25,6 +25,7 @@ package verbs
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -539,7 +540,7 @@ func recomposeAfterShip(ctx context.Context, client *argus.Client, taskID string
 		}
 		noticeHolder(ctx, client, target.SourceRepo, holder.TaskID, leaseMsgRecompose, fmt.Sprintf(
 			"[iris] %s shipped %s to %s; dogfood recompose was skipped because you hold the lease. Recompose when convenient.",
-			shipper, shippedBranch, manifest.Base.Ref))
+			cleanText(shipper), cleanText(shippedBranch), cleanText(manifest.Base.Ref)))
 		return &RecomposeResult{Attempted: false}, &Warning{
 			Code: "recompose_skipped",
 			Message: fmt.Sprintf("dogfood is leased to %s (%s); recompose skipped for shipped branch %q and the dogfood branch left unchanged",
@@ -597,6 +598,16 @@ func recomposeAfterShip(ctx context.Context, client *argus.Client, taskID string
 		// The lease was checked above; pass the gate as an internal caller.
 		InternalCaller: true,
 	}); err != nil {
+		// A claim can land between the lease check above and the gate: skip,
+		// as for any other holder, rather than failing the (already merged) ship.
+		var ge *LeaseGateError
+		if errors.As(err, &ge) && ge.Holder != nil {
+			return &RecomposeResult{Attempted: false}, &Warning{
+				Code: "recompose_skipped",
+				Message: fmt.Sprintf("dogfood is leased to %s (%s); recompose skipped for shipped branch %q and the dogfood branch left unchanged",
+					ge.Holder.TaskName, ge.Holder.TaskID, shippedBranch),
+			}, nil
+		}
 		return nil, nil, fmt.Errorf("apply re-composed dogfood: %w", err)
 	}
 

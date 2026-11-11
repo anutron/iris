@@ -320,23 +320,38 @@ func deliverLeaseEffects(ctx context.Context, client *argus.Client, lr *leaseRep
 		}
 		return warnings
 	}
-	for _, c := range m.fx.Cancels {
-		cctx, cancel := context.WithTimeout(ctx, leaseArgusTimeout)
-		_ = client.CancelNotify(cctx, c.TaskID, c.DeliveryID) // best effort: already delivered or gone
-		cancel()
-	}
-	for _, msg := range m.fx.Msgs {
-		nctx, cancel := context.WithTimeout(ctx, leaseArgusTimeout)
-		err := client.Notify(nctx, msg.TaskID, msg.Text, msg.DeliveryID, msg.Deadline)
-		cancel()
-		if err == nil {
-			setLeaseDiag(lr.SourceRepo, func(d *leaseDiag) { d.delivery = "" })
-			continue
+	// A release caused by a notify 404 queues new messages (the grant), so
+	// deliver in rounds.
+	for round := 0; round < 4; round++ {
+		msgs, cancels := m.fx.Msgs, m.fx.Cancels
+		m.fx = LeaseEffects{}
+		if len(msgs) == 0 && len(cancels) == 0 {
+			break
 		}
-		m.MarkUndelivered(msg) // checkin/final retried next tick (a 404 resolves to dead there)
-		text := fmt.Sprintf("could not deliver %s message to task %s: %v", msg.Kind, msg.TaskID, err)
-		warnings = append(warnings, text)
-		setLeaseDiag(lr.SourceRepo, func(d *leaseDiag) { d.delivery = text })
+		for _, c := range cancels {
+			cctx, cancel := context.WithTimeout(ctx, leaseArgusTimeout)
+			_ = client.CancelNotify(cctx, c.TaskID, c.DeliveryID) // best effort: already delivered or gone
+			cancel()
+		}
+		for _, msg := range msgs {
+			nctx, cancel := context.WithTimeout(ctx, leaseArgusTimeout)
+			err := client.Notify(nctx, msg.TaskID, msg.Text, msg.DeliveryID, msg.Deadline)
+			cancel()
+			if err == nil {
+				setLeaseDiag(lr.SourceRepo, func(d *leaseDiag) { d.delivery = "" })
+				continue
+			}
+			m.MarkUndelivered(msg)     // checkin/final are retried next tick
+			if argus.IsNotFound(err) { // the task is gone: dead, and nothing to warn about
+				if msg.Kind == leaseMsgCheckin || msg.Kind == leaseMsgFinal {
+					m.ReleaseDead(msg.TaskID)
+				}
+				continue
+			}
+			text := fmt.Sprintf("could not deliver %s message to task %s: %v", msg.Kind, msg.TaskID, err)
+			warnings = append(warnings, text)
+			setLeaseDiag(lr.SourceRepo, func(d *leaseDiag) { d.delivery = text })
+		}
 	}
 	return warnings
 }
@@ -785,7 +800,7 @@ func (g *leaseGate) notifyOverridden(callerName, sha string) {
 	if caller == "" {
 		caller = "a caller with no task"
 	}
-	text := fmt.Sprintf("[iris] %s deployed to dogfood for %s with lease_override while you hold the lease; the running tree is now %s.", caller, g.lr.Name, sha)
+	text := fmt.Sprintf("[iris] %s deployed to dogfood for %s with lease_override while you hold the lease; the running tree is now %s.", cleanText(caller), cleanText(g.lr.Name), cleanText(sha))
 	_, _ = withLease(g.ctx, g.client, g.lr, func(m *leaseMachine) {
 		if m.st.Holder != nil && m.st.Holder.TaskID == g.override.TaskID {
 			m.Notice(g.override.TaskID, leaseMsgOverride, text)

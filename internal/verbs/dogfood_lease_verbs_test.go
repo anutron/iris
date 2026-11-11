@@ -22,8 +22,9 @@ type fakeLeaseArgus struct {
 	mu         sync.Mutex
 	tasks      map[string]*fakeLeaseTask
 	notifies   []fakeNotify
-	cancels    []string // "task/delivery"
-	notifyHTTP int      // when >0, notify returns this status
+	cancels    []string        // "task/delivery"
+	notifyHTTP int             // when >0, notify returns this status
+	notifyGone map[string]bool // task IDs whose notify returns 404
 	worktree   string
 	src        string
 	srv        *httptest.Server
@@ -108,6 +109,10 @@ func (f *fakeLeaseArgus) serve(w http.ResponseWriter, r *http.Request) {
 			_ = json.NewEncoder(w).Encode(map[string]any{"live": true, "busy": tk.Bridge == "busy", "needs_input": tk.Bridge == "needs_input"})
 		}
 	case len(parts) == 2 && parts[1] == "notify" && r.Method == "POST":
+		if f.notifyGone[id] {
+			http.NotFound(w, r)
+			return
+		}
 		if f.notifyHTTP > 0 {
 			http.Error(w, "unavailable", f.notifyHTTP)
 			return
@@ -659,5 +664,29 @@ func TestReadDogfoodLeaseView_InvalidTimerConfigWarnsAndUsesDefaults(t *testing.
 	v := ReadDogfoodLeaseView(context.Background(), canonicalize(src))
 	if v.Timers.GraceSeconds != 30 || len(v.Warnings) == 0 || !strings.Contains(v.Warnings[0], "dogfood_lease") {
 		t.Fatalf("view = %+v", v)
+	}
+}
+
+func TestTickLease_Notify404TreatedAsDead(t *testing.T) {
+	src, _, _, f, c := leaseFixture(t, "lv-notify404")
+	canon := canonicalize(src)
+	claim(t, c, "A", 0)
+	claim(t, c, "B", 0)
+	// A's task still resolves but its notify endpoint says it is gone.
+	f.with(func() { f.notifyGone = map[string]bool{"A": true} })
+	ageLease(t, canon, 5*time.Minute)
+	st, _ := loadLease(canon)
+	st.Holder.CheckinSentAt = time.Time{}
+	st.Holder.CheckinWanted = true
+	_ = saveLease(canon, st)
+	if err := TickLease(context.Background(), c, canon); err != nil {
+		t.Fatal(err)
+	}
+	st, _ = loadLease(canon)
+	if st.Holder == nil || st.Holder.TaskID != "B" {
+		t.Fatalf("a notify 404 must release the holder as dead and grant B: %+v", st.Holder)
+	}
+	if ns := f.notifiesTo("B"); len(ns) == 0 || !strings.Contains(ns[len(ns)-1].Text, "You have the dogfood lease") {
+		t.Fatalf("B should be granted: %+v", ns)
 	}
 }

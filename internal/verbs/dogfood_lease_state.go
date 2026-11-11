@@ -177,6 +177,25 @@ func (m *leaseMachine) warmer() time.Duration         { return m.cfgDur(m.env.Cf
 func (m *leaseMachine) grace() time.Duration          { return m.cfgDur(m.env.Cfg.GraceSeconds) }
 func (m *leaseMachine) idle() time.Duration           { return m.cfgDur(m.env.Cfg.IdleReleaseSeconds) }
 
+// cleanText makes caller-influenced strings (repo and branch names, force
+// reasons) safe to type into another agent's session: no control characters or
+// newlines, bounded length.
+func cleanText(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if r < 0x20 || r == 0x7f {
+			b.WriteByte(' ')
+			continue
+		}
+		b.WriteRune(r)
+	}
+	out := strings.TrimSpace(b.String())
+	if rs := []rune(out); len(rs) > 120 {
+		out = string(rs[:120]) + "…"
+	}
+	return out
+}
+
 func fmtLeaseDur(secs int) string {
 	if secs%60 == 0 {
 		return fmt.Sprintf("%dm", secs/60)
@@ -216,6 +235,9 @@ func (m *leaseMachine) deliveryID(kind string) string {
 
 // notify queues a message to a task and returns it.
 func (m *leaseMachine) notify(to, kind, text string, deadline time.Duration) LeaseMsg {
+	if deadline > leaseMaxDeadline { // argus's notify maximum
+		deadline = leaseMaxDeadline
+	}
 	msg := LeaseMsg{TaskID: to, Kind: kind, Text: text, DeliveryID: m.deliveryID(kind), Deadline: deadline}
 	m.fx.Msgs = append(m.fx.Msgs, msg)
 	return msg
@@ -476,6 +498,14 @@ func (m *leaseMachine) MarkUndelivered(msg LeaseMsg) {
 	}
 }
 
+// ReleaseDead releases the holder as dead (a notify 404 means the task is
+// gone). Deferred while the holder's set_dogfood call is in flight.
+func (m *leaseMachine) ReleaseDead(id string) {
+	if h := m.st.Holder; h != nil && h.TaskID == id && h.InFlight == 0 {
+		m.release("task is no longer running", false)
+	}
+}
+
 func containsStr(ss []string, s string) bool {
 	for _, x := range ss {
 		if x == s {
@@ -531,7 +561,7 @@ func (m *leaseMachine) grant(id, name string) {
 	m.history("grant", id, "")
 	m.notify(id, leaseMsgGrant, fmt.Sprintf(
 		"[iris] You have the dogfood lease for %s (branch %s). %s timer is running — any iris_set_dogfood / iris_dogfood_renew call resets it. Call iris_dogfood_release when you're done.",
-		m.env.RepoName, m.env.DogfoodBranch, fmtLeaseDur(m.env.Cfg.WarmerSeconds)), leaseMaxDeadline)
+		cleanText(m.env.RepoName), cleanText(m.env.DogfoodBranch), fmtLeaseDur(m.env.Cfg.WarmerSeconds)), leaseMaxDeadline)
 }
 
 // release ends the current hold and grants the next live queued task.
@@ -548,7 +578,7 @@ func (m *leaseMachine) release(reason string, voluntary bool) {
 	if !voluntary {
 		m.notify(old.TaskID, leaseMsgReleased, fmt.Sprintf(
 			"[iris] Released your dogfood lease for %s (%s). Call iris_dogfood_claim if you need it again.",
-			m.env.RepoName, reason), leaseMaxDeadline)
+			cleanText(m.env.RepoName), cleanText(reason)), leaseMaxDeadline)
 	}
 	m.grantNext()
 }
@@ -598,6 +628,16 @@ func (m *leaseMachine) Tick() {
 		if now.Before(h.ReleaseAt) {
 			return
 		}
+		if waiting == 0 {
+			// The last waiter left: silence without waiters never releases.
+			// Drop the scheduled release; the missed-check-in path takes over.
+			for _, d := range h.PendingDeliveries {
+				m.fx.Cancels = append(m.fx.Cancels, LeaseCancel{TaskID: h.TaskID, DeliveryID: d})
+			}
+			h.PendingDeliveries = nil
+			h.FinalWarningAt, h.ReleaseAt = time.Time{}, time.Time{}
+			return
+		}
 		lv := m.env.Live(h.TaskID)
 		m.noteName(h.TaskID, lv)
 		switch lv.Class {
@@ -623,7 +663,7 @@ func (m *leaseMachine) Tick() {
 				h.ReleaseAt = now.Add(m.grace())
 				msg := m.notify(h.TaskID, leaseMsgFinal, fmt.Sprintf(
 					"[iris] No answer — releasing the dogfood lease for %s in %ds unless you call iris_dogfood_renew.",
-					m.env.RepoName, m.env.Cfg.GraceSeconds), m.warmer())
+					cleanText(m.env.RepoName), m.env.Cfg.GraceSeconds), m.warmer())
 				h.PendingDeliveries = append(h.PendingDeliveries, msg.DeliveryID)
 			}
 			return
@@ -642,7 +682,7 @@ func (m *leaseMachine) Tick() {
 			m.release("task is no longer running", false)
 			return
 		}
-		text := fmt.Sprintf("[iris] Still using dogfood for %s? Reply by calling iris_dogfood_renew (yes) or iris_dogfood_release (done).", m.env.RepoName)
+		text := fmt.Sprintf("[iris] Still using dogfood for %s? Reply by calling iris_dogfood_renew (yes) or iris_dogfood_release (done).", cleanText(m.env.RepoName))
 		if waiting > 0 {
 			text += fmt.Sprintf(" %d agent(s) waiting.", waiting)
 		}

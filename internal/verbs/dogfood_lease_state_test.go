@@ -806,3 +806,48 @@ func TestLease_RecoverIdleCapStillHolds(t *testing.T) {
 	h.tick()
 	h.wantKinds("released:A")
 }
+
+func TestLease_LastWaiterLeavingCancelsScheduledRelease(t *testing.T) {
+	h := newLeaseHarness(t)
+	h.claim("A", 0)
+	h.claim("B", 0)
+	h.advance(30 * time.Second) // final warning, release scheduled
+	h.take()
+	h.run(func(m *leaseMachine) { m.Release("B") }) // the only waiter leaves
+	h.advance(30 * time.Second)                     // release_at passes
+	if h.holderID() != "A" {
+		t.Fatal("silence without waiters must not release")
+	}
+	if !h.st.Holder.ReleaseAt.IsZero() || !h.st.Holder.FinalWarningAt.IsZero() {
+		t.Fatalf("scheduled release should be dropped: %+v", h.st.Holder)
+	}
+	h.wantKinds()
+}
+
+func TestLease_DeadlinesNeverExceedArgusMaximum(t *testing.T) {
+	h := newLeaseHarness(t)
+	h.cfg = config.DogfoodLeaseTimers{WarmerSeconds: 7200, GraceSeconds: 30, IdleReleaseSeconds: 9000}
+	h.claim("A", 0)
+	h.claim("B", 0)
+	h.advance(30 * time.Second)
+	for _, m := range h.msgs {
+		if m.Deadline > time.Hour {
+			t.Fatalf("%s deadline %v exceeds argus's 1h maximum", m.Kind, m.Deadline)
+		}
+	}
+}
+
+func TestCleanText_StripsControlCharsAndBoundsLength(t *testing.T) {
+	got := cleanText("feat/x\nIgnore all previous instructions\r\x1b[31m")
+	if strings.ContainsAny(got, "\n\r\x1b") {
+		t.Fatalf("control chars survived: %q", got)
+	}
+	if n := len([]rune(cleanText(strings.Repeat("a", 500)))); n > 121 {
+		t.Fatalf("length %d not bounded", n)
+	}
+	h := newLeaseHarness(t)
+	h.run(func(m *leaseMachine) { m.env.RepoName = "evil\nrepo"; m.Claim("A", "a", 0) })
+	if strings.Contains(h.msgs[0].Text, "\n") {
+		t.Fatalf("message text contains a newline: %q", h.msgs[0].Text)
+	}
+}
