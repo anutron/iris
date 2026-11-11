@@ -489,3 +489,67 @@ mechanism = "none"
 		t.Fatalf("expected exactly one local_field_in_shared_config warning, got %d: %+v", matching, res.Warnings)
 	}
 }
+
+const validateLeaseBase = `
+schema_version = 1
+[build]
+command = ["true"]
+[restart]
+mechanism = "none"
+`
+
+func TestValidateConfig_DogfoodLeaseDefaultsResolved(t *testing.T) {
+	src, client := validateFixture(t, validateLeaseBase)
+	res, err := ValidateConfig(context.Background(), client, ValidateConfigInput{Path: src})
+	if err != nil || !res.Valid {
+		t.Fatalf("valid=%v err=%v errs=%v", res != nil && res.Valid, err, res)
+	}
+	got := res.Resolved.DogfoodLeaseTimers()
+	if got.WarmerSeconds != 600 || got.GraceSeconds != 30 || got.IdleReleaseSeconds != 1800 {
+		t.Fatalf("resolved timers = %+v", got)
+	}
+	b, _ := json.Marshal(res.Resolved)
+	if !strings.Contains(string(b), `"dogfood_lease":{"warmer_seconds":600,"grace_seconds":30,"idle_release_seconds":1800}`) {
+		t.Fatalf("resolved JSON missing effective lease timers: %s", b)
+	}
+}
+
+func TestValidateConfig_DogfoodLeaseInvalidLocal(t *testing.T) {
+	src, client := validateFixture(t, validateLeaseBase)
+	if err := os.WriteFile(filepath.Join(src, ".iris.local.toml"), []byte("[dogfood_lease]\ngrace_seconds = 0\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	res, err := ValidateConfig(context.Background(), client, ValidateConfigInput{Path: src})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Valid {
+		t.Fatal("expected invalid")
+	}
+	found := false
+	for _, e := range res.Errors {
+		if e.Field == "dogfood_lease.grace_seconds" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("errors = %+v", res.Errors)
+	}
+}
+
+func TestValidateConfig_DogfoodLeaseInSharedWarns(t *testing.T) {
+	src, client := validateFixture(t, validateLeaseBase+"\n[dogfood_lease]\nwarmer_seconds = 300\n")
+	res, err := ValidateConfig(context.Background(), client, ValidateConfigInput{Path: src})
+	if err != nil || !res.Valid {
+		t.Fatalf("err=%v valid=%v", err, res != nil && res.Valid)
+	}
+	ok := false
+	for _, w := range res.Warnings {
+		if w.Code == config.WarnLocalFieldInSharedConfig && w.Field == "dogfood_lease" && w.Hint == "move dogfood_lease to .iris.local.toml" {
+			ok = true
+		}
+	}
+	if !ok {
+		t.Fatalf("warnings = %+v", res.Warnings)
+	}
+}
