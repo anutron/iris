@@ -65,9 +65,12 @@ type LeaseHistoryEntry struct {
 
 // LeaseState is the persisted state for one source repo.
 type LeaseState struct {
-	Holder  *LeaseHolder        `json:"holder"`
-	Queue   []LeaseEntry        `json:"queue"`
-	History []LeaseHistoryEntry `json:"history"`
+	// SourceRepo is stored so the startup scan can find the repo a state file
+	// belongs to (the state directory name is a one-way hash).
+	SourceRepo string              `json:"source_repo,omitempty"`
+	Holder     *LeaseHolder        `json:"holder"`
+	Queue      []LeaseEntry        `json:"queue"`
+	History    []LeaseHistoryEntry `json:"history"`
 }
 
 // LeaseRef names a task for results and refusals.
@@ -458,6 +461,10 @@ func (m *leaseMachine) MarkUndelivered(msg LeaseMsg) {
 	if h == nil || h.TaskID != msg.TaskID {
 		return
 	}
+	// Only a still-pending delivery is undone: contact may have cancelled it.
+	if !containsStr(h.PendingDeliveries, msg.DeliveryID) {
+		return
+	}
 	h.PendingDeliveries = removeStr(h.PendingDeliveries, msg.DeliveryID)
 	switch msg.Kind {
 	case leaseMsgCheckin:
@@ -467,6 +474,15 @@ func (m *leaseMachine) MarkUndelivered(msg LeaseMsg) {
 		h.FinalWarningAt = time.Time{}
 		h.ReleaseAt = time.Time{}
 	}
+}
+
+func containsStr(ss []string, s string) bool {
+	for _, x := range ss {
+		if x == s {
+			return true
+		}
+	}
+	return false
 }
 
 func removeStr(ss []string, s string) []string {

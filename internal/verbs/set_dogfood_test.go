@@ -72,6 +72,10 @@ func setupDogfoodRepoFiles(t *testing.T, slug string, files map[string]string) (
 	// The worktree branch HEAD is reachable in the source repo's object store.
 	dogfoodSHA = strings.TrimSpace(g(wt, "rev-parse", "HEAD"))
 	client = stubArgus(t, src, wt)
+	// set_dogfood now requires the dogfood lease: the fixture's task claims it,
+	// as a real agent must. Best effort — a fixture without dogfood_branch
+	// cannot claim, and its test asserts the config refusal instead.
+	_, _ = DogfoodClaim(context.Background(), client, DogfoodClaimInput{TaskID: "task-sd"})
 	return
 }
 
@@ -170,6 +174,10 @@ mechanism = "none"
 	// untracked-but-ignored so the reload pre-flight's clean-tree check passes.
 	if err := os.WriteFile(filepath.Join(src, ".iris.local.toml"), []byte(`dogfood_branch = "dev"`+"\n"), 0o644); err != nil {
 		t.Fatalf("write .iris.local.toml: %v", err)
+	}
+	// The fixture's claim ran before dogfood_branch existed; claim now.
+	if _, err := DogfoodClaim(context.Background(), client, DogfoodClaimInput{TaskID: "task-sd"}); err != nil {
+		t.Fatalf("claim: %v", err)
 	}
 	g := gitRunner(t)
 	// dev at the composed SHA's parent → a clean fast-forward (ancestry guard passes).
@@ -274,6 +282,10 @@ mechanism = "none"
 	}
 
 	client := stubArgus(t, src, wt)
+	// The caller must hold the dogfood lease (resolved from the local overlay).
+	if _, err := DogfoodClaim(context.Background(), client, DogfoodClaimInput{TaskID: "task-sd"}); err != nil {
+		t.Fatalf("claim lease in bootstrap repo: %v", err)
+	}
 	result, err := SetDogfood(context.Background(), client, "task-sd", SetDogfoodOpts{
 		Sha:      dogfoodSHA,
 		Manifest: sampleManifest(),

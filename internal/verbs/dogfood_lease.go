@@ -1,0 +1,899 @@
+package verbs
+
+// iris:dogfood_* — the dogfood lease and ordered queue (change
+// dogfood-lease-queue). This file is the I/O shell around the pure state
+// machine in dogfood_lease_state.go: persistence, the per-repo lease mutex,
+// argus liveness lookups, pane delivery, the verbs, the set_dogfood gate and
+// the daemon scheduler.
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/anutron/iris/internal/argus"
+	"github.com/anutron/iris/internal/config"
+)
+
+// LeaseFilename is the persisted lease file inside SourceRepoStateDir.
+const LeaseFilename = "dogfood-lease.json"
+
+const (
+	leaseMaxWaitSeconds = 25
+	leaseArgusTimeout   = 5 * time.Second
+)
+
+// leasePollInterval is how often a waiting claim re-reads the lease. A var so
+// tests can shrink it.
+var leasePollInterval = 250 * time.Millisecond
+
+// ---- persistence ---------------------------------------------------------
+
+func leasePath(sourceRepo string) (string, error) {
+	dir, err := SourceRepoStateDir(sourceRepo)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, LeaseFilename), nil
+}
+
+// loadLease reads the lease file. A missing file is an empty (free) lease.
+// A malformed file is an error.
+func loadLease(sourceRepo string) (*LeaseState, error) {
+	p, err := leasePath(sourceRepo)
+	if err != nil {
+		return nil, err
+	}
+	return readLeaseFile(p)
+}
+
+func readLeaseFile(p string) (*LeaseState, error) {
+	data, err := os.ReadFile(p)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return &LeaseState{}, nil
+		}
+		return nil, err
+	}
+	var st LeaseState
+	if err := json.Unmarshal(data, &st); err != nil {
+		return nil, fmt.Errorf("parse %s: %w", p, err)
+	}
+	return &st, nil
+}
+
+func marshalLease(st *LeaseState) ([]byte, error) {
+	if st.Queue == nil {
+		st.Queue = []LeaseEntry{}
+	}
+	if st.History == nil {
+		st.History = []LeaseHistoryEntry{}
+	}
+	return json.MarshalIndent(st, "", "  ")
+}
+
+// saveLease writes the lease atomically: temp file, fsync, rename.
+func saveLease(sourceRepo string, st *LeaseState) error {
+	p, err := leasePath(sourceRepo)
+	if err != nil {
+		return err
+	}
+	st.SourceRepo = sourceRepo
+	body, err := marshalLease(st)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(p), LeaseFilename+".*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	cleanup := func() { _ = os.Remove(tmpName) }
+	if _, err := tmp.Write(body); err != nil {
+		tmp.Close()
+		cleanup()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		cleanup()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		cleanup()
+		return err
+	}
+	if err := os.Rename(tmpName, p); err != nil {
+		cleanup()
+		return err
+	}
+	return nil
+}
+
+// ---- per-repo lease mutex (separate from the git mutex) -------------------
+
+var leaseLocks sync.Map
+
+func lockLease(sourceRepo string) *sync.Mutex {
+	m, _ := leaseLocks.LoadOrStore(sourceRepo, &sync.Mutex{})
+	mu := m.(*sync.Mutex)
+	mu.Lock()
+	return mu
+}
+
+// ---- per-repo in-memory diagnostics (liveness / delivery errors) ----------
+
+type leaseDiag struct{ liveness, delivery string }
+
+var (
+	leaseDiagMu sync.Mutex
+	leaseDiags  = map[string]*leaseDiag{}
+)
+
+func setLeaseDiag(sourceRepo string, fn func(d *leaseDiag)) {
+	leaseDiagMu.Lock()
+	defer leaseDiagMu.Unlock()
+	d := leaseDiags[sourceRepo]
+	if d == nil {
+		d = &leaseDiag{}
+		leaseDiags[sourceRepo] = d
+	}
+	fn(d)
+}
+
+func getLeaseDiag(sourceRepo string) leaseDiag {
+	leaseDiagMu.Lock()
+	defer leaseDiagMu.Unlock()
+	if d := leaseDiags[sourceRepo]; d != nil {
+		return *d
+	}
+	return leaseDiag{}
+}
+
+// ---- repo config ---------------------------------------------------------
+
+// leaseRepo is a source repo's lease-relevant configuration.
+type leaseRepo struct {
+	SourceRepo string
+	Name       string
+	Slug       string
+	Branch     string
+	Timers     config.DogfoodLeaseTimers
+	Warnings   []string // invalid timer config → defaults used
+}
+
+// errDogfoodBranchUnset is the shared refusal for a repo without dogfood_branch.
+const errDogfoodBranchUnset = `dogfood_branch not configured for this repo (add dogfood_branch = "..." to .iris.local.toml)`
+
+// resolveDogfoodConfig reads the merged overlay (bootstrap-aware) for the
+// repo's dogfood_branch and [dogfood_lease] block. The returned overlay may be
+// nil-docced when .iris.toml is absent.
+func resolveDogfoodConfig(ctx context.Context, sourceRepo string) (branch string, block *config.DogfoodLeaseBlock, overlay *config.OverlayResult, err error) {
+	isSelf, _ := isSelfTarget(ctx, sourceRepo)
+	overlay, err = config.LoadOverlay(sourceRepo, isSelf)
+	if err != nil {
+		return "", nil, nil, err
+	}
+	if overlay.Doc != nil {
+		branch = overlay.Doc.DogfoodBranch
+		block = overlay.Doc.DogfoodLease
+	}
+	if branch == "" {
+		branch = config.PeekLocalDogfoodBranch(sourceRepo)
+	}
+	if overlay.Doc == nil {
+		block = config.PeekLocalDogfoodLease(sourceRepo)
+	}
+	return branch, block, overlay, nil
+}
+
+func resolveLeaseRepo(ctx context.Context, sourceRepo string) (*leaseRepo, error) {
+	branch, block, _, err := resolveDogfoodConfig(ctx, sourceRepo)
+	if err != nil {
+		return nil, err
+	}
+	if branch == "" {
+		return nil, errors.New(errDogfoodBranchUnset)
+	}
+	timers, verrs := config.ValidDogfoodLeaseTimers(block)
+	lr := &leaseRepo{
+		SourceRepo: sourceRepo,
+		Name:       filepath.Base(sourceRepo),
+		Slug:       repoStateSlug(sourceRepo),
+		Branch:     branch,
+		Timers:     timers,
+	}
+	for _, e := range verrs {
+		lr.Warnings = append(lr.Warnings, "invalid [dogfood_lease] config, using defaults: "+e.Error())
+	}
+	return lr, nil
+}
+
+// ---- executing operations against a lease ---------------------------------
+
+// withLease locks the repo's lease, loads it, runs fn against the machine,
+// delivers the resulting messages and cancels, persists the state when it
+// changed, and unlocks. Message delivery happens under the lease mutex so a
+// contact can never race a stale check-in onto the wire. Errors from argus
+// delivery never fail the operation; they land in the returned warnings.
+func withLease(ctx context.Context, client *argus.Client, lr *leaseRepo, fn func(m *leaseMachine)) ([]string, error) {
+	mu := lockLease(lr.SourceRepo)
+	defer mu.Unlock()
+
+	st, err := loadLease(lr.SourceRepo)
+	if err != nil {
+		return nil, fmt.Errorf("read dogfood lease: %w", err)
+	}
+	before, _ := marshalLease(st)
+
+	cache := map[string]Liveness{}
+	live := func(id string) Liveness {
+		if lv, ok := cache[id]; ok {
+			return lv
+		}
+		lctx, cancel := context.WithTimeout(ctx, leaseArgusTimeout)
+		defer cancel()
+		lv := Liveness{Class: LiveUnreachable, Err: "no argus client"}
+		if client != nil {
+			lv = lookupLiveness(lctx, client, id)
+		}
+		cache[id] = lv
+		setLeaseDiag(lr.SourceRepo, func(d *leaseDiag) {
+			if lv.Class == LiveUnreachable {
+				d.liveness = fmt.Sprintf("liveness lookup for task %s failed: %s", id, lv.Err)
+			} else {
+				d.liveness = ""
+			}
+		})
+		return lv
+	}
+	m := newLeaseMachine(st, LeaseEnv{
+		Now: time.Now().UTC(), Cfg: lr.Timers, RepoName: lr.Name, RepoSlug: lr.Slug,
+		DogfoodBranch: lr.Branch, Live: live,
+	})
+	fn(m)
+
+	warnings := deliverLeaseEffects(ctx, client, lr, m)
+
+	after, _ := marshalLease(st)
+	if string(before) != string(after) || !leaseFileExists(lr.SourceRepo) && (st.Holder != nil || len(st.Queue) > 0) {
+		if err := saveLease(lr.SourceRepo, st); err != nil {
+			return warnings, fmt.Errorf("persist dogfood lease: %w", err)
+		}
+	}
+	if st.Holder != nil || len(st.Queue) > 0 {
+		registerLease(lr.SourceRepo)
+	}
+	return warnings, nil
+}
+
+func leaseFileExists(sourceRepo string) bool {
+	p, err := leasePath(sourceRepo)
+	if err != nil {
+		return false
+	}
+	_, err = os.Stat(p)
+	return err == nil
+}
+
+// deliverLeaseEffects sends the machine's messages and cancels. A failed
+// check-in or final warning is undone in the state so it doesn't count as
+// silence and is retried on the next evaluation.
+func deliverLeaseEffects(ctx context.Context, client *argus.Client, lr *leaseRepo, m *leaseMachine) []string {
+	var warnings []string
+	if client == nil {
+		if len(m.fx.Msgs) > 0 {
+			warnings = append(warnings, "argus unreachable: lease messages were not delivered")
+		}
+		for _, msg := range m.fx.Msgs {
+			m.MarkUndelivered(msg)
+		}
+		return warnings
+	}
+	for _, c := range m.fx.Cancels {
+		cctx, cancel := context.WithTimeout(ctx, leaseArgusTimeout)
+		_ = client.CancelNotify(cctx, c.TaskID, c.DeliveryID) // best effort: already delivered or gone
+		cancel()
+	}
+	for _, msg := range m.fx.Msgs {
+		nctx, cancel := context.WithTimeout(ctx, leaseArgusTimeout)
+		err := client.Notify(nctx, msg.TaskID, msg.Text, msg.DeliveryID, msg.Deadline)
+		cancel()
+		if err == nil {
+			setLeaseDiag(lr.SourceRepo, func(d *leaseDiag) { d.delivery = "" })
+			continue
+		}
+		m.MarkUndelivered(msg) // checkin/final retried next tick (a 404 resolves to dead there)
+		text := fmt.Sprintf("could not deliver %s message to task %s: %v", msg.Kind, msg.TaskID, err)
+		warnings = append(warnings, text)
+		setLeaseDiag(lr.SourceRepo, func(d *leaseDiag) { d.delivery = text })
+	}
+	return warnings
+}
+
+// ---- scheduler registry & loop --------------------------------------------
+
+var leaseRegistry sync.Map // sourceRepo → struct{}
+
+func registerLease(sourceRepo string) { leaseRegistry.Store(sourceRepo, struct{}{}) }
+
+// TickLease evaluates one repo's lease timers. Idempotent and cheap when the
+// lease is free (it unregisters itself).
+func TickLease(ctx context.Context, client *argus.Client, sourceRepo string) error {
+	lr, err := resolveLeaseRepo(ctx, sourceRepo)
+	if err != nil {
+		return err
+	}
+	var free bool
+	_, err = withLease(ctx, client, lr, func(m *leaseMachine) {
+		m.Tick()
+		free = m.st.Holder == nil && len(m.st.Queue) == 0
+	})
+	if err == nil && free {
+		leaseRegistry.Delete(sourceRepo)
+	}
+	return err
+}
+
+// StartupScanLeases loads every persisted lease that has a holder or queue,
+// applies restart recovery (D4) and registers it with the scheduler.
+func StartupScanLeases(ctx context.Context, now time.Time) {
+	base, err := AuditDir()
+	if err != nil {
+		return
+	}
+	matches, _ := filepath.Glob(filepath.Join(base, "repos", "*", LeaseFilename))
+	for _, p := range matches {
+		st, err := readLeaseFile(p)
+		if err != nil || st.SourceRepo == "" || (st.Holder == nil && len(st.Queue) == 0) {
+			continue
+		}
+		src := st.SourceRepo
+		timers := config.DefaultDogfoodLeaseTimers()
+		if lr, err := resolveLeaseRepo(ctx, src); err == nil {
+			timers = lr.Timers
+		}
+		mu := lockLease(src)
+		if cur, err := loadLease(src); err == nil {
+			RecoverLeaseAfterRestart(cur, now, timers)
+			_ = saveLease(src, cur)
+		}
+		mu.Unlock()
+		registerLease(src)
+	}
+}
+
+// RunLeaseScheduler runs the lease scheduler until ctx is cancelled: a startup
+// scan, then a tick over every registered lease each interval.
+func RunLeaseScheduler(ctx context.Context, client *argus.Client, interval time.Duration) {
+	if interval <= 0 {
+		interval = 5 * time.Second
+	}
+	StartupScanLeases(ctx, time.Now().UTC())
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			leaseRegistry.Range(func(k, _ any) bool {
+				if ctx.Err() != nil {
+					return false
+				}
+				_ = TickLease(ctx, client, k.(string))
+				return true
+			})
+		}
+	}
+}
+
+// ---- verbs ---------------------------------------------------------------
+
+// refResult is the {task_id, task_name} shape in verb results.
+type refResult struct {
+	TaskID   string `json:"task_id"`
+	TaskName string `json:"task_name"`
+}
+
+// DogfoodClaimInput is the input for iris:dogfood_claim.
+type DogfoodClaimInput struct {
+	TaskID      string
+	WaitSeconds int
+	Position    int
+}
+
+// DogfoodClaimResult is the result of iris:dogfood_claim.
+type DogfoodClaimResult struct {
+	Status        string     `json:"status"` // granted | queued
+	DogfoodBranch string     `json:"dogfood_branch"`
+	Holder        *refResult `json:"holder"`
+	Position      int        `json:"position"`
+	Ahead         []LeaseRef `json:"ahead"`
+	QueueLength   int        `json:"queue_length"`
+	NextCheckinAt *time.Time `json:"next_checkin_at,omitempty"`
+	Message       string     `json:"message"`
+	Warnings      []string   `json:"warnings,omitempty"`
+}
+
+func leaseTargetRepo(ctx context.Context, client *argus.Client, taskID, path string) (*ResolvedRepo, *leaseRepo, error) {
+	target, err := ResolveTarget(ctx, client, taskID, path)
+	if err != nil {
+		return nil, nil, err
+	}
+	lr, err := resolveLeaseRepo(ctx, target.SourceRepo)
+	if err != nil {
+		return nil, nil, err
+	}
+	return target, lr, nil
+}
+
+func taskNameOf(t *ResolvedRepo) string {
+	if t != nil && t.Task != nil {
+		return t.Task.Name
+	}
+	return ""
+}
+
+// DogfoodClaim claims the dogfood lease or joins the queue, optionally
+// waiting up to WaitSeconds (clamped 0-25) for a grant.
+func DogfoodClaim(ctx context.Context, client *argus.Client, in DogfoodClaimInput) (*DogfoodClaimResult, error) {
+	if in.TaskID == "" {
+		return nil, errors.New("task_id is required")
+	}
+	if in.Position < 0 {
+		return nil, errors.New("position must be >= 1")
+	}
+	target, lr, err := leaseTargetRepo(ctx, client, in.TaskID, "")
+	if err != nil {
+		return nil, err
+	}
+	wait := clampLeaseWait(in.WaitSeconds)
+	name := taskNameOf(target)
+
+	var out ClaimOutcome
+	var warnings []string
+	claim := func(pos int) error {
+		w, err := withLease(ctx, client, lr, func(m *leaseMachine) { out = m.Claim(in.TaskID, name, pos) })
+		warnings = append(warnings, w...)
+		return err
+	}
+	if err := claim(in.Position); err != nil {
+		return nil, err
+	}
+	deadline := time.Now().Add(time.Duration(wait) * time.Second)
+	for !out.Granted && wait > 0 && time.Now().Before(deadline) {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(leasePollInterval):
+		}
+		if err := claim(0); err != nil { // re-claim while queued is a poll
+			return nil, err
+		}
+	}
+	return claimResult(lr, in.TaskID, out, append(lr.Warnings, dedupe(warnings)...)), nil
+}
+
+// clampLeaseWait clamps wait_seconds to 0-25 so a call stays under MCP client timeouts.
+func clampLeaseWait(n int) int {
+	if n < 0 {
+		return 0
+	}
+	if n > leaseMaxWaitSeconds {
+		return leaseMaxWaitSeconds
+	}
+	return n
+}
+
+func dedupe(in []string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, s := range in {
+		if !seen[s] {
+			seen[s] = true
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+func claimResult(lr *leaseRepo, taskID string, out ClaimOutcome, warnings []string) *DogfoodClaimResult {
+	r := &DogfoodClaimResult{
+		DogfoodBranch: lr.Branch,
+		Position:      out.Position,
+		Ahead:         out.Ahead,
+		QueueLength:   out.QueueLength,
+		Warnings:      warnings,
+	}
+	if r.Ahead == nil {
+		r.Ahead = []LeaseRef{}
+	}
+	if out.Holder.TaskID != "" {
+		r.Holder = &refResult{TaskID: out.Holder.TaskID, TaskName: out.Holder.TaskName}
+	}
+	if out.Granted {
+		r.Status = "granted"
+		r.Position = 0
+		t := out.NextCheckinAt
+		r.NextCheckinAt = &t
+		r.Message = fmt.Sprintf("You hold the dogfood lease for %s (branch %s). Call iris_set_dogfood, then iris_dogfood_release when you're done. A check-in is due at %s; answer it with iris_dogfood_renew.",
+			lr.Name, lr.Branch, t.Format(time.RFC3339))
+	} else {
+		r.Status = "queued"
+		holder := "someone"
+		if r.Holder != nil {
+			holder = fmt.Sprintf("%s (%s)", r.Holder.TaskName, r.Holder.TaskID)
+		}
+		r.Message = fmt.Sprintf("The dogfood lease for %s is busy: held by %s. You are at position %d. Iris will message you when the lease is granted; call iris_dogfood_claim again to poll.",
+			lr.Name, holder, out.Position)
+	}
+	return r
+}
+
+// DogfoodRenewResult is the result of iris:dogfood_renew.
+type DogfoodRenewResult struct {
+	Renewed       bool      `json:"renewed"`
+	NextCheckinAt time.Time `json:"next_checkin_at"`
+}
+
+// DogfoodRenew is the holder's "still using it" reply. A non-holder gets a
+// *LeaseRefusal error.
+func DogfoodRenew(ctx context.Context, client *argus.Client, taskID string) (*DogfoodRenewResult, error) {
+	if taskID == "" {
+		return nil, errors.New("task_id is required")
+	}
+	_, lr, err := leaseTargetRepo(ctx, client, taskID, "")
+	if err != nil {
+		return nil, err
+	}
+	var ref *LeaseRefusal
+	var next time.Time
+	if _, err := withLease(ctx, client, lr, func(m *leaseMachine) {
+		ref = m.Renew(taskID)
+		next = m.nextCheckinAt()
+	}); err != nil {
+		return nil, err
+	}
+	if ref != nil {
+		return nil, ref
+	}
+	return &DogfoodRenewResult{Renewed: true, NextCheckinAt: next}, nil
+}
+
+// DogfoodReleaseResult is the result of iris:dogfood_release.
+type DogfoodReleaseResult struct {
+	Released  bool   `json:"released"`
+	Was       string `json:"was"`
+	GrantedTo string `json:"granted_to,omitempty"`
+}
+
+// DogfoodRelease releases the lease or leaves the queue.
+func DogfoodRelease(ctx context.Context, client *argus.Client, taskID string) (*DogfoodReleaseResult, error) {
+	if taskID == "" {
+		return nil, errors.New("task_id is required")
+	}
+	_, lr, err := leaseTargetRepo(ctx, client, taskID, "")
+	if err != nil {
+		return nil, err
+	}
+	var out ReleaseOutcome
+	if _, err := withLease(ctx, client, lr, func(m *leaseMachine) { out = m.Release(taskID) }); err != nil {
+		return nil, err
+	}
+	return &DogfoodReleaseResult{Released: out.Released, Was: out.Was, GrantedTo: out.GrantedTo}, nil
+}
+
+// DogfoodForceReleaseInput is the input for iris:dogfood_force_release.
+type DogfoodForceReleaseInput struct {
+	TaskID string
+	Path   string
+	Reason string
+}
+
+// DogfoodForceReleaseResult is the result of iris:dogfood_force_release.
+type DogfoodForceReleaseResult struct {
+	Released  bool     `json:"released"`
+	Evicted   string   `json:"evicted,omitempty"`
+	GrantedTo string   `json:"granted_to,omitempty"`
+	Warnings  []string `json:"warnings,omitempty"`
+}
+
+// DogfoodForceRelease evicts the holder regardless of its liveness. It works
+// with argus unreachable: messaging is then skipped with a warning.
+func DogfoodForceRelease(ctx context.Context, client *argus.Client, in DogfoodForceReleaseInput) (*DogfoodForceReleaseResult, error) {
+	if strings.TrimSpace(in.Reason) == "" {
+		return nil, errors.New("reason is required")
+	}
+	_, lr, err := leaseTargetRepo(ctx, client, in.TaskID, in.Path)
+	if err != nil {
+		return nil, err
+	}
+	res := &DogfoodForceReleaseResult{}
+	var evicted string
+	w, err := withLease(ctx, client, lr, func(m *leaseMachine) {
+		if m.st.Holder != nil {
+			evicted = m.st.Holder.TaskID
+		}
+		res.Released, res.GrantedTo = m.ForceRelease(in.Reason)
+	})
+	if err != nil {
+		return nil, err
+	}
+	if res.Released {
+		res.Evicted = evicted
+	}
+	res.Warnings = dedupe(w)
+	return res, nil
+}
+
+// DogfoodQueueMoveInput is the input for iris:dogfood_queue_move.
+type DogfoodQueueMoveInput struct {
+	TaskID     string
+	Path       string
+	MoveTaskID string
+	Position   int
+}
+
+// DogfoodQueueMoveResult is the result of iris:dogfood_queue_move.
+type DogfoodQueueMoveResult struct {
+	Queue []LeaseRef `json:"queue"`
+}
+
+// DogfoodQueueMove reorders the queue. It sends no messages.
+func DogfoodQueueMove(ctx context.Context, client *argus.Client, in DogfoodQueueMoveInput) (*DogfoodQueueMoveResult, error) {
+	if in.MoveTaskID == "" {
+		return nil, errors.New("move_task_id is required")
+	}
+	if in.Position < 1 {
+		return nil, errors.New("position must be >= 1")
+	}
+	_, lr, err := leaseTargetRepo(ctx, client, in.TaskID, in.Path)
+	if err != nil {
+		return nil, err
+	}
+	var q []LeaseRef
+	var merr error
+	if _, err := withLease(ctx, client, lr, func(m *leaseMachine) { q, merr = m.QueueMove(in.MoveTaskID, in.Position) }); err != nil {
+		return nil, err
+	}
+	if merr != nil {
+		return nil, merr
+	}
+	return &DogfoodQueueMoveResult{Queue: q}, nil
+}
+
+// ---- set_dogfood gate -------------------------------------------------------
+
+// LeaseGateError is returned by SetDogfood when the caller does not hold the
+// lease and did not pass lease_override. The structured fields let agents
+// avoid parsing the text.
+type LeaseGateError struct {
+	Message  string
+	Holder   *LeaseRef
+	Ahead    []LeaseRef
+	Position int
+}
+
+func (e *LeaseGateError) Error() string { return e.Message }
+
+func newLeaseGateError(r *LeaseRefusal) *LeaseGateError {
+	var b strings.Builder
+	b.WriteString("refusing to deploy: " + r.holderText())
+	if len(r.Ahead) > 0 {
+		b.WriteString("; queued ahead of you: " + refList(r.Ahead))
+	}
+	if r.Position > 0 {
+		fmt.Fprintf(&b, "; you are at queue position %d", r.Position)
+	}
+	b.WriteString(". Call iris_dogfood_claim to take (or queue for) the lease, or pass lease_override=true to deploy anyway.")
+	return &LeaseGateError{Message: b.String(), Holder: r.Holder, Ahead: r.Ahead, Position: r.Position}
+}
+
+// leaseGate is an entered set_dogfood gate.
+type leaseGate struct {
+	ctx      context.Context
+	client   *argus.Client
+	lr       *leaseRepo
+	taskID   string
+	holding  bool // caller is the holder: finish() ends the in-flight call
+	override *LeaseRef
+	// overrideWarning, when set, goes first in warnings.
+	overrideWarning string
+}
+
+// enterLeaseGate runs the set_dogfood lease gate (spec: "Dogfood lease gate").
+// internal marks iris-internal callers (the ship recompose), which pass
+// without an override when the lease is free or held by taskID.
+func enterLeaseGate(ctx context.Context, client *argus.Client, lr *leaseRepo, taskID string, override, internal bool) (*leaseGate, error) {
+	g := &leaseGate{ctx: ctx, client: client, lr: lr, taskID: taskID}
+	var refusal *LeaseRefusal
+	_, err := withLease(ctx, client, lr, func(m *leaseMachine) {
+		switch {
+		case taskID != "" && m.st.Holder != nil && m.st.Holder.TaskID == taskID:
+			m.BeginFlight(taskID)
+			g.holding = true
+		case internal && m.st.Holder == nil:
+			// Free lease: the internal caller passes without holding it.
+		case override:
+			if m.st.Holder != nil {
+				h := m.holderRef()
+				g.override = &h
+				g.overrideWarning = fmt.Sprintf("LEASE OVERRIDE: deployed while %s (%s) holds the dogfood lease; the holder was notified.", h.TaskName, h.TaskID)
+			} else {
+				g.overrideWarning = "LEASE OVERRIDE: deployed without holding the dogfood lease (no holder)."
+			}
+		default:
+			refusal = m.Refusal(taskID)
+		}
+	})
+	if err != nil {
+		return nil, err
+	}
+	if refusal != nil {
+		return nil, newLeaseGateError(refusal)
+	}
+	return g, nil
+}
+
+// finish ends the holder's in-flight call (counts as contact), whatever the
+// deploy's outcome.
+func (g *leaseGate) finish() {
+	if !g.holding {
+		return
+	}
+	_, _ = withLease(g.ctx, g.client, g.lr, func(m *leaseMachine) { m.EndFlight(g.taskID) })
+}
+
+// notifyOverridden tells the holder its dogfood tree was replaced.
+func (g *leaseGate) notifyOverridden(callerName, sha string) {
+	if g.override == nil || g.override.TaskID == g.taskID {
+		return
+	}
+	caller := callerName
+	if caller == "" {
+		caller = "a caller with no task"
+	}
+	text := fmt.Sprintf("[iris] %s deployed to dogfood for %s with lease_override while you hold the lease; the running tree is now %s.", caller, g.lr.Name, sha)
+	_, _ = withLease(g.ctx, g.client, g.lr, func(m *leaseMachine) {
+		if m.st.Holder != nil && m.st.Holder.TaskID == g.override.TaskID {
+			m.Notice(g.override.TaskID, leaseMsgOverride, text)
+		}
+	})
+}
+
+// ---- ship_feature recompose check ---------------------------------------------
+
+// leaseHolderRef reports the current holder (nil when free) without side effects.
+func leaseHolderRef(sourceRepo string) (*LeaseRef, error) {
+	st, err := loadLease(sourceRepo)
+	if err != nil {
+		return nil, err
+	}
+	if st.Holder == nil {
+		return nil, nil
+	}
+	return &LeaseRef{TaskID: st.Holder.TaskID, TaskName: st.Holder.TaskName}, nil
+}
+
+// noticeHolder queues a notice to the current holder when it is holderID.
+func noticeHolder(ctx context.Context, client *argus.Client, sourceRepo, holderID, kind, text string) {
+	lr, err := resolveLeaseRepo(ctx, sourceRepo)
+	if err != nil {
+		return
+	}
+	_, _ = withLease(ctx, client, lr, func(m *leaseMachine) {
+		if m.st.Holder != nil && m.st.Holder.TaskID == holderID {
+			m.Notice(holderID, kind, text)
+		}
+	})
+}
+
+// ---- status view -----------------------------------------------------------------
+
+// DogfoodLeaseView is the dogfood_lease field of iris:status.
+type DogfoodLeaseView struct {
+	Holder   *LeaseHolderView    `json:"holder"`
+	Queue    []LeaseQueueView    `json:"queue"`
+	Timers   LeaseTimersView     `json:"timers"`
+	History  []LeaseHistoryEntry `json:"history"`
+	Warnings []string            `json:"warnings"`
+}
+
+// LeaseHolderView is the holder as reported by status.
+type LeaseHolderView struct {
+	TaskID                  string     `json:"task_id"`
+	TaskName                string     `json:"task_name"`
+	GrantedAt               time.Time  `json:"granted_at"`
+	LastContactAt           time.Time  `json:"last_contact_at"`
+	NextCheckinAt           time.Time  `json:"next_checkin_at"`
+	CheckinOutstandingSince *time.Time `json:"checkin_outstanding_since,omitempty"`
+	ReleaseAt               *time.Time `json:"release_at,omitempty"`
+	InFlightSetDogfood      bool       `json:"in_flight_set_dogfood"`
+}
+
+// LeaseQueueView is a queued task as reported by status.
+type LeaseQueueView struct {
+	TaskID     string    `json:"task_id"`
+	TaskName   string    `json:"task_name"`
+	Position   int       `json:"position"`
+	EnqueuedAt time.Time `json:"enqueued_at"`
+}
+
+// LeaseTimersView reports the effective timers.
+type LeaseTimersView struct {
+	WarmerSeconds      int        `json:"warmer_seconds"`
+	GraceSeconds       int        `json:"grace_seconds"`
+	IdleReleaseSeconds int        `json:"idle_release_seconds"`
+	IdleReleaseAt      *time.Time `json:"idle_release_at,omitempty"`
+}
+
+// ReadDogfoodLeaseView builds the status field. Read-only: no messages, no
+// timer changes, no liveness lookups, no writes. A malformed lease file is
+// reported as a warning, never an error.
+func ReadDogfoodLeaseView(ctx context.Context, sourceRepo string) *DogfoodLeaseView {
+	branch, block, _, err := resolveDogfoodConfig(ctx, sourceRepo)
+	if err != nil || branch == "" {
+		return nil
+	}
+	timers, verrs := config.ValidDogfoodLeaseTimers(block)
+	v := &DogfoodLeaseView{
+		Queue:    []LeaseQueueView{},
+		History:  []LeaseHistoryEntry{},
+		Warnings: []string{},
+		Timers: LeaseTimersView{
+			WarmerSeconds: timers.WarmerSeconds, GraceSeconds: timers.GraceSeconds, IdleReleaseSeconds: timers.IdleReleaseSeconds,
+		},
+	}
+	for _, e := range verrs {
+		v.Warnings = append(v.Warnings, "invalid [dogfood_lease] config, using defaults: "+e.Error())
+	}
+	st, err := loadLease(sourceRepo)
+	if err != nil {
+		p, _ := leasePath(sourceRepo)
+		v.Warnings = append(v.Warnings, fmt.Sprintf("unreadable %s: %v", filepath.Base(p), err))
+		return v
+	}
+	if h := st.Holder; h != nil {
+		hv := &LeaseHolderView{
+			TaskID: h.TaskID, TaskName: h.TaskName, GrantedAt: h.GrantedAt, LastContactAt: h.LastContactAt,
+			NextCheckinAt:      h.LastContactAt.Add(time.Duration(timers.WarmerSeconds) * time.Second),
+			InFlightSetDogfood: h.InFlight > 0,
+		}
+		if !h.CheckinSentAt.IsZero() {
+			t := h.CheckinSentAt
+			hv.CheckinOutstandingSince = &t
+		}
+		if !h.ReleaseAt.IsZero() {
+			t := h.ReleaseAt
+			hv.ReleaseAt = &t
+		}
+		v.Holder = hv
+		idleAt := h.LastContactAt.Add(time.Duration(timers.IdleReleaseSeconds) * time.Second)
+		v.Timers.IdleReleaseAt = &idleAt
+	}
+	for i, q := range st.Queue {
+		v.Queue = append(v.Queue, LeaseQueueView{TaskID: q.TaskID, TaskName: q.TaskName, Position: i + 1, EnqueuedAt: q.EnqueuedAt})
+	}
+	if st.History != nil {
+		v.History = st.History
+	}
+	d := getLeaseDiag(sourceRepo)
+	if d.liveness != "" {
+		v.Warnings = append(v.Warnings, d.liveness)
+	}
+	if d.delivery != "" {
+		v.Warnings = append(v.Warnings, d.delivery)
+	}
+	return v
+}
