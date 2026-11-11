@@ -64,4 +64,4 @@
 
 - [x] 7.1 `gofmt`, `go build ./...`, `go vet ./...`, `go test ./...` green.
 - [x] 7.2 `openspec validate dogfood-lease-queue --strict` and `openspec validate --all --strict` clean.
-- [ ] 7.3 Dogfood it on iris itself: two argus tasks claim, one is queued and receives the hand-off message, and `iris_status` shows the queue.
+- [ ] 7.3 Dogfood it on iris itself: two argus tasks claim, one is queued and receives the hand-off message, and `iris_status` shows the queue. **Deferred:** needs a live argus daemon and a deployed iris with two real tasks, which the implementation sandbox cannot provide; verify after merge and deploy. Covered meanwhile by the fake-argus end-to-end tests.
