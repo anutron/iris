@@ -343,9 +343,7 @@ func deliverLeaseEffects(ctx context.Context, client *argus.Client, lr *leaseRep
 			}
 			m.MarkUndelivered(msg)     // checkin/final are retried next tick
 			if argus.IsNotFound(err) { // the task is gone: dead, and nothing to warn about
-				if msg.Kind == leaseMsgCheckin || msg.Kind == leaseMsgFinal {
-					m.ReleaseDead(msg.TaskID)
-				}
+				m.ReleaseDead(msg.TaskID) // no-op unless it is the current holder
 				continue
 			}
 			text := fmt.Sprintf("could not deliver %s message to task %s: %v", msg.Kind, msg.TaskID, err)
@@ -651,7 +649,7 @@ func DogfoodForceRelease(ctx context.Context, client *argus.Client, in DogfoodFo
 	if strings.TrimSpace(in.Reason) == "" {
 		return nil, errors.New("reason is required")
 	}
-	_, lr, err := leaseTargetRepo(ctx, client, in.TaskID, in.Path)
+	lr, resolveWarning, err := forceReleaseTarget(ctx, client, in)
 	if err != nil {
 		return nil, err
 	}
@@ -669,8 +667,66 @@ func DogfoodForceRelease(ctx context.Context, client *argus.Client, in DogfoodFo
 	if res.Released {
 		res.Evicted = evicted
 	}
+	if resolveWarning != "" {
+		w = append([]string{resolveWarning}, w...)
+	}
 	res.Warnings = dedupe(w)
 	return res, nil
+}
+
+// forceReleaseTarget resolves the repo for force-release. It prefers the normal
+// argus resolution, but an eviction must work with argus down: on failure (or
+// no client) it falls back to the persisted lease state — the repo whose lease
+// names task_id as holder or queued, or the given path when it has a lease.
+func forceReleaseTarget(ctx context.Context, client *argus.Client, in DogfoodForceReleaseInput) (*leaseRepo, string, error) {
+	var firstErr error
+	if client != nil || (in.TaskID == "" && in.Path == "") {
+		_, lr, err := leaseTargetRepo(ctx, client, in.TaskID, in.Path)
+		if err == nil {
+			return lr, "", nil
+		}
+		firstErr = err
+		if in.TaskID == "" && in.Path == "" {
+			return nil, "", err
+		}
+	}
+	src := ""
+	switch {
+	case in.Path != "":
+		if c := canonicalize(in.Path); leaseFileExists(c) {
+			src = c
+		}
+	case in.TaskID != "":
+		for _, repo := range ActiveLeaseRepos() {
+			if st, err := loadLease(repo); err == nil && leaseNames(st, in.TaskID) {
+				src = repo
+				break
+			}
+		}
+	}
+	if src == "" {
+		if firstErr != nil {
+			return nil, "", firstErr
+		}
+		return nil, "", errors.New("argus is unreachable and no persisted dogfood lease names that task or path")
+	}
+	lr, err := resolveLeaseRepo(ctx, src)
+	if err != nil {
+		return nil, "", err
+	}
+	return lr, "argus unreachable: target resolved from the persisted lease state", nil
+}
+
+func leaseNames(st *LeaseState, taskID string) bool {
+	if st.Holder != nil && st.Holder.TaskID == taskID {
+		return true
+	}
+	for _, q := range st.Queue {
+		if q.TaskID == taskID {
+			return true
+		}
+	}
+	return false
 }
 
 // DogfoodQueueMoveInput is the input for iris:dogfood_queue_move.
@@ -692,7 +748,7 @@ func DogfoodQueueMove(ctx context.Context, client *argus.Client, in DogfoodQueue
 		return nil, errors.New("move_task_id is required")
 	}
 	if in.Position < 1 {
-		return nil, errors.New("position must be >= 1")
+		in.Position = 1 // clamped to [1, queue_length]
 	}
 	_, lr, err := leaseTargetRepo(ctx, client, in.TaskID, in.Path)
 	if err != nil {
@@ -800,7 +856,7 @@ func (g *leaseGate) notifyOverridden(callerName, sha string) {
 	if caller == "" {
 		caller = "a caller with no task"
 	}
-	text := fmt.Sprintf("[iris] %s deployed to dogfood for %s with lease_override while you hold the lease; the running tree is now %s.", cleanText(caller), cleanText(g.lr.Name), cleanText(sha))
+	text := fmt.Sprintf("[iris] %s deployed to dogfood for %s with lease_override while you hold the lease; the running tree is now %s. Call iris_set_dogfood again to redeploy your build, or iris_dogfood_release if you are done.", cleanText(caller), cleanText(g.lr.Name), cleanText(sha))
 	_, _ = withLease(g.ctx, g.client, g.lr, func(m *leaseMachine) {
 		if m.st.Holder != nil && m.st.Holder.TaskID == g.override.TaskID {
 			m.Notice(g.override.TaskID, leaseMsgOverride, text)

@@ -7,7 +7,7 @@ When a `via: "pr-auto"` ship would re-compose the dogfood branch, iris SHALL che
 - **Lease free, or held by the shipping task:** iris SHALL run the recompose as an internal caller that passes the lease gate without a `LEASE OVERRIDE:` warning. When the shipping task holds the lease, the recompose SHALL count as its lease contact.
 - **Lease held by another task:** iris SHALL skip the recompose and leave the dogfood branch and manifest unchanged. The result SHALL report `recompose: { attempted: false, succeeded: false }` and a warning with `code: "recompose_skipped"` whose message says dogfood is leased to the holder (task ID and name). Iris SHALL message the holder that the shipped branch landed on the default branch and that it may want to recompose dogfood.
 
-The ship itself (PR, merge, fetch) SHALL succeed regardless of the lease; only the recompose is affected.
+The ship itself (PR, merge, fetch) SHALL succeed regardless of the lease; only the recompose is affected. If another task claims the lease between iris's check and the `set_dogfood` gate, the recompose SHALL be skipped with the same `recompose_skipped` warning instead of failing.
 
 #### Scenario: Recompose skipped while another task holds the lease
 

@@ -539,7 +539,7 @@ func recomposeAfterShip(ctx context.Context, client *argus.Client, taskID string
 			shipper = taskID
 		}
 		noticeHolder(ctx, client, target.SourceRepo, holder.TaskID, leaseMsgRecompose, fmt.Sprintf(
-			"[iris] %s shipped %s to %s; dogfood recompose was skipped because you hold the lease. Recompose when convenient.",
+			"[iris] %s shipped %s to %s; dogfood recompose was skipped because you hold the lease. Recompose and call iris_set_dogfood when convenient.",
 			cleanText(shipper), cleanText(shippedBranch), cleanText(manifest.Base.Ref)))
 		return &RecomposeResult{Attempted: false}, &Warning{
 			Code: "recompose_skipped",

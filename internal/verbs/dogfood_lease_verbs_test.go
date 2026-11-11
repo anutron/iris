@@ -690,3 +690,53 @@ func TestTickLease_Notify404TreatedAsDead(t *testing.T) {
 		t.Fatalf("B should be granted: %+v", ns)
 	}
 }
+
+func TestDogfoodForceRelease_TaskIDWithArgusDownResolvesFromLeaseState(t *testing.T) {
+	src, _, _, f, c := leaseFixture(t, "lv-force-down2")
+	canon := canonicalize(src)
+	claim(t, c, "A", 0)
+	claim(t, c, "B", 0)
+	f.srv.Close()
+	r, err := DogfoodForceRelease(context.Background(), c, DogfoodForceReleaseInput{TaskID: "B", Reason: "argus is down"})
+	if err != nil || !r.Released || r.GrantedTo != "B" {
+		t.Fatalf("r=%+v err=%v", r, err)
+	}
+	st, _ := loadLease(canon)
+	if st.Holder == nil || st.Holder.TaskID != "B" {
+		t.Fatalf("holder = %+v", st.Holder)
+	}
+	// A nil client (CLI with argus down) must not panic either.
+	r, err = DogfoodForceRelease(context.Background(), nil, DogfoodForceReleaseInput{TaskID: "B", Reason: "again"})
+	if err != nil || !r.Released {
+		t.Fatalf("nil client: r=%+v err=%v", r, err)
+	}
+	if _, err = DogfoodForceRelease(context.Background(), nil, DogfoodForceReleaseInput{TaskID: "nobody", Reason: "x"}); err == nil {
+		t.Fatal("an unknown task with argus down must be refused")
+	}
+}
+
+func TestDogfoodRelease_GrantToGoneTaskFreesLease(t *testing.T) {
+	src, _, _, f, c := leaseFixture(t, "lv-grant404")
+	canon := canonicalize(src)
+	claim(t, c, "A", 0)
+	claim(t, c, "B", 0)
+	f.with(func() { f.notifyGone = map[string]bool{"B": true} })
+	if _, err := DogfoodRelease(context.Background(), c, "A"); err != nil {
+		t.Fatal(err)
+	}
+	st, _ := loadLease(canon)
+	if st.Holder != nil {
+		t.Fatalf("a grant whose notify 404s is a dead task; lease should be free, holder=%+v", st.Holder)
+	}
+}
+
+func TestDogfoodQueueMove_PositionBelowOneClampsToFront(t *testing.T) {
+	_, _, _, _, c := leaseFixture(t, "lv-move0")
+	claim(t, c, "A", 0)
+	claim(t, c, "B", 0)
+	claim(t, c, "C", 0)
+	r, err := DogfoodQueueMove(context.Background(), c, DogfoodQueueMoveInput{TaskID: "A", MoveTaskID: "C", Position: 0})
+	if err != nil || r.Queue[0].TaskID != "C" {
+		t.Fatalf("r=%+v err=%v", r, err)
+	}
+}

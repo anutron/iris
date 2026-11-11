@@ -110,7 +110,7 @@ Inputs:
 - `move_task_id` (string, required): the queued task to move.
 - `position` (integer, required, 1-based): its new position, clamped to `[1, queue_length]`.
 
-Iris SHALL move the task, shift the others to keep their relative order, record the move in the lease history, and return the new queue as an ordered array of `{ task_id, task_name, position }`. Iris SHALL NOT message tasks whose position changed; they see the new position on their next claim. A `move_task_id` that is not queued (including the holder) SHALL be refused with an error, and no state SHALL change.
+Iris SHALL move the task, shift the others to keep their relative order, record the move in the lease history, and return `{ queue: [...] }`, the new queue as an ordered array of `{ task_id, task_name, position }`. A `position` below 1 is treated as 1. Iris SHALL NOT message tasks whose position changed; they see the new position on their next claim. A `move_task_id` that is not queued (including the holder) SHALL be refused with an error, and no state SHALL change.
 
 #### Scenario: Human moves a task to the front
 
@@ -182,13 +182,19 @@ Inputs:
 - `task_id` or `path` (optional): resolved like `iris:status`, to identify the source repo.
 - `reason` (string, required).
 
-Iris SHALL release the current holder whatever its liveness or in-flight state, record the reason in the lease history, message the evicted holder with the reason, and grant the lease to the next live queued task. Force-release SHALL succeed even when argus is unreachable; messaging is then skipped and a warning is returned. With no holder, it SHALL return `{ released: false }`.
+Iris SHALL release the current holder whatever its liveness or in-flight state, record the reason in the lease history, message the evicted holder with the reason, and grant the lease to the next live queued task. Force-release SHALL succeed even when argus is unreachable; messaging is then skipped and a warning is returned. When argus cannot resolve the target, iris SHALL resolve the repo from the persisted lease state instead: the repo whose lease names the given `task_id` as holder or queued, or the given `path` when it has a lease. With no holder, it SHALL return `{ released: false }`.
 
 #### Scenario: Force-release evicts a stuck holder
 
 - **GIVEN** `A` holds the lease, the bridge reports `A` as `busy=true`, and `B` is queued
 - **WHEN** a human runs `iris dogfood force-release --reason "A is looping"`
 - **THEN** iris releases `A`, messages `A` with the reason, grants the lease to `B`, and records the reason in the lease history
+
+#### Scenario: Force-release works with argus unreachable
+
+- **GIVEN** `A` holds the lease, `B` is queued, and argus is unreachable
+- **WHEN** a human runs `iris dogfood force-release --task B --reason "argus is down"`
+- **THEN** iris resolves the repo from the persisted lease, releases `A`, grants the lease to `B`, skips messaging, and returns a warning
 
 #### Scenario: Force-release without a reason is refused
 
@@ -320,7 +326,7 @@ The lease messages are:
 - lease override notice
 - recompose-skipped notice
 
-Every message SHALL be prefixed `[iris]` and SHALL name the source repo and the exact iris tool the recipient should call to respond. Agents respond by calling iris verbs, not by replying in chat.
+Every message SHALL be prefixed `[iris]` and SHALL name the source repo and the exact iris tool the recipient should call to respond. Caller-influenced text in messages (repo, branch, reason, caller name, SHA) SHALL have control characters replaced and SHALL be truncated to 120 characters, and delivery deadlines SHALL NOT exceed one hour. Agents respond by calling iris verbs, not by replying in chat.
 
 Delivery deadlines:
 
@@ -329,7 +335,7 @@ Delivery deadlines:
 
 When the holder makes contact, iris SHALL cancel its pending check-in and final-warning deliveries (`DELETE /api/tasks/{id}/notify/{delivery_id}`).
 
-A check-in that iris failed to submit (any error other than 404) SHALL NOT start the silence countdown, and iris SHALL retry it on its next evaluation. A 404 from the notify endpoint SHALL be treated as the dead liveness state.
+A check-in that iris failed to submit (any error other than 404) SHALL NOT start the silence countdown, and iris SHALL retry it on its next evaluation. A 404 from the notify endpoint, for any lease message, SHALL be treated as the dead liveness state: if the recipient is the current holder it is released as dead and the lease passes to the next live queued task.
 
 #### Scenario: Grant message names the release tool
 
@@ -391,3 +397,31 @@ Iris SHALL use the defaults for a missing block or a missing key. Iris SHALL re-
 - **GIVEN** `.iris.local.toml` declares `[dogfood_lease] warmer_seconds = 300`
 - **WHEN** a task is granted the lease
 - **THEN** its first check-in falls due 300 seconds after the grant
+
+### Requirement: Lease operations are serialized and evaluated by the daemon
+
+Every lease read-modify-write SHALL be serialized per source repo across processes (the daemon and CLI commands) with an advisory file lock, and lease messages SHALL be sent while that lock is held so a contact cannot race a stale check-in onto the wire. The daemon SHALL evaluate every persisted lease that has a holder or a queue at least every 5 seconds, including leases claimed by a CLI process, and SHALL stop its scheduler on shutdown. A claim SHALL also evaluate the lease timers, and when that releases the holder the claim SHALL return the grant. A holder with a running `iris_set_dogfood` call is exempt from silence, dead and idle releases; a restart discards the in-flight mark. If the queue becomes empty before a scheduled release, iris SHALL cancel the release and the final warning.
+
+#### Scenario: Last waiter leaving cancels the scheduled release
+
+- **GIVEN** `A` holds the lease, `B` is queued, and iris has sent `A` the final "releasing in 30s" warning
+- **WHEN** `B` calls `iris_dogfood_release` and the scheduled release time passes
+- **THEN** `A` keeps the lease and iris sends no release message
+
+#### Scenario: A claim made by a CLI process is ticked by the daemon
+
+- **GIVEN** a lease claimed through `iris dogfood claim`
+- **WHEN** the daemon's next evaluation runs
+- **THEN** that lease's timers are evaluated like any other
+
+#### Scenario: Notify 404 for a grant frees the lease
+
+- **GIVEN** `A` holds the lease, `B` is queued, and argus answers 404 when iris posts a notify to `B`
+- **WHEN** `A` calls `iris_dogfood_release`
+- **THEN** `B` is released as dead and the lease becomes free
+
+#### Scenario: Check-in deadlines never exceed one hour
+
+- **GIVEN** `warmer_seconds = 7200`
+- **WHEN** iris sends a check-in
+- **THEN** its delivery deadline is one hour, the argus maximum
