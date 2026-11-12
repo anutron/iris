@@ -509,7 +509,7 @@ func TestValidateConfig_DogfoodLeaseDefaultsResolved(t *testing.T) {
 		t.Fatalf("resolved timers = %+v", got)
 	}
 	b, _ := json.Marshal(res.Resolved)
-	if !strings.Contains(string(b), `"dogfood_lease":{"warmer_seconds":600,"grace_seconds":30,"idle_release_seconds":1800}`) {
+	if !strings.Contains(string(b), `"dogfood_lease":{"warmer_seconds":600,"grace_seconds":30,"idle_release_seconds":1800,"in_flight_max_seconds":900}`) {
 		t.Fatalf("resolved JSON missing effective lease timers: %s", b)
 	}
 }

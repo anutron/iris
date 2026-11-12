@@ -19,15 +19,17 @@ import (
 // fakeLeaseArgus is an argus stand-in with per-task name/status/bridge state,
 // notify capture, and failure injection.
 type fakeLeaseArgus struct {
-	mu         sync.Mutex
-	tasks      map[string]*fakeLeaseTask
-	notifies   []fakeNotify
-	cancels    []string        // "task/delivery"
-	notifyHTTP int             // when >0, notify returns this status
-	notifyGone map[string]bool // task IDs whose notify returns 404
-	worktree   string
-	src        string
-	srv        *httptest.Server
+	mu          sync.Mutex
+	tasks       map[string]*fakeLeaseTask
+	notifies    []fakeNotify
+	cancels     []string        // "task/delivery"
+	notifyHTTP  int             // when >0, notify returns this status
+	notifyGone  map[string]bool // task IDs whose notify returns 404
+	notifyState string          // state in the notify response body
+	events      []string        // ordered wire log: "post <task>/<delivery>" and "cancel <task>/<delivery>"
+	worktree    string
+	src         string
+	srv         *httptest.Server
 }
 
 type fakeLeaseTask struct {
@@ -123,10 +125,12 @@ func (f *fakeLeaseArgus) serve(w http.ResponseWriter, r *http.Request) {
 			DeadlineMS float64 `json:"deadline_ms"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&body)
+		f.events = append(f.events, "post "+id+"/"+body.DeliveryID)
 		f.notifies = append(f.notifies, fakeNotify{Task: id, Text: body.Text, DeliveryID: body.DeliveryID, DeadlineMS: body.DeadlineMS})
 		w.WriteHeader(http.StatusAccepted)
-		_, _ = w.Write([]byte(`{}`))
+		_, _ = w.Write([]byte(`{"delivery_id":"` + body.DeliveryID + `","state":"` + f.notifyState + `"}`))
 	case len(parts) == 3 && parts[1] == "notify" && r.Method == "DELETE":
+		f.events = append(f.events, "cancel "+id+"/"+parts[2])
 		f.cancels = append(f.cancels, id+"/"+parts[2])
 		w.WriteHeader(http.StatusNoContent)
 	default:
@@ -287,8 +291,9 @@ func TestDogfoodRenew(t *testing.T) {
 		t.Fatalf("res=%+v err=%v", res, err)
 	}
 	f.with(func() {
-		if len(f.cancels) != 1 || !strings.HasPrefix(f.cancels[0], "A/") {
-			t.Fatalf("pending check-in should be cancelled: %v", f.cancels)
+		// the still-pending grant notice and the check-in are both obsolete
+		if len(f.cancels) != 2 || !strings.HasPrefix(f.cancels[0], "A/") || !strings.HasPrefix(f.cancels[1], "A/") {
+			t.Fatalf("pending grant and check-in should be cancelled: %v", f.cancels)
 		}
 	})
 	_, err = DogfoodRenew(context.Background(), c, "B")
@@ -738,5 +743,118 @@ func TestDogfoodQueueMove_PositionBelowOneClampsToFront(t *testing.T) {
 	r, err := DogfoodQueueMove(context.Background(), c, DogfoodQueueMoveInput{TaskID: "A", MoveTaskID: "C", Position: 0})
 	if err != nil || r.Queue[0].TaskID != "C" {
 		t.Fatalf("r=%+v err=%v", r, err)
+	}
+}
+
+// ---- obsolete notices (fix-dogfood-lease-notices) -------------------------------
+
+func TestDogfoodRelease_CancelsThePendingGrantNotice(t *testing.T) {
+	_, _, _, f, c := leaseFixture(t, "lv-stale-grant")
+	claim(t, c, "A", 0)
+	grant := f.notifiesTo("A")[0]
+	if _, err := DogfoodRelease(context.Background(), c, "A"); err != nil {
+		t.Fatal(err)
+	}
+	f.with(func() {
+		if len(f.cancels) != 1 || f.cancels[0] != "A/"+grant.DeliveryID {
+			t.Fatalf("cancels = %v, want the grant %s", f.cancels, grant.DeliveryID)
+		}
+	})
+}
+
+func TestDogfoodNotices_CancelSurvivesRestart(t *testing.T) {
+	src, _, _, f, c := leaseFixture(t, "lv-stale-restart")
+	canon := canonicalize(src)
+	claim(t, c, "A", 0)
+	grant := f.notifiesTo("A")[0]
+	// The delivery ID is on disk, not only in memory.
+	st, err := loadLease(canon)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(st.Notices) != 1 || st.Notices[0].DeliveryID != grant.DeliveryID || st.Notices[0].TaskID != "A" {
+		t.Fatalf("persisted notices = %+v", st.Notices)
+	}
+	// Simulate an iris restart: startup recovery, then a fresh release.
+	StartupScanLeases(context.Background(), time.Now().UTC())
+	if _, err := DogfoodRelease(context.Background(), c, "A"); err != nil {
+		t.Fatal(err)
+	}
+	f.with(func() {
+		if len(f.cancels) != 1 || f.cancels[0] != "A/"+grant.DeliveryID {
+			t.Fatalf("cancels = %v", f.cancels)
+		}
+	})
+}
+
+func TestDogfoodForceRelease_CancelsEvictedHoldersPendingNotices(t *testing.T) {
+	src, _, _, f, c := leaseFixture(t, "lv-stale-force")
+	_ = src
+	claim(t, c, "A", 0)
+	claim(t, c, "B", 0) // check-in to A
+	grantA := f.notifiesTo("A")[0].DeliveryID
+	checkin := f.notifiesTo("A")[1].DeliveryID
+	if _, err := DogfoodForceRelease(context.Background(), c, DogfoodForceReleaseInput{TaskID: "A", Reason: "stuck"}); err != nil {
+		t.Fatal(err)
+	}
+	f.with(func() {
+		have := strings.Join(f.cancels, ",")
+		if !strings.Contains(have, "A/"+grantA) || !strings.Contains(have, "A/"+checkin) {
+			t.Fatalf("cancels = %v", f.cancels)
+		}
+		// Wire order: every cancel for A goes out before the released notice
+		// to A and the grant to B.
+		firstPost, lastCancel := -1, -1
+		for i, e := range f.events {
+			if strings.HasPrefix(e, "cancel A/") {
+				lastCancel = i
+			}
+			if firstPost < 0 && strings.HasPrefix(e, "post ") && (strings.Contains(e, "-released-") || strings.HasPrefix(e, "post B/")) {
+				firstPost = i
+			}
+		}
+		if firstPost < 0 || lastCancel < 0 || lastCancel > firstPost {
+			t.Fatalf("cancels must precede the released/grant posts; events = %v", f.events)
+		}
+	})
+}
+
+func TestDogfoodStatus_PendingCheckinWarns(t *testing.T) {
+	src, _, _, f, c := leaseFixture(t, "lv-pending-checkin")
+	canon := canonicalize(src)
+	f.with(func() { f.notifyState = "pending" })
+	claim(t, c, "A", 0)
+	claim(t, c, "B", 0)
+	v := ReadDogfoodLeaseView(context.Background(), canon)
+	found := false
+	for _, w := range v.Warnings {
+		if strings.Contains(w, "not yet submitted") && strings.Contains(w, "A") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("warnings = %v", v.Warnings)
+	}
+	// Once the holder makes contact the warning disappears.
+	if _, err := DogfoodRenew(context.Background(), c, "A"); err != nil {
+		t.Fatal(err)
+	}
+	for _, w := range ReadDogfoodLeaseView(context.Background(), canon).Warnings {
+		if strings.Contains(w, "not yet submitted") {
+			t.Fatalf("stale warning after renew: %s", w)
+		}
+	}
+}
+
+func TestDogfoodStatus_SubmittedCheckinDoesNotWarn(t *testing.T) {
+	src, _, _, f, c := leaseFixture(t, "lv-submitted-checkin")
+	canon := canonicalize(src)
+	f.with(func() { f.notifyState = "submitted" })
+	claim(t, c, "A", 0)
+	claim(t, c, "B", 0)
+	for _, w := range ReadDogfoodLeaseView(context.Background(), canon).Warnings {
+		if strings.Contains(w, "not yet submitted") {
+			t.Fatalf("unexpected warning: %s", w)
+		}
 	}
 }

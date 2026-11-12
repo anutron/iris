@@ -335,9 +335,10 @@ func deliverLeaseEffects(ctx context.Context, client *argus.Client, lr *leaseRep
 		}
 		for _, msg := range msgs {
 			nctx, cancel := context.WithTimeout(ctx, leaseArgusTimeout)
-			err := client.Notify(nctx, msg.TaskID, msg.Text, msg.DeliveryID, msg.Deadline)
+			state, err := client.Notify(nctx, msg.TaskID, msg.Text, msg.DeliveryID, msg.Deadline)
 			cancel()
 			if err == nil {
+				m.NoteDeliveryState(msg, state)
 				setLeaseDiag(lr.SourceRepo, func(d *leaseDiag) { d.delivery = "" })
 				continue
 			}
@@ -927,6 +928,7 @@ type LeaseTimersView struct {
 	WarmerSeconds      int        `json:"warmer_seconds"`
 	GraceSeconds       int        `json:"grace_seconds"`
 	IdleReleaseSeconds int        `json:"idle_release_seconds"`
+	InFlightMaxSeconds int        `json:"in_flight_max_seconds"`
 	IdleReleaseAt      *time.Time `json:"idle_release_at,omitempty"`
 }
 
@@ -944,7 +946,7 @@ func ReadDogfoodLeaseView(ctx context.Context, sourceRepo string) *DogfoodLeaseV
 		History:  []LeaseHistoryEntry{},
 		Warnings: []string{},
 		Timers: LeaseTimersView{
-			WarmerSeconds: timers.WarmerSeconds, GraceSeconds: timers.GraceSeconds, IdleReleaseSeconds: timers.IdleReleaseSeconds,
+			WarmerSeconds: timers.WarmerSeconds, GraceSeconds: timers.GraceSeconds, IdleReleaseSeconds: timers.IdleReleaseSeconds, InFlightMaxSeconds: timers.InFlightMaxSeconds,
 		},
 	}
 	for _, e := range verrs {
@@ -965,6 +967,9 @@ func ReadDogfoodLeaseView(ctx context.Context, sourceRepo string) *DogfoodLeaseV
 		if !h.CheckinSentAt.IsZero() {
 			t := h.CheckinSentAt
 			hv.CheckinOutstandingSince = &t
+			if h.CheckinDeliveryState == "pending" {
+				v.Warnings = append(v.Warnings, fmt.Sprintf("the check-in to task %s is accepted by argus but not yet submitted to its session (the session is not idle); it appears when the session next goes idle", h.TaskID))
+			}
 		}
 		if !h.ReleaseAt.IsZero() {
 			t := h.ReleaseAt

@@ -11,6 +11,9 @@ import (
 	"github.com/anutron/iris/internal/verbs"
 )
 
+// setDogfoodVerb is a seam for CLI wiring tests.
+var setDogfoodVerb = verbs.SetDogfood
+
 func newSetDogfoodCmd() *cobra.Command {
 	var taskID string
 	var sha string
@@ -48,7 +51,7 @@ that begins with '{').`,
 			if err != nil {
 				return fmt.Errorf("argus client required for set-dogfood: %w", err)
 			}
-			result, err := verbs.SetDogfood(cmd.Context(), client, taskID, verbs.SetDogfoodOpts{
+			result, err := setDogfoodVerb(cmd.Context(), client, taskID, verbs.SetDogfoodOpts{
 				Sha:           sha,
 				Manifest:      m,
 				Force:         force,

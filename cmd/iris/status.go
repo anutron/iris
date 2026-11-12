@@ -106,7 +106,8 @@ func classifyTarget(arg string) (taskID, path string) {
 
 // newCLIClient builds an argus.Client suitable for direct CLI invocations
 // (port discovery via the argus socket + scope token from disk).
-func newCLIClient(ctx context.Context) (*argus.Client, error) {
+// newCLIClient is a var so CLI wiring tests can stub the argus connection.
+var newCLIClient = func(ctx context.Context) (*argus.Client, error) {
 	cfg := config.Default()
 	token, err := cfg.LoadToken()
 	if err != nil {

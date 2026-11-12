@@ -20,6 +20,15 @@ func printJSON(cmd *cobra.Command, v any) error {
 	return nil
 }
 
+// Verb seams: tests replace these to observe what the CLI passes through.
+var (
+	dogfoodClaimVerb        = verbs.DogfoodClaim
+	dogfoodRenewVerb        = verbs.DogfoodRenew
+	dogfoodReleaseVerb      = verbs.DogfoodRelease
+	dogfoodForceReleaseVerb = verbs.DogfoodForceRelease
+	dogfoodQueueMoveVerb    = verbs.DogfoodQueueMove
+)
+
 func newDogfoodCmd() *cobra.Command {
 	root := &cobra.Command{
 		Use:   "dogfood",
@@ -46,7 +55,7 @@ func newDogfoodClaimCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("argus client required for dogfood claim: %w", err)
 			}
-			res, err := verbs.DogfoodClaim(cmd.Context(), client, verbs.DogfoodClaimInput{TaskID: taskID, WaitSeconds: wait, Position: position})
+			res, err := dogfoodClaimVerb(cmd.Context(), client, verbs.DogfoodClaimInput{TaskID: taskID, WaitSeconds: wait, Position: position})
 			if err != nil {
 				return err
 			}
@@ -71,7 +80,7 @@ func newDogfoodRenewCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("argus client required for dogfood renew: %w", err)
 			}
-			res, err := verbs.DogfoodRenew(cmd.Context(), client, taskID)
+			res, err := dogfoodRenewVerb(cmd.Context(), client, taskID)
 			if err != nil {
 				return err
 			}
@@ -94,7 +103,7 @@ func newDogfoodReleaseCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("argus client required for dogfood release: %w", err)
 			}
-			res, err := verbs.DogfoodRelease(cmd.Context(), client, taskID)
+			res, err := dogfoodReleaseVerb(cmd.Context(), client, taskID)
 			if err != nil {
 				return err
 			}
@@ -122,7 +131,7 @@ then skipped). With neither --task nor --path it targets iris itself.`,
 			}
 			// Argus being unreachable must not block an eviction.
 			client, _ := newCLIClient(cmd.Context())
-			res, err := verbs.DogfoodForceRelease(cmd.Context(), client, verbs.DogfoodForceReleaseInput{TaskID: taskID, Path: path, Reason: reason})
+			res, err := dogfoodForceReleaseVerb(cmd.Context(), client, verbs.DogfoodForceReleaseInput{TaskID: taskID, Path: path, Reason: reason})
 			if err != nil {
 				return err
 			}
@@ -157,7 +166,7 @@ iris itself).`,
 			if err != nil {
 				return fmt.Errorf("argus client required for dogfood queue-move: %w", err)
 			}
-			res, err := verbs.DogfoodQueueMove(cmd.Context(), client, verbs.DogfoodQueueMoveInput{TaskID: taskID, Path: path, MoveTaskID: args[0], Position: pos})
+			res, err := dogfoodQueueMoveVerb(cmd.Context(), client, verbs.DogfoodQueueMoveInput{TaskID: taskID, Path: path, MoveTaskID: args[0], Position: pos})
 			if err != nil {
 				return err
 			}

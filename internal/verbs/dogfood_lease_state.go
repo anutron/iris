@@ -44,6 +44,13 @@ type LeaseHolder struct {
 	// InFlight counts the holder's running set_dogfood calls. Never persisted
 	// meaningfully: a restart kills the calls, so recovery zeroes it.
 	InFlight int `json:"in_flight,omitempty"`
+	// InFlightSince is when the in-flight mark was last set. A mark older than
+	// the configured cap is stale (a killed CLI deploy) and is cleared.
+	InFlightSince time.Time `json:"in_flight_since,omitzero"`
+	// CheckinDeliveryState is argus's state for the outstanding check-in right
+	// after it was posted ("pending" until the holder's session is idle).
+	// Cleared on contact.
+	CheckinDeliveryState string `json:"checkin_delivery_state,omitempty"`
 	// PendingDeliveries are check-in/final-warning delivery IDs to cancel on contact.
 	PendingDeliveries []string `json:"pending_deliveries,omitempty"`
 }
@@ -53,6 +60,14 @@ type LeaseEntry struct {
 	TaskID     string    `json:"task_id"`
 	TaskName   string    `json:"task_name"`
 	EnqueuedAt time.Time `json:"enqueued_at"`
+}
+
+// LeaseNotice is a posted notice that argus may still hold pending.
+type LeaseNotice struct {
+	TaskID     string    `json:"task_id"`
+	DeliveryID string    `json:"delivery_id"`
+	Kind       string    `json:"kind"`
+	ExpiresAt  time.Time `json:"expires_at"`
 }
 
 // LeaseHistoryEntry records one transition.
@@ -67,10 +82,16 @@ type LeaseHistoryEntry struct {
 type LeaseState struct {
 	// SourceRepo is stored so the startup scan can find the repo a state file
 	// belongs to (the state directory name is a one-way hash).
-	SourceRepo string              `json:"source_repo,omitempty"`
-	Holder     *LeaseHolder        `json:"holder"`
-	Queue      []LeaseEntry        `json:"queue"`
-	History    []LeaseHistoryEntry `json:"history"`
+	SourceRepo string       `json:"source_repo,omitempty"`
+	Holder     *LeaseHolder `json:"holder"`
+	// Generation counts grants; every notice names it so a recipient can tell a
+	// stale notice from a current one.
+	Generation int `json:"generation,omitempty"`
+	// Notices are the posted lease notices that may still be pending in argus,
+	// so they can be cancelled when obsolete (even after an iris restart).
+	Notices []LeaseNotice       `json:"notices,omitempty"`
+	Queue   []LeaseEntry        `json:"queue"`
+	History []LeaseHistoryEntry `json:"history"`
 }
 
 // LeaseRef names a task for results and refusals.
@@ -167,7 +188,97 @@ type leaseMachine struct {
 }
 
 func newLeaseMachine(st *LeaseState, env LeaseEnv) *leaseMachine {
-	return &leaseMachine{st: st, env: env}
+	m := &leaseMachine{st: st, env: env}
+	m.pruneNotices()
+	m.expireStaleFlight()
+	return m
+}
+
+// pruneNotices drops notices whose argus delivery deadline has passed; argus
+// has already discarded them, so no cancel is needed.
+func (m *leaseMachine) pruneNotices() {
+	kept := m.st.Notices[:0:0]
+	for _, n := range m.st.Notices {
+		if m.env.Now.Before(n.ExpiresAt) {
+			kept = append(kept, n)
+			continue
+		}
+		if h := m.st.Holder; h != nil && h.TaskID == n.TaskID && n.Kind == leaseMsgCheckin {
+			h.CheckinDeliveryState = "" // the check-in is gone from argus
+		}
+	}
+	m.st.Notices = kept
+}
+
+// expireStaleFlight clears an in-flight mark older than the configured cap: a
+// killed `iris set-dogfood` would otherwise exempt the holder from every
+// release forever.
+func (m *leaseMachine) expireStaleFlight() {
+	h := m.st.Holder
+	if h == nil || h.InFlight == 0 || m.env.Cfg.InFlightMaxSeconds <= 0 {
+		return
+	}
+	since := h.InFlightSince
+	if since.IsZero() {
+		since = h.LastContactAt
+	}
+	if m.env.Now.Before(since.Add(m.cfgDur(m.env.Cfg.InFlightMaxSeconds))) {
+		return
+	}
+	h.InFlight, h.InFlightSince = 0, time.Time{}
+	m.history("inflight_expired", h.TaskID, fmt.Sprintf("deploy mark older than %s cleared", fmtLeaseDur(m.env.Cfg.InFlightMaxSeconds)))
+}
+
+// cancelNotices cancels (and forgets) this task's tracked notices, optionally
+// limited to kinds, and withdraws any not-yet-posted message of those kinds.
+func (m *leaseMachine) cancelNotices(taskID string, kinds ...string) {
+	match := func(k string) bool { return len(kinds) == 0 || containsStr(kinds, k) }
+	kept := m.st.Notices[:0:0]
+	for _, n := range m.st.Notices {
+		if n.TaskID == taskID && match(n.Kind) {
+			m.fx.Cancels = append(m.fx.Cancels, LeaseCancel{TaskID: taskID, DeliveryID: n.DeliveryID})
+			continue
+		}
+		kept = append(kept, n)
+	}
+	m.st.Notices = kept
+	// State persisted before notice tracking only knows check-in and final
+	// warning IDs on the holder: cancel those too.
+	if h := m.st.Holder; h != nil && h.TaskID == taskID && (match(leaseMsgCheckin) || match(leaseMsgFinal)) {
+		for _, d := range h.PendingDeliveries {
+			if !cancelled(m.fx.Cancels, d) {
+				m.fx.Cancels = append(m.fx.Cancels, LeaseCancel{TaskID: taskID, DeliveryID: d})
+			}
+		}
+	}
+	pending := m.fx.Msgs[:0:0]
+	for _, msg := range m.fx.Msgs {
+		if msg.TaskID == taskID && match(msg.Kind) {
+			continue
+		}
+		pending = append(pending, msg)
+	}
+	m.fx.Msgs = pending
+}
+
+func cancelled(cs []LeaseCancel, id string) bool {
+	for _, c := range cs {
+		if c.DeliveryID == id {
+			return true
+		}
+	}
+	return false
+}
+
+// forgetNotice stops tracking a delivery (its post failed).
+func (m *leaseMachine) forgetNotice(deliveryID string) {
+	kept := m.st.Notices[:0:0]
+	for _, n := range m.st.Notices {
+		if n.DeliveryID != deliveryID {
+			kept = append(kept, n)
+		}
+	}
+	m.st.Notices = kept
 }
 
 var leaseDeliverySeq atomic.Int64
@@ -238,8 +349,10 @@ func (m *leaseMachine) notify(to, kind, text string, deadline time.Duration) Lea
 	if deadline > leaseMaxDeadline { // argus's notify maximum
 		deadline = leaseMaxDeadline
 	}
+	text += fmt.Sprintf(" [lease #%d, %s]", m.st.Generation, m.env.Now.UTC().Format(time.RFC3339))
 	msg := LeaseMsg{TaskID: to, Kind: kind, Text: text, DeliveryID: m.deliveryID(kind), Deadline: deadline}
 	m.fx.Msgs = append(m.fx.Msgs, msg)
+	m.st.Notices = append(m.st.Notices, LeaseNotice{TaskID: to, DeliveryID: msg.DeliveryID, Kind: kind, ExpiresAt: m.env.Now.Add(deadline)})
 	return msg
 }
 
@@ -316,6 +429,8 @@ func (m *leaseMachine) queued(id, name string, pos int) ClaimOutcome {
 // Claim implements iris:dogfood_claim's state change. position is 1-based; 0
 // means append.
 func (m *leaseMachine) Claim(id, name string, position int) ClaimOutcome {
+	// Claiming again supersedes earlier "you were released / overridden" notices.
+	m.cancelNotices(id, leaseMsgReleased, leaseMsgOverride, leaseMsgRecompose)
 	if m.st.Holder == nil {
 		m.grant(id, name)
 		return m.granted()
@@ -428,6 +543,7 @@ func (m *leaseMachine) Release(id string) ReleaseOutcome {
 	}
 	if i := m.queueIndex(id); i >= 0 {
 		m.st.Queue = append(m.st.Queue[:i:i], m.st.Queue[i+1:]...)
+		m.cancelNotices(id)
 		m.history("leave", id, "left the queue")
 		return ReleaseOutcome{Released: true, Was: "queued"}
 	}
@@ -453,6 +569,9 @@ func (m *leaseMachine) BeginFlight(id string) bool {
 		return false
 	}
 	m.contact()
+	if m.st.Holder.InFlight == 0 {
+		m.st.Holder.InFlightSince = m.env.Now
+	}
 	m.st.Holder.InFlight++
 	return true
 }
@@ -464,6 +583,9 @@ func (m *leaseMachine) EndFlight(id string) {
 	}
 	if m.st.Holder.InFlight > 0 {
 		m.st.Holder.InFlight--
+	}
+	if m.st.Holder.InFlight == 0 {
+		m.st.Holder.InFlightSince = time.Time{}
 	}
 	m.contact()
 }
@@ -479,6 +601,7 @@ func (m *leaseMachine) Touch(id string) {
 // MarkUndelivered undoes a message whose delivery failed so the countdown it
 // would have started does not run, and the message is retried next tick.
 func (m *leaseMachine) MarkUndelivered(msg LeaseMsg) {
+	m.forgetNotice(msg.DeliveryID)
 	h := m.st.Holder
 	if h == nil || h.TaskID != msg.TaskID {
 		return
@@ -495,6 +618,14 @@ func (m *leaseMachine) MarkUndelivered(msg LeaseMsg) {
 	case leaseMsgFinal:
 		h.FinalWarningAt = time.Time{}
 		h.ReleaseAt = time.Time{}
+	}
+}
+
+// NoteDeliveryState records the state argus reported for a posted notice.
+func (m *leaseMachine) NoteDeliveryState(msg LeaseMsg, state string) {
+	h := m.st.Holder
+	if h != nil && h.TaskID == msg.TaskID && msg.Kind == leaseMsgCheckin && containsStr(h.PendingDeliveries, msg.DeliveryID) {
+		h.CheckinDeliveryState = state
 	}
 }
 
@@ -550,13 +681,17 @@ func (m *leaseMachine) contact() {
 	h.LastContactAt = m.env.Now
 	h.CheckinSentAt, h.FinalWarningAt, h.ReleaseAt = time.Time{}, time.Time{}, time.Time{}
 	h.CheckinWanted = false
-	for _, d := range h.PendingDeliveries {
-		m.fx.Cancels = append(m.fx.Cancels, LeaseCancel{TaskID: h.TaskID, DeliveryID: d})
-	}
+	h.CheckinDeliveryState = ""
+	// The holder is clearly active: its grant, check-in and final-warning
+	// notices are obsolete. Override and recompose notices stay: they report
+	// something the holder has not seen yet and contact does not answer them.
+	m.cancelNotices(h.TaskID, leaseMsgGrant, leaseMsgCheckin, leaseMsgFinal)
 	h.PendingDeliveries = nil
 }
 
 func (m *leaseMachine) grant(id, name string) {
+	m.cancelNotices(id) // anything still pending for this task predates this grant
+	m.st.Generation++
 	m.st.Holder = &LeaseHolder{TaskID: id, TaskName: name, GrantedAt: m.env.Now, LastContactAt: m.env.Now}
 	m.history("grant", id, "")
 	m.notify(id, leaseMsgGrant, fmt.Sprintf(
@@ -570,9 +705,7 @@ func (m *leaseMachine) release(reason string, voluntary bool) {
 	if old == nil {
 		return
 	}
-	for _, d := range old.PendingDeliveries {
-		m.fx.Cancels = append(m.fx.Cancels, LeaseCancel{TaskID: old.TaskID, DeliveryID: d})
-	}
+	m.cancelNotices(old.TaskID) // grant, check-in, final warning: all obsolete now
 	m.st.Holder = nil
 	m.history("release", old.TaskID, reason)
 	if !voluntary {
@@ -590,6 +723,7 @@ func (m *leaseMachine) grantNext() {
 		m.st.Queue = m.st.Queue[1:]
 		lv := m.env.Live(e.TaskID)
 		if lv.Class == LiveDead {
+			m.cancelNotices(e.TaskID)
 			m.history("drop", e.TaskID, "task is dead")
 			continue
 		}
@@ -631,10 +765,9 @@ func (m *leaseMachine) Tick() {
 		if waiting == 0 {
 			// The last waiter left: silence without waiters never releases.
 			// Drop the scheduled release; the missed-check-in path takes over.
-			for _, d := range h.PendingDeliveries {
-				m.fx.Cancels = append(m.fx.Cancels, LeaseCancel{TaskID: h.TaskID, DeliveryID: d})
-			}
+			m.cancelNotices(h.TaskID, leaseMsgFinal, leaseMsgCheckin)
 			h.PendingDeliveries = nil
+			h.CheckinDeliveryState = ""
 			h.FinalWarningAt, h.ReleaseAt = time.Time{}, time.Time{}
 			return
 		}
@@ -701,7 +834,7 @@ func RecoverLeaseAfterRestart(st *LeaseState, startup time.Time, cfg config.Dogf
 	if h == nil {
 		return
 	}
-	h.InFlight = 0
+	h.InFlight, h.InFlightSince = 0, time.Time{}
 	grace := time.Duration(cfg.GraceSeconds) * time.Second
 	if !h.ReleaseAt.IsZero() {
 		if floor := startup.Add(grace); h.ReleaseAt.Before(floor) {
