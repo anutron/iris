@@ -319,7 +319,8 @@ func TestLease_RenewRestartsTimerAndClearsCheckin(t *testing.T) {
 	if !h.st.Holder.CheckinSentAt.IsZero() || !h.st.Holder.LastContactAt.Equal(h.now) {
 		t.Fatalf("holder = %+v", h.st.Holder)
 	}
-	if len(h.cans) != 1 || h.cans[0].TaskID != "A" {
+	// the still-pending grant notice is superseded too
+	if len(h.cans) != 2 || h.cans[0].TaskID != "A" {
 		t.Fatalf("cancels = %+v", h.cans)
 	}
 }
@@ -620,6 +621,7 @@ func TestLease_IdleCapAppliesToBusyHolderWithWaiter(t *testing.T) {
 
 func TestLease_InFlightDefersReleases(t *testing.T) {
 	h := newLeaseHarness(t)
+	h.cfg.InFlightMaxSeconds = 7200 // this test is about deferral, not expiry
 	h.claim("A", 0)
 	h.claim("B", 0)
 	h.take()
@@ -699,7 +701,7 @@ func TestLease_ContactCancelsPendingDeliveries(t *testing.T) {
 	h.claim("B", 0) // checkin pending
 	h.cans = nil
 	h.run(func(m *leaseMachine) { m.BeginFlight("A") })
-	if len(h.cans) != 1 || h.cans[0].TaskID != "A" || h.cans[0].DeliveryID == "" {
+	if len(h.cans) != 2 || h.cans[0].TaskID != "A" || h.cans[0].DeliveryID == "" {
 		t.Fatalf("cancels = %+v", h.cans)
 	}
 	if len(h.st.Holder.PendingDeliveries) != 0 {
@@ -849,5 +851,261 @@ func TestCleanText_StripsControlCharsAndBoundsLength(t *testing.T) {
 	h.run(func(m *leaseMachine) { m.env.RepoName = "evil\nrepo"; m.Claim("A", "a", 0) })
 	if strings.Contains(h.msgs[0].Text, "\n") {
 		t.Fatalf("message text contains a newline: %q", h.msgs[0].Text)
+	}
+}
+
+// ---- obsolete notices are cancelled (fix-dogfood-lease-notices) --------------
+
+func cancelledIDs(cs []LeaseCancel, task string) []string {
+	var out []string
+	for _, c := range cs {
+		if c.TaskID == task {
+			out = append(out, c.DeliveryID)
+		}
+	}
+	return out
+}
+
+func TestLeaseNotices_ReleaseCancelsPendingGrant(t *testing.T) {
+	h := newLeaseHarness(t)
+	h.claim("A", 0)
+	grant := h.take()[0]
+	h.cans = nil
+	h.run(func(m *leaseMachine) { m.Release("A") })
+	if got := cancelledIDs(h.cans, "A"); !eqStrs(got, []string{grant.DeliveryID}) {
+		t.Fatalf("cancels = %v, want the grant %s", got, grant.DeliveryID)
+	}
+	if len(h.st.Notices) != 0 {
+		t.Fatalf("notices not forgotten: %+v", h.st.Notices)
+	}
+}
+
+func TestLeaseNotices_ForceReleaseCancelsCheckinBeforeReleasedNotice(t *testing.T) {
+	h := newLeaseHarness(t)
+	h.claim("A", 0)
+	h.claim("B", 0) // check-in to A
+	var ids []string
+	for _, m := range h.take() {
+		if m.TaskID == "A" {
+			ids = append(ids, m.DeliveryID)
+		}
+	}
+	h.cans = nil
+	var fx LeaseEffects
+	m := h.m()
+	m.ForceRelease("stuck")
+	fx = m.fx
+	got := cancelledIDs(fx.Cancels, "A")
+	if len(got) != len(ids) {
+		t.Fatalf("cancels = %v, want all of %v (grant + check-in)", got, ids)
+	}
+	if k := kindsOf(fx.Msgs); !eqStrs(k, []string{"released:A", "grant:B"}) {
+		t.Fatalf("msgs = %v", k)
+	}
+	if len(cancelledIDs(fx.Cancels, "A")) == 0 || len(h.st.Notices) != 2 {
+		t.Fatalf("only the new released+grant notices stay tracked: %+v", h.st.Notices)
+	}
+}
+
+func TestLeaseNotices_ContactCancelsPendingGrant(t *testing.T) {
+	h := newLeaseHarness(t)
+	h.claim("A", 0)
+	grant := h.take()[0]
+	h.cans = nil
+	h.run(func(m *leaseMachine) { m.Renew("A") })
+	if got := cancelledIDs(h.cans, "A"); !eqStrs(got, []string{grant.DeliveryID}) {
+		t.Fatalf("cancels = %v", got)
+	}
+}
+
+func TestLeaseNotices_OverrideNoticeSurvivesHolderContact(t *testing.T) {
+	h := newLeaseHarness(t)
+	h.claim("A", 0)
+	h.take()
+	h.run(func(m *leaseMachine) { m.Notice("A", leaseMsgOverride, "overridden") })
+	ov := h.take()[0]
+	h.cans = nil
+	h.run(func(m *leaseMachine) { m.Renew("A") })
+	h.run(func(m *leaseMachine) { m.BeginFlight("A"); m.EndFlight("A") })
+	if got := cancelledIDs(h.cans, "A"); containsStr(got, ov.DeliveryID) {
+		t.Fatalf("override notice was cancelled by contact: %v", got)
+	}
+	if len(h.st.Notices) != 1 || h.st.Notices[0].DeliveryID != ov.DeliveryID {
+		t.Fatalf("override notice must stay tracked: %+v", h.st.Notices)
+	}
+}
+
+func TestLeaseNotices_LegacyPendingDeliveriesStillCancelled(t *testing.T) {
+	h := newLeaseHarness(t)
+	h.claim("A", 0)
+	h.take()
+	h.st.Notices = nil // state written before notice tracking
+	h.st.Holder.PendingDeliveries = []string{"legacy-checkin"}
+	h.cans = nil
+	h.run(func(m *leaseMachine) { m.Renew("A") })
+	if got := cancelledIDs(h.cans, "A"); !eqStrs(got, []string{"legacy-checkin"}) {
+		t.Fatalf("cancels = %v", got)
+	}
+}
+
+func TestLeaseNotices_DeliveryStateClearedWhenCheckinDropped(t *testing.T) {
+	h := newLeaseHarness(t)
+	h.claim("A", 0)
+	h.claim("B", 0)
+	var checkin LeaseMsg
+	for _, m := range h.take() {
+		if m.Kind == "checkin" {
+			checkin = m
+		}
+	}
+	h.run(func(m *leaseMachine) { m.NoteDeliveryState(checkin, "pending") })
+	// Past the check-in deadline (warmer) argus has discarded it.
+	h.now = h.now.Add(11 * time.Minute)
+	h.run(func(m *leaseMachine) {})
+	if h.st.Holder != nil && h.st.Holder.CheckinDeliveryState != "" {
+		t.Fatalf("stale delivery state: %q", h.st.Holder.CheckinDeliveryState)
+	}
+}
+
+func TestLeaseNotices_ReclaimCancelsReleasedNotice(t *testing.T) {
+	h := newLeaseHarness(t)
+	h.claim("A", 0)
+	h.claim("B", 0)
+	h.run(func(m *leaseMachine) { m.ForceRelease("x") }) // A gets "released"; B granted
+	var rel LeaseMsg
+	for _, m := range h.take() {
+		if m.Kind == "released" {
+			rel = m
+		}
+	}
+	h.cans = nil
+	h.claim("A", 0) // queues behind B
+	if got := cancelledIDs(h.cans, "A"); !eqStrs(got, []string{rel.DeliveryID}) {
+		t.Fatalf("cancels = %v, want released %s", got, rel.DeliveryID)
+	}
+}
+
+func TestLeaseNotices_QueuedLeaveCancelsItsNotices(t *testing.T) {
+	h := newLeaseHarness(t)
+	h.claim("A", 0)
+	h.claim("B", 0)
+	h.st.Notices = append(h.st.Notices, LeaseNotice{TaskID: "B", DeliveryID: "d-b", Kind: leaseMsgReleased, ExpiresAt: h.now.Add(time.Hour)})
+	h.cans = nil
+	h.run(func(m *leaseMachine) { m.Release("B") })
+	if got := cancelledIDs(h.cans, "B"); !eqStrs(got, []string{"d-b"}) {
+		t.Fatalf("cancels = %v", got)
+	}
+}
+
+func TestLeaseNotices_ExpiredEntriesPrunedWithoutCancel(t *testing.T) {
+	h := newLeaseHarness(t)
+	h.st.Notices = []LeaseNotice{{TaskID: "A", DeliveryID: "old", Kind: leaseMsgGrant, ExpiresAt: h.now.Add(-time.Second)}}
+	h.run(func(m *leaseMachine) {})
+	if len(h.st.Notices) != 0 || len(h.cans) != 0 {
+		t.Fatalf("notices=%+v cancels=%+v", h.st.Notices, h.cans)
+	}
+}
+
+func TestLeaseNotices_FailedPostIsForgotten(t *testing.T) {
+	h := newLeaseHarness(t)
+	h.claim("A", 0)
+	grant := h.take()[0]
+	h.run(func(m *leaseMachine) { m.MarkUndelivered(grant) })
+	if len(h.st.Notices) != 0 {
+		t.Fatalf("notices = %+v", h.st.Notices)
+	}
+}
+
+func TestLeaseNotices_AreSelfDescribing(t *testing.T) {
+	h := newLeaseHarness(t)
+	h.claim("A", 0)
+	if g := h.take()[0]; !strings.Contains(g.Text, "[lease #1, 2026-01-01T12:00:00Z]") {
+		t.Fatalf("first grant: %s", g.Text)
+	}
+	h.run(func(m *leaseMachine) { m.Release("A") })
+	h.claim("A", 0)
+	if g := h.take()[0]; !strings.Contains(g.Text, "[lease #2, ") {
+		t.Fatalf("second grant: %s", g.Text)
+	}
+}
+
+func TestLeaseNotices_NoteDeliveryStateOnlyForOutstandingCheckin(t *testing.T) {
+	h := newLeaseHarness(t)
+	h.claim("A", 0)
+	h.claim("B", 0)
+	var checkin LeaseMsg
+	for _, m := range h.take() {
+		if m.Kind == "checkin" {
+			checkin = m
+		}
+	}
+	h.run(func(m *leaseMachine) { m.NoteDeliveryState(checkin, "pending") })
+	if h.st.Holder.CheckinDeliveryState != "pending" {
+		t.Fatalf("state = %q", h.st.Holder.CheckinDeliveryState)
+	}
+	h.run(func(m *leaseMachine) { m.Renew("A") })
+	if h.st.Holder.CheckinDeliveryState != "" {
+		t.Fatal("contact clears the delivery state")
+	}
+}
+
+// ---- stale in-flight mark ------------------------------------------------------
+
+func TestLeaseInFlight_StaleMarkExpiresAndHolderReleasable(t *testing.T) {
+	h := newLeaseHarness(t)
+	h.cfg.InFlightMaxSeconds = 300
+	h.claim("A", 0)
+	h.claim("B", 0)
+	h.take()
+	h.run(func(m *leaseMachine) { m.BeginFlight("A") })
+	h.advance(299 * time.Second)
+	if h.holderID() != "A" || h.st.Holder.InFlight != 1 {
+		t.Fatalf("mark must hold below the cap: %+v", h.st.Holder)
+	}
+	h.advance(2 * time.Second)
+	if h.st.Holder.InFlight != 0 {
+		t.Fatalf("stale mark must clear: %+v", h.st.Holder)
+	}
+	// With the mark gone, ordinary rules apply again: a silent holder with a
+	// waiter is handed over after the check-in and final warning.
+	h.advance(10 * time.Minute)
+	h.advance(31 * time.Second)
+	h.advance(31 * time.Second)
+	if h.holderID() != "B" {
+		t.Fatalf("expected normal release rules to resume; holder=%s", h.holderID())
+	}
+	found := false
+	for _, e := range h.st.History {
+		if e.Event == "inflight_expired" && e.TaskID == "A" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("history = %+v", h.st.History)
+	}
+}
+
+func TestLeaseInFlight_LegacyMarkWithoutSinceUsesLastContact(t *testing.T) {
+	h := newLeaseHarness(t)
+	h.cfg.InFlightMaxSeconds = 300
+	h.claim("A", 0)
+	h.st.Holder.InFlight = 1 // as persisted by the pre-fix version
+	h.now = h.now.Add(301 * time.Second)
+	h.tick()
+	if h.st.Holder.InFlight != 0 {
+		t.Fatal("legacy mark should expire off last_contact_at")
+	}
+}
+
+func TestLeaseInFlight_EndFlightClearsSince(t *testing.T) {
+	h := newLeaseHarness(t)
+	h.claim("A", 0)
+	h.run(func(m *leaseMachine) { m.BeginFlight("A") })
+	if h.st.Holder.InFlightSince.IsZero() {
+		t.Fatal("since set")
+	}
+	h.run(func(m *leaseMachine) { m.EndFlight("A") })
+	if !h.st.Holder.InFlightSince.IsZero() {
+		t.Fatal("since cleared")
 	}
 }

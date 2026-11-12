@@ -86,12 +86,15 @@ func TestNotify_PostsBody(t *testing.T) {
 		b, _ := io.ReadAll(r.Body)
 		_ = json.Unmarshal(b, &got)
 		w.WriteHeader(http.StatusAccepted)
-		_, _ = w.Write([]byte(`{}`))
+		_, _ = w.Write([]byte(`{"delivery_id":"iris-lease-x-1","state":"pending"}`))
 	}))
 	t.Cleanup(srv.Close)
-	err := New(srv.URL, "x").Notify(context.Background(), "t1", "[iris] hi", "iris-lease-x-1", 90*time.Second)
+	state, err := New(srv.URL, "x").Notify(context.Background(), "t1", "[iris] hi", "iris-lease-x-1", 90*time.Second)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if state != "pending" {
+		t.Fatalf("state = %q, want pending", state)
 	}
 	if gotMethod != "POST" || gotPath != "/api/tasks/t1/notify" {
 		t.Fatalf("%s %s", gotMethod, gotPath)
@@ -104,7 +107,7 @@ func TestNotify_PostsBody(t *testing.T) {
 func TestNotify_404IsNotFound(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.NotFound(w, r) }))
 	t.Cleanup(srv.Close)
-	err := New(srv.URL, "x").Notify(context.Background(), "t1", "x", "d", time.Second)
+	_, err := New(srv.URL, "x").Notify(context.Background(), "t1", "x", "d", time.Second)
 	if !IsNotFound(err) {
 		t.Fatalf("err = %v", err)
 	}

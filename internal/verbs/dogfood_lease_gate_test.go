@@ -227,10 +227,11 @@ func TestSetDogfoodGate_HolderNotReleasedMidDeploy(t *testing.T) {
 	claim(t, c, "B", 0)
 
 	// Simulate the call being in flight, then run every deadline past.
+	ageLease(t, canon, 3*time.Hour)
 	st, _ := loadLease(canon)
 	st.Holder.InFlight = 1
+	st.Holder.InFlightSince = time.Now().UTC() // a live call: the mark is fresh
 	_ = saveLease(canon, st)
-	ageLease(t, canon, 3*time.Hour)
 	if err := TickLease(context.Background(), c, canon); err != nil {
 		t.Fatal(err)
 	}

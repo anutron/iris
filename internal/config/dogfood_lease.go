@@ -13,6 +13,7 @@ const (
 	DefaultLeaseWarmerSeconds      = 600
 	DefaultLeaseGraceSeconds       = 30
 	DefaultLeaseIdleReleaseSeconds = 1800
+	DefaultLeaseInFlightMaxSeconds = 900
 )
 
 // DogfoodLeaseBlock is the optional `[dogfood_lease]` block. Each key is a
@@ -22,6 +23,9 @@ type DogfoodLeaseBlock struct {
 	WarmerSeconds      *int `toml:"warmer_seconds"       json:"warmer_seconds,omitempty"`
 	GraceSeconds       *int `toml:"grace_seconds"        json:"grace_seconds,omitempty"`
 	IdleReleaseSeconds *int `toml:"idle_release_seconds" json:"idle_release_seconds,omitempty"`
+	// InFlightMaxSeconds caps how long a holder's in-flight (deploy running)
+	// mark is honored, so a killed CLI deploy cannot pin the lease forever.
+	InFlightMaxSeconds *int `toml:"in_flight_max_seconds" json:"in_flight_max_seconds,omitempty"`
 }
 
 // DogfoodLeaseTimers is the effective timer set after defaults are applied.
@@ -29,6 +33,7 @@ type DogfoodLeaseTimers struct {
 	WarmerSeconds      int `json:"warmer_seconds"`
 	GraceSeconds       int `json:"grace_seconds"`
 	IdleReleaseSeconds int `json:"idle_release_seconds"`
+	InFlightMaxSeconds int `json:"in_flight_max_seconds"`
 }
 
 // DefaultDogfoodLeaseTimers returns the built-in defaults (600/30/1800).
@@ -37,6 +42,7 @@ func DefaultDogfoodLeaseTimers() DogfoodLeaseTimers {
 		WarmerSeconds:      DefaultLeaseWarmerSeconds,
 		GraceSeconds:       DefaultLeaseGraceSeconds,
 		IdleReleaseSeconds: DefaultLeaseIdleReleaseSeconds,
+		InFlightMaxSeconds: DefaultLeaseInFlightMaxSeconds,
 	}
 }
 
@@ -61,6 +67,9 @@ func (b *DogfoodLeaseBlock) timers() DogfoodLeaseTimers {
 	if b.IdleReleaseSeconds != nil {
 		t.IdleReleaseSeconds = *b.IdleReleaseSeconds
 	}
+	if b.InFlightMaxSeconds != nil {
+		t.InFlightMaxSeconds = *b.InFlightMaxSeconds
+	}
 	return t
 }
 
@@ -77,8 +86,8 @@ func ValidDogfoodLeaseTimers(b *DogfoodLeaseBlock) (DogfoodLeaseTimers, []Valida
 // EffectiveBlock returns a block with every key populated from t, used by
 // validate_config to report resolved values.
 func (t DogfoodLeaseTimers) EffectiveBlock() *DogfoodLeaseBlock {
-	w, g, i := t.WarmerSeconds, t.GraceSeconds, t.IdleReleaseSeconds
-	return &DogfoodLeaseBlock{WarmerSeconds: &w, GraceSeconds: &g, IdleReleaseSeconds: &i}
+	w, g, i, f := t.WarmerSeconds, t.GraceSeconds, t.IdleReleaseSeconds, t.InFlightMaxSeconds
+	return &DogfoodLeaseBlock{WarmerSeconds: &w, GraceSeconds: &g, IdleReleaseSeconds: &i, InFlightMaxSeconds: &f}
 }
 
 func (b *DogfoodLeaseBlock) validate() []ValidationError {
@@ -98,6 +107,7 @@ func (b *DogfoodLeaseBlock) validate() []ValidationError {
 	positive("warmer_seconds", b.WarmerSeconds)
 	positive("grace_seconds", b.GraceSeconds)
 	positive("idle_release_seconds", b.IdleReleaseSeconds)
+	positive("in_flight_max_seconds", b.InFlightMaxSeconds)
 	if len(errs) > 0 {
 		return errs
 	}
