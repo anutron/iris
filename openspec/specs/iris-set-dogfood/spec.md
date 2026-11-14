@@ -173,7 +173,7 @@ When `lease_override` lets a non-holder through, iris SHALL:
 - proceed with the deploy;
 - put a warning beginning `LEASE OVERRIDE:` FIRST in `warnings`, naming the holder or "no holder";
 - message the current holder, if there is one and it is not the caller, that its dogfood tree was replaced, naming the caller and the new SHA;
-- leave the lease holder and queue unchanged.
+- leave the lease holder unchanged; after successful reload, satisfy contained queued commit requests according to the dogfood lease rules, preserving all other waiters and their order.
 
 When the caller holds the lease, the call SHALL count as lease contact at its start and again when it finishes, whether it succeeds or fails. While the call is running, the holder SHALL NOT be released by any silence or idle timer; force-release can still release it.
 
@@ -215,6 +215,12 @@ The CLI SHALL expose the input as `--lease-override`, and the MCP tool schema SH
 - **GIVEN** task `B` does not hold the lease and passes `lease_override = true` but not `force`
 - **WHEN** the supplied SHA is not a descendant of the current dogfood SHA
 - **THEN** iris refuses with the commit-dropping error, exactly as for a lease holder
+
+#### Scenario: Override deployment satisfies contained waiters
+
+- **GIVEN** `A` holds the lease and `B` is queued requiring commit `S`
+- **WHEN** `D` successfully deploys a commit containing `S` using `lease_override = true`
+- **THEN** `A` keeps the lease, `B` is removed and receives its deployed notice, and remaining waiters keep their order
 
 #### Scenario: force does not relax the lease gate
 

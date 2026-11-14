@@ -19,6 +19,6 @@
 ## 4. Validation and delivery
 
 - [x] 4.1 Run focused tests, go test ./..., and openspec validate --all --strict before committing. Also passed go build ./..., go vet ./..., and focused race tests.
-- [ ] 4.2 Push via iris_push and open a PR via iris_gh_pr_create; resolve CI failures until green.
-- [ ] 4.3 Run ralph-review and spec-audit --pre-archive, address findings, and repeat relevant checks.
-- [ ] 4.4 Archive the change in the same PR as its final commit, validate, push, confirm CI green and report PR/checks to the coordinator.
+- [x] 4.2 Push via iris_push and open a PR via iris_gh_pr_create; resolve CI failures until green. PR #24 has no configured CI; Aaron accepted the final local full suite and strict validation as the gate.
+- [x] 4.3 Run ralph-review and spec-audit --pre-archive, address findings, and repeat relevant checks. Ralph round 2 and test-adversary pass clean; scoped audit reports no residual gaps, contradictions, or unimplemented promises.
+- [x] 4.4 Archive the change in the same PR as its final commit, validate, push, and report PR/checks to the coordinator. Final local suite passed before archival; GitHub has no CI checks.
