@@ -721,7 +721,7 @@ func (m *leaseMachine) grant(id, name string) {
 	m.st.Holder = &LeaseHolder{TaskID: id, TaskName: name, GrantedAt: m.env.Now, LastContactAt: m.env.Now}
 	m.history("grant", id, "")
 	m.notify(id, leaseMsgGrant, fmt.Sprintf(
-		"[iris] You have the dogfood lease for %s (branch %s). %s timer is running — any iris_set_dogfood / iris_dogfood_renew call resets it. Call iris_dogfood_release when you're done.",
+		"[iris] You have the dogfood lease for %s (branch %s). %s timer is running — any iris_set_dogfood / iris_dogfood_renew call resets it. Call iris_dogfood_release when you're done. "+DogfoodReleaseGuidance,
 		cleanText(m.env.RepoName), cleanText(m.env.DogfoodBranch), fmtLeaseDur(m.env.Cfg.WarmerSeconds)), leaseMaxDeadline)
 }
 
@@ -874,7 +874,7 @@ func (m *leaseMachine) Tick() {
 				h.FinalWarningAt = now
 				h.ReleaseAt = now.Add(m.grace())
 				msg := m.notify(h.TaskID, leaseMsgFinal, fmt.Sprintf(
-					"[iris] No answer — releasing the dogfood lease for %s in %ds unless you call iris_dogfood_renew.",
+					"[iris] No answer — releasing the dogfood lease for %s in %ds unless you call iris_dogfood_renew. "+DogfoodReleaseGuidance,
 					cleanText(m.env.RepoName), m.env.Cfg.GraceSeconds), m.warmer())
 				h.PendingDeliveries = append(h.PendingDeliveries, msg.DeliveryID)
 			}
@@ -898,6 +898,7 @@ func (m *leaseMachine) Tick() {
 		if waiting > 0 {
 			text += fmt.Sprintf(" %d agent(s) waiting.", waiting)
 		}
+		text += " " + DogfoodReleaseGuidance
 		msg := m.notify(h.TaskID, leaseMsgCheckin, text, m.warmer())
 		h.CheckinSentAt = now
 		h.CheckinWanted = false

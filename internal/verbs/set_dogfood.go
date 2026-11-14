@@ -54,6 +54,7 @@ type SetDogfoodResult struct {
 	NewSHA        string        `json:"new_sha"`
 	Reload        *ReloadResult `json:"reload,omitempty"`
 	Warnings      []string      `json:"warnings"`
+	Message       string        `json:"message"`
 }
 
 // SetDogfood atomically hard-resets the configured dogfood branch to opts.Sha,
@@ -279,6 +280,7 @@ func SetDogfood(ctx context.Context, client *argus.Client, taskID string, opts S
 		NewSHA:        newSHA,
 		Reload:        reload,
 		Warnings:      warnings,
+		Message:       DogfoodReleaseGuidance,
 	}, nil
 }
 

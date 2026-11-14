@@ -436,9 +436,10 @@ func TestLease_WarmerCheckinAfterInterval(t *testing.T) {
 	if len(msgs) != 1 || msgs[0].Kind != "checkin" {
 		t.Fatalf("msgs = %+v", msgs)
 	}
-	if strings.Contains(msgs[0].Text, "waiting") {
+	if strings.Contains(msgs[0].Text, "agent(s) waiting") {
 		t.Errorf("nobody waiting, text should not say so: %s", msgs[0].Text)
 	}
+	assertDogfoodReleaseGuidance(t, msgs[0].Text)
 	for _, w := range []string{"iris_dogfood_renew", "iris_dogfood_release"} {
 		if !strings.Contains(msgs[0].Text, w) {
 			t.Errorf("checkin missing %s", w)

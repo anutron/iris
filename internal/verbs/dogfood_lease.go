@@ -585,7 +585,7 @@ func claimResult(lr *leaseRepo, taskID string, out ClaimOutcome, warnings []stri
 		r.Position = 0
 		t := out.NextCheckinAt
 		r.NextCheckinAt = &t
-		r.Message = fmt.Sprintf("You hold the dogfood lease for %s (branch %s). Call iris_set_dogfood, then iris_dogfood_release when you're done. A check-in is due at %s; answer it with iris_dogfood_renew.",
+		r.Message = fmt.Sprintf("You hold the dogfood lease for %s (branch %s). Call iris_set_dogfood, then iris_dogfood_release when you're done. A check-in is due at %s; answer it with iris_dogfood_renew. "+DogfoodReleaseGuidance,
 			lr.Name, lr.Branch, t.Format(time.RFC3339))
 	} else {
 		r.Status = "queued"

@@ -13,6 +13,13 @@ func TestToolDefinitions_DogfoodLeaseTools(t *testing.T) {
 		var schema map[string]any
 		_ = json.Unmarshal(b, &schema)
 		defs[d.Name] = schema
+		if d.Name == "iris_set_dogfood" || d.Name == "iris_dogfood_claim" || d.Name == "iris_dogfood_renew" {
+			for _, want := range []string{"Don't hold dogfood for a user who is away.", "Don't hold dogfood while fixing a problem you found:", "get back in line with a new iris_dogfood_claim", "If the user is away and Iris asks for dogfood back or says someone is waiting, call iris_dogfood_release right away."} {
+				if !strings.Contains(d.Description, want) {
+					t.Errorf("%s description missing %q", d.Name, want)
+				}
+			}
+		}
 		if d.Name == "iris_set_dogfood" {
 			for _, want := range []string{"iris_dogfood_claim", "lease_override", "force"} {
 				if !strings.Contains(d.Description, want) {

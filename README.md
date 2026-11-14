@@ -319,7 +319,9 @@ Behavior and safety:
 - The branch is created if it does not yet exist (`previous_sha: ""`). Otherwise it is force-moved — via `git branch -f` when the dogfood branch is not checked out in any worktree, or via `git reset --hard` in that worktree when it **is** checked out (git refuses to `branch -f` a branch that's currently checked out; this worktree-guard keeps the ref, HEAD, index, and tree in agreement on a live dogfood host instead of erroring).
 - iris does NOT validate that `manifest.layered[i].sha` is reachable from `sha` — the manifest is for communication, not verification.
 
-The structured result includes `set`, `dogfood_branch`, `previous_sha`, `new_sha`, the embedded `reload` result, and `warnings`. The manifest persists as `dogfood-manifest.json` in the same per-source-repo state directory as the audit log, overwritten on each call.
+The structured result includes `set`, `dogfood_branch`, `previous_sha`, `new_sha`, the embedded `reload` result, `warnings`, and a `message` with release guidance. The manifest persists as `dogfood-manifest.json` in the same per-source-repo state directory as the audit log, overwritten on each call.
+
+Claim with `iris_dogfood_claim` before deploying and call `iris_dogfood_release` when done. Don't hold dogfood for a user who is away. Don't hold it while fixing a problem you found: release it, fix the problem, then get back in line with a new claim. If the user is away and Iris asks for dogfood back or says someone is waiting, release it right away.
 
 ### `iris:ship_feature`
 

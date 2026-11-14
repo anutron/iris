@@ -216,7 +216,7 @@ committed work; let `iris_set_dogfood` validate it at build time.
    (merge or cherry-pick; resolve conflicts yourself). Iris is dumb, the agent is
    smart — you compose, iris deploys.
 
-5. **Deploy.** `iris_set_dogfood(task_id, sha=<composed SHA>, manifest={...})`. Iris
+5. **Deploy.** Follow the [dogfood lease guidance](SKILL.md#dogfood-lease-required-before-iris_set_dogfood): claim before deploying, release while the user is away or while fixing a problem, and make a new claim after fixing it. If Iris asks for dogfood back while the user is away, release right away. Deploy with `iris_set_dogfood(task_id, sha=<composed SHA>, manifest={...})`. Iris
    points `dev` at that SHA, checks `dev` out to build it (its tree now carries
    `.iris.toml`), restarts the daemon, and restores your source repo to the branch it
    was on. **This is the validation step** — a malformed `.iris.toml` fails here with

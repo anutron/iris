@@ -97,6 +97,7 @@ func TestSetDogfood_HappyPathSetsBranchAndReloads(t *testing.T) {
 	if !result.Set {
 		t.Fatal("expected Set=true")
 	}
+	assertSetDogfoodReleaseGuidance(t, result)
 	if result.DogfoodBranch != "dev" {
 		t.Fatalf("DogfoodBranch: got %q want dev", result.DogfoodBranch)
 	}

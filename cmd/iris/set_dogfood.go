@@ -40,7 +40,7 @@ call with no --task can never hold the lease, so it needs --lease-override.
 commit-dropping guard. Neither implies the other.
 
 --manifest accepts either a path to a JSON file or an inline JSON string (one
-that begins with '{').`,
+that begins with '{').` + "\n\n" + verbs.DogfoodReleaseGuidance,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			m, err := loadManifestArg(manifest)

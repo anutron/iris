@@ -22,6 +22,22 @@ func runCLI(t *testing.T, args ...string) (string, error) {
 	return out.String(), err
 }
 
+func TestDogfoodHelp_ReleaseGuidance(t *testing.T) {
+	for _, args := range [][]string{{"dogfood", "--help"}, {"dogfood", "claim", "--help"}, {"dogfood", "renew", "--help"}, {"set-dogfood", "--help"}} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			out, err := runCLI(t, args...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, want := range []string{"Don't hold dogfood for a user who is away.", "Don't hold dogfood while fixing a problem you found:", "get back in line with a new iris_dogfood_claim", "If the user is away and Iris asks for dogfood back or says someone is waiting, call iris_dogfood_release right away."} {
+				if !strings.Contains(out, want) {
+					t.Errorf("help missing %q: %s", want, out)
+				}
+			}
+		})
+	}
+}
+
 // stubClient makes newCLIClient succeed (or fail) without touching argus.
 func stubClient(t *testing.T, fail bool) {
 	t.Helper()
