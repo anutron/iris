@@ -14,7 +14,7 @@ const (
 	DefaultLeaseGraceSeconds       = 30
 	DefaultLeaseIdleReleaseSeconds = 1800
 	DefaultLeaseInFlightMaxSeconds = 900
-	DefaultLeaseMaxHoldSeconds     = 3600
+	DefaultLeaseMaxHoldSeconds     = 1800
 )
 
 // DogfoodLeaseBlock is the optional `[dogfood_lease]` block. Each key is a

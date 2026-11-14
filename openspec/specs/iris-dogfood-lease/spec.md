@@ -690,7 +690,7 @@ Verbs that deliberately move or modify the host's working branch SHALL change wh
 
 ### Requirement: Absolute hold deadline
 
-Iris SHALL read positive integer `max_hold_seconds` from the local-kind `[dogfood_lease]` block, default 3600, validate it through iris_validate_config, and expire a hold at granted_at plus that value regardless of waiters, busy state, Argus reachability or renewal. At the deadline a fresh claim SHALL join behind existing waiters; with an empty queue it can receive a new grant. Contact, deployment and restart SHALL NOT extend that deadline. A valid in-flight mark SHALL defer automatic release until completion or its existing configured cap. Expiry SHALL be evaluated before claim, renewal and gate entry, on ticks and after EndFlight.
+Iris SHALL read positive integer `max_hold_seconds` from the local-kind `[dogfood_lease]` block, default 1800, validate it through iris_validate_config, and expire a hold at granted_at plus that value regardless of waiters, busy state, Argus reachability or renewal. At the deadline a fresh claim SHALL join behind existing waiters; with an empty queue it can receive a new grant. Contact, deployment and restart SHALL NOT extend that deadline. A valid in-flight mark SHALL defer automatic release until completion or its existing configured cap. Expiry SHALL be evaluated before claim, renewal and gate entry, on ticks and after EndFlight.
 
 #### Scenario: Renewals cannot monopolize the host
 

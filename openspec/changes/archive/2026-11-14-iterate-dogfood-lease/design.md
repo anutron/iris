@@ -10,7 +10,7 @@ The classifier prioritizes busy over needs_input. Terminal tasks are only checke
 
 ## Decisions
 
-- Default max_hold_seconds to 3600. Contact and restart retain GrantedAt. Evaluate the cap before claims, renewal and gate entry, on ticks and after EndFlight. A valid in-flight mark defers release until completion or its existing cap.
+- Default max_hold_seconds to 1800. Contact and restart retain GrantedAt. Evaluate the cap before claims, renewal and gate entry, on ticks and after EndFlight. A valid in-flight mark defers release until completion or its existing cap.
 - Consult liveness every tick. NeedsInput takes precedence over Busy and uses existing two grace windows when waiters exist.
 - Expose expires_at and last_contact_at. Queue estimated_by values bound each slot assuming current configuration/order and allow for flight deferral. They are estimates, not scheduled grants.
 - Best-effort PUT compact per-repo summaries to Argus task metadata after changes, including clearing departed participants. Metadata is advisory; failures cannot block lease operations.
@@ -23,4 +23,4 @@ The classifier prioritizes busy over needs_input. Terminal tasks are only checke
 
 ## Migration plan
 
-Existing grant timestamps apply immediately, including across restarts. Missing configuration defaults to one hour. No persisted-state migration is required.
+Existing grant timestamps apply immediately, including across restarts. Missing configuration defaults to 30 minutes. No persisted-state migration is required.

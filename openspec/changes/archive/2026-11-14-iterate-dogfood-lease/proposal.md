@@ -4,7 +4,7 @@ Forgotten leases and sessions waiting on permission prompts block the shared dog
 
 ## What changes
 
-- Add a configurable one-hour absolute hold cap that renewals cannot extend.
+- Add a configurable 30-minute absolute hold cap that renewals cannot extend.
 - Treat needs_input as silent even when busy, and check ended tasks every tick.
 - Expose deadlines, queue estimates and best-effort Argus task metadata.
 - Document and test next-slot reservation using existing position 1 without a SHA.

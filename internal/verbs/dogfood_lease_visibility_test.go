@@ -19,7 +19,7 @@ func TestLeaseDeadlineResultsAndMetadata(t *testing.T) {
 		t.Fatal("missing claim snapshot")
 	}
 	holder := a.Lease.Holder
-	expiry := holder.GrantedAt.Add(time.Hour)
+	expiry := holder.GrantedAt.Add(30 * time.Minute)
 	if !holder.ExpiresAt.Equal(expiry) || !strings.Contains(a.Message, expiry.Format(time.RFC3339)) {
 		t.Fatalf("claim = %+v", a)
 	}
@@ -32,7 +32,7 @@ func TestLeaseDeadlineResultsAndMetadata(t *testing.T) {
 		t.Fatalf("renew = %+v, %v", r, err)
 	}
 	v := ReadDogfoodLeaseView(t.Context(), canonicalize(src))
-	if !v.Holder.ExpiresAt.Equal(expiry) || v.Timers.MaxHoldSeconds != 3600 || !strings.Contains(v.Message, "cannot extend") {
+	if !v.Holder.ExpiresAt.Equal(expiry) || v.Timers.MaxHoldSeconds != 1800 || !strings.Contains(v.Message, "cannot extend") {
 		t.Fatalf("status = %+v", v)
 	}
 	f.mu.Lock()
@@ -132,7 +132,7 @@ func TestExpiredHolderCannotEnterDeployGate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	st.Holder.GrantedAt = time.Now().Add(-time.Hour)
+	st.Holder.GrantedAt = time.Now().Add(-30 * time.Minute)
 	if err := saveLease(canon, st); err != nil {
 		t.Fatal(err)
 	}

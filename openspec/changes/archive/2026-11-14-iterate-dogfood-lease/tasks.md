@@ -19,3 +19,5 @@
 - make vet fmt build passed.
 - make test was run; the final full run timed out after ten minutes in three unrelated MergeToMaster git-process tests. Every other package passed. Earlier full runs also hit short-deadline process-output flakes; the isolated proxy test passed. No broad retry is claimed green.
 - Tests used only pure machines and temporary repositories/state. No real Sketch host or lease state was touched.
+
+- The default max_hold_seconds was adjusted to 1800 (30 minutes), including notice/status/renewal expiry expectations and documentation. The focused lease/config regression suite passed with race detection and a 180-second ceiling; vet, fmt, build and strict OpenSpec validation passed again.

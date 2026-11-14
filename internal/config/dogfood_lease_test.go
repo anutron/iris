@@ -17,8 +17,8 @@ mechanism = "none"
 func TestDogfoodLeaseTimers_Defaults(t *testing.T) {
 	var c IrisToml
 	got := c.DogfoodLeaseTimers()
-	if got.WarmerSeconds != 600 || got.GraceSeconds != 30 || got.IdleReleaseSeconds != 1800 || got.InFlightMaxSeconds != 900 || got.MaxHoldSeconds != 3600 {
-		t.Fatalf("defaults = %+v, want 600/30/1800", got)
+	if got.WarmerSeconds != 600 || got.GraceSeconds != 30 || got.IdleReleaseSeconds != 1800 || got.InFlightMaxSeconds != 900 || got.MaxHoldSeconds != 1800 {
+		t.Fatalf("defaults = %+v, want max hold 1800, warmer/grace/idle/flight 600/30/1800/900", got)
 	}
 }
 

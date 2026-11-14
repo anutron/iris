@@ -116,7 +116,7 @@ func TestGrantNoticeStatesFixedExpiry(t *testing.T) {
 	h := newLeaseHarness(t)
 	h.claim("A", 0)
 	msgs := h.take()
-	if len(msgs) != 1 || !strings.Contains(msgs[0].Text, "2026-01-01T13:00:00Z") || !strings.Contains(msgs[0].Text, "renewal cannot extend") {
+	if len(msgs) != 1 || !strings.Contains(msgs[0].Text, "2026-01-01T12:30:00Z") || !strings.Contains(msgs[0].Text, "renewal cannot extend") {
 		t.Fatalf("grant notice = %+v", msgs)
 	}
 }
