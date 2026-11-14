@@ -332,4 +332,3 @@ The Iris agent skill SHALL instruct callers needing a particular commit to pass 
 - **GIVEN** `B` is queued requiring `S`
 - **WHEN** checking branch containment fails with an operational Git error
 - **THEN** iris retains `B` without a deployed notice and surfaces a warning
-
