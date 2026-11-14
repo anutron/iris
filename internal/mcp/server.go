@@ -158,9 +158,16 @@ func (s *Server) authCheck(r *http.Request) bool {
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
+	// Argus decodes callbacks through a 4 MiB LimitReader. Check the actual
+	// encoded size (including nested JSON and escaping) before any headers or
+	// bytes are written, so the proxy never sees a truncated document.
+	body, err := json.Marshal(v)
+	if err != nil || len(body) > 1<<20 {
+		body, _ = json.Marshal(ErrorResponse("iris: callback response size limit (1 MiB) exceeded or response encoding failed; use a scoped operation"))
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
+	_, _ = w.Write(append(body, '\n'))
 }
 
 // GenerateAuthHeader produces a random "Bearer <hex>" header value for

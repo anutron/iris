@@ -1,0 +1,123 @@
+## MODIFIED Requirements
+
+### Requirement: Worktree runs outlive the caller
+
+`iris:run_checks` and `iris:run_build` SHALL run their script detached from the caller's cancellation, under an iris-owned ceiling of 30 minutes that covers both waiting for the per-worktree lock and running the script. A run that exceeds the ceiling while still waiting for the lock SHALL fail with a `[timeout]` error naming the worktree lock, without running the script. They SHALL bound waiting on output pipes after the script exits or is killed, so an orphaned grandchild process can't hold the call or the per-worktree lock open. They SHALL start the script as the leader of its own process group. A run that exceeds the ceiling SHALL kill that entire process group with SIGKILL, so no descendant that stayed in the group survives the run, and SHALL fail with an error containing `[timeout]` and the captured output.
+
+#### Scenario: Caller cancellation does not kill the run
+
+- **WHEN** the caller's context is cancelled while `script/iris-check` is running
+- **THEN** the script continues to completion and its result is recorded
+
+#### Scenario: Lock wait counts against the ceiling
+
+- **WHEN** another run holds the worktree lock for longer than the ceiling
+- **THEN** the waiting run fails with a `[timeout]` error naming the worktree lock, and its script never runs
+
+#### Scenario: Orphaned grandchild does not hold the run open
+
+- **WHEN** the script exits while a background child it started keeps the output pipe open
+- **THEN** the run finishes within a few seconds of the script's exit instead of waiting for the grandchild
+
+#### Scenario: Ceiling kills grandchildren
+
+- **WHEN** a run's script starts a child that starts its own long-running child, and the run hits the ceiling
+- **THEN** the run fails with `[timeout]`, and neither the script, the child nor the grandchild is still running afterwards
+
+#### Scenario: Ceiling kill applies to builds too
+
+- **WHEN** an `iris_run_build` script leaves a long-running descendant and hits the ceiling
+- **THEN** the descendant is killed along with the script
+
+### Requirement: Bounded wait with a run handle
+
+`iris_run_checks` and `iris_run_build` SHALL accept an optional integer `wait_seconds`, defaulting to 20 and clamped to the range 0–25. The tool SHALL start the run and wait up to `wait_seconds` for it. If the run finishes in time, the tool SHALL return the same response it returned before this change. Otherwise it SHALL return a non-error JSON response containing `run_id`, `status`, `tool`, `task_id`, `started_at` and an instruction to call `iris_run_result`. `status` SHALL be `queued` while the run waits for the worktree lock and `running` once its script executes. The tool SHALL resolve the task's repo before detaching, so an unknown task fails immediately and every handle, including one returned with `wait_seconds=0`, names the repo.
+
+#### Scenario: Fast run answers inline
+
+- **WHEN** `iris_run_checks(check="lint")` finishes in 2 seconds
+- **THEN** the response is `{command, exit_code, output}` exactly as before, with no `run_id`
+
+#### Scenario: Slow run returns a handle instead of timing out
+
+- **WHEN** `iris_run_checks(check="test")` is still running after `wait_seconds`
+- **THEN** the tool returns `status: "running"` with a `run_id` before the 30-second transport limit, and the run continues
+
+#### Scenario: Run behind another reports queued
+
+- **WHEN** `iris_run_checks(check="lint")` is called while a build holds the same worktree's lock, and the wait elapses
+- **THEN** the handle reports `status: "queued"`, and later reports `running` once the lint check holds the lock
+
+#### Scenario: Immediate handle names the repo
+
+- **WHEN** the caller passes `wait_seconds=0`
+- **THEN** the returned handle names the task's repo
+
+#### Scenario: wait_seconds above the cap is clamped
+
+- **WHEN** the caller passes `wait_seconds=120`
+- **THEN** the tool waits at most 25 seconds before returning a handle
+
+### Requirement: `iris:run_result` verb
+
+The plugin SHALL expose `iris_run_result` accepting `run_id` (string, required) and `wait_seconds` (integer, optional, default 20, clamped to 0–25). For a finished run, it SHALL return the response the original tool would have returned synchronously, including the error response for a non-zero exit. For a run still in progress after the wait, it SHALL return the handle again, with `status` `queued` or `running`. For an unknown or expired `run_id`, it SHALL return an error saying the run is unknown, that iris may have restarted or the run expired, and that the caller should re-run.
+
+#### Scenario: Poll returns the finished result
+
+- **WHEN** a run returned as `running` later exits 1 with test failures, and the caller calls `iris_run_result(run_id)`
+- **THEN** the response is the error response naming the command, exit code 1 and the check output subject to the check-result bounds and host-log preservation policy
+
+#### Scenario: Large finished check is retrievable
+
+- **WHEN** a check emits more than 4 MiB and finishes before a poll
+- **THEN** polling returns the same bounded check result and host log path as inline completion, retaining pass/fail semantics
+
+#### Scenario: Poll before completion returns the handle
+
+- **WHEN** the caller polls a run that is still running after `wait_seconds`
+- **THEN** the response is `status: "running"` with the same `run_id`
+
+#### Scenario: Unknown run_id
+
+- **WHEN** the caller polls a `run_id` iris has never issued, or one evicted after a restart
+- **THEN** iris returns an error naming the `run_id` and advising a re-run
+
+### Requirement: Duplicate runs share a handle and finished runs expire
+
+While a run is in progress, a call to the same tool with the same `task_id` and the same `check` and `args` (for `iris_run_checks`) or the same `target` (for `iris_run_build`) SHALL join that run and return its `run_id` instead of starting another. Two `iris_run_checks` calls with the same `check` but different `args`, including the same args in a different order, SHALL be different runs. Finished runs SHALL remain retrievable for one hour after they finish and SHALL then be discarded.
+
+#### Scenario: Retry joins the in-progress run
+
+- **WHEN** `iris_run_checks(task_id=T, check="test")` is called again while the first call's run is still going
+- **THEN** both responses carry the same `run_id` and the script runs once
+
+#### Scenario: Retry with the same args joins the run
+
+- **WHEN** `iris_run_checks(task_id=T, check="test", args=["spec/a_spec.rb"])` is called again with the same args while the first run is going
+- **THEN** both responses carry the same `run_id` and the script runs once
+
+#### Scenario: Different args are a different run
+
+- **WHEN** `iris_run_checks(task_id=T, check="test", args=["spec/a_spec.rb"])` is called while a run with `args=["spec/b_spec.rb"]` is in progress
+- **THEN** the call starts its own run with a different `run_id`, queued behind the first under the worktree lock
+
+#### Scenario: Args cannot collide across the boundary
+
+- **WHEN** one call passes `check="a"` with `args=["b"]` and another passes `check="a b"` with no args
+- **THEN** they are different runs
+
+#### Scenario: Finished run is retrievable within the hour
+
+- **WHEN** a run finished 10 minutes ago
+- **THEN** `iris_run_result` returns its final response
+
+## ADDED Requirements
+
+### Requirement: Encoded callbacks fit the proxy budget
+
+Iris SHALL encode callback responses before writing HTTP headers. If the encoded response exceeds 1 MiB, Iris SHALL return a bounded MCP error naming the response-size limit rather than sending JSON that Argus's proxy will truncate.
+
+#### Scenario: An oversized non-check handler result
+
+- **WHEN** any callback handler returns a response whose encoded size exceeds 1 MiB
+- **THEN** the HTTP response is valid JSON with an explicit MCP error describing the size limit
