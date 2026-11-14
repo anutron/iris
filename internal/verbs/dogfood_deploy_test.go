@@ -175,6 +175,10 @@ func TestDogfoodDeploy_LeavesDogfoodAndBuildsRequestedCommit(t *testing.T) {
 	if result.DogfoodLease == nil || result.DogfoodLease.Holder == nil || result.DogfoodLease.Holder.TaskID != "task-sd" {
 		t.Fatalf("missing deploy lease snapshot: %+v", result.DogfoodLease)
 	}
+	holder := result.DogfoodLease.Holder
+	if result.DogfoodLease.Timers.MaxHoldSeconds != 1800 || !holder.ExpiresAt.Equal(holder.GrantedAt.Add(1800*time.Second)) {
+		t.Fatalf("deploy snapshot lost the absolute 30-minute deadline: %+v", result.DogfoodLease)
+	}
 	for file, want := range map[string]string{"built-sha": sha, "built-branch": "dev"} {
 		b, err := os.ReadFile(filepath.Join(src, file))
 		if err != nil || strings.TrimSpace(string(b)) != want {
@@ -255,6 +259,36 @@ func TestDogfoodDeploy_LeaseRefusalHasNoMutation(t *testing.T) {
 	}
 	if currentBranchOrFail(t, src) != "main" {
 		t.Fatal("mutated checkout before lease gate")
+	}
+}
+
+func TestDogfoodDeploy_ExpiredHolderMustReclaimOrOverride(t *testing.T) {
+	for _, override := range []bool{false, true} {
+		t.Run(fmt.Sprint(override), func(t *testing.T) {
+			src, _, _, sha, client := setupDogfoodRepo(t, "deploy-expired", tomlDogfoodNone)
+			ageLease(t, canonicalize(src), time.Hour)
+			result, err := DogfoodDeploy(context.Background(), client, "task-sd", DogfoodDeployOpts{Ref: sha, LeaseOverride: override})
+			if override {
+				if err != nil || result == nil || len(result.Warnings) == 0 || !strings.HasPrefix(result.Warnings[0], "LEASE OVERRIDE:") {
+					t.Fatalf("expired override: result=%+v err=%v", result, err)
+				}
+				if currentBranchOrFail(t, src) != "dev" {
+					t.Fatal("override did not deploy dogfood")
+				}
+			} else {
+				var gate *LeaseGateError
+				if !errors.As(err, &gate) {
+					t.Fatalf("expired holder deployed without reclaiming: result=%+v err=%v", result, err)
+				}
+				if currentBranchOrFail(t, src) != "main" {
+					t.Fatal("expired lease changed host checkout")
+				}
+				stateDir, _ := SourceRepoStateDir(canonicalize(src))
+				if m, _ := ReadManifest(stateDir); m != nil {
+					t.Fatal("expired lease wrote manifest")
+				}
+			}
+		})
 	}
 }
 
