@@ -29,6 +29,11 @@ type MergeOptions struct {
 	// the would-be merge state, aborts cleanly, and returns a preview
 	// result. No commit, no post_merge hook.
 	DryRun bool
+
+	// LeaseOverride proceeds even though another task holds the dogfood lease
+	// and the host is on the dogfood branch (the merge checks out the default
+	// branch). Warns first and notifies the holder.
+	LeaseOverride bool
 }
 
 // PostMergeResult is the captured outcome of the `[post_merge]` hook
@@ -53,6 +58,8 @@ type MergeResult struct {
 	TaskBranch    string `json:"task_branch"`
 	SourceRepo    string `json:"source_repo"`
 	Log           string `json:"log"`
+	// Warnings carries LEASE OVERRIDE notices.
+	Warnings []string `json:"warnings,omitempty"`
 
 	// Postconditions describe iris's output state. They are facts, not
 	// directives. Always true today; named so consumers can read them
@@ -91,14 +98,24 @@ func MergeToMaster(ctx context.Context, client *argus.Client, taskID string, opt
 		return nil, err
 	}
 
+	warnings, err := hostMoveGate(ctx, client, resolved, taskID, defaultBranch, false, opts.LeaseOverride)
+	if err != nil {
+		return nil, err
+	}
+
 	mu := lockSourceRepo(resolved.SourceRepo)
 	defer mu.Unlock()
 
+	var res *MergeResult
 	if opts.DryRun {
-		return dryRunMergeLocked(ctx, resolved, defaultBranch)
+		res, err = dryRunMergeLocked(ctx, resolved, defaultBranch)
+	} else {
+		res, err = mergeToMasterLocked(ctx, resolved, defaultBranch, opts)
 	}
-
-	return mergeToMasterLocked(ctx, resolved, defaultBranch, opts)
+	if res != nil {
+		res.Warnings = warnings
+	}
+	return res, err
 }
 
 // mergeToMasterLocked performs the merge sequence assuming the caller

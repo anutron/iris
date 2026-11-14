@@ -229,10 +229,11 @@ func toolDefinitions() []mcp.ToolDefinition {
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"task_id": map[string]any{"type": "string", "description": "Argus task ID. Iris resolves the source repo and branch from this."},
-					"no_ff":   map[string]any{"type": "boolean", "description": "Pass --no-ff to git merge (default true). When false, requires fast-forward."},
-					"message": map[string]any{"type": "string", "description": "(optional) Merge commit message (-m <message>)."},
-					"dry_run": map[string]any{"type": "boolean", "description": "Preview the merge: run `git merge --no-commit --no-ff <branch>`, capture files_changed + conflicts, then `merge --abort`. No commit, no post_merge hook. Defaults to false."},
+					"task_id":        map[string]any{"type": "string", "description": "Argus task ID. Iris resolves the source repo and branch from this."},
+					"no_ff":          map[string]any{"type": "boolean", "description": "Pass --no-ff to git merge (default true). When false, requires fast-forward."},
+					"message":        map[string]any{"type": "string", "description": "(optional) Merge commit message (-m <message>)."},
+					"dry_run":        map[string]any{"type": "boolean", "description": "Preview the merge: run `git merge --no-commit --no-ff <branch>`, capture files_changed + conflicts, then `merge --abort`. No commit, no post_merge hook. Defaults to false."},
+					"lease_override": map[string]any{"type": "boolean", "description": "(optional, default false) Proceed even though another task holds the dogfood lease and this would change what the dogfood host serves (host on dogfood_branch moving away, or modifying dogfood_branch). Refused with the holder named otherwise. Puts a `LEASE OVERRIDE:` warning first and notifies the holder. Prefer iris_dogfood_claim."},
 				},
 				"required": []string{"task_id"},
 			},
@@ -505,13 +506,14 @@ func toolDefinitions() []mcp.ToolDefinition {
 		},
 		{
 			Name:        "iris_cherry_pick",
-			Description: "Cherry-pick a commit onto a target branch in the source repo. Checks out `target_branch` then runs `git cherry-pick <commit>` under the per-source-repo lock; the pair is atomic from other iris callers' view. On conflict, runs `git cherry-pick --abort` and returns a structured error carrying the conflict paths; the source repo lands back on `target_branch` with a clean working tree. Refuses cherry-picking onto the default branch (use `iris_merge_to_master` for that).",
+			Description: "Cherry-pick a commit onto a target branch in the source repo. Checks out `target_branch` then runs `git cherry-pick <commit>` under the per-source-repo lock; the pair is atomic from other iris callers' view. On conflict, runs `git cherry-pick --abort` and returns a structured error carrying the conflict paths; the source repo lands back on `target_branch` with a clean working tree. Refuses cherry-picking onto the default branch (use `iris_merge_to_master` for that). DOGFOOD HOST: refused when the pick would change what dogfood serves (host on dogfood_branch, or target_branch is dogfood_branch) and another task holds the dogfood lease, unless lease_override=true.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"task_id":       map[string]any{"type": "string", "description": "Argus task ID. Iris resolves the source repo from this."},
-					"commit":        map[string]any{"type": "string", "description": "Commit-ish to cherry-pick (SHA, branch name, etc.). MUST NOT begin with '-'."},
-					"target_branch": map[string]any{"type": "string", "description": "Local branch to apply the commit onto. MUST NOT begin with '-', equal the default branch, or be absent locally."},
+					"task_id":        map[string]any{"type": "string", "description": "Argus task ID. Iris resolves the source repo from this."},
+					"commit":         map[string]any{"type": "string", "description": "Commit-ish to cherry-pick (SHA, branch name, etc.). MUST NOT begin with '-'."},
+					"target_branch":  map[string]any{"type": "string", "description": "Local branch to apply the commit onto. MUST NOT begin with '-', equal the default branch, or be absent locally."},
+					"lease_override": map[string]any{"type": "boolean", "description": "(optional, default false) Proceed even though another task holds the dogfood lease and this would change what the dogfood host serves (host on dogfood_branch moving away, or modifying dogfood_branch). Refused with the holder named otherwise. Puts a `LEASE OVERRIDE:` warning first and notifies the holder. Prefer iris_dogfood_claim."},
 				},
 				"required": []string{"task_id", "commit", "target_branch"},
 			},
@@ -522,9 +524,10 @@ func toolDefinitions() []mcp.ToolDefinition {
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"task_id": map[string]any{"type": "string", "description": "Argus task ID. Iris resolves the source repo from this."},
-					"branch":  map[string]any{"type": "string", "description": "Branch to switch to. MUST NOT begin with '-'."},
-					"force":   map[string]any{"type": "boolean", "default": false, "description": "Abort any in-progress merge/cherry-pick/rebase and discard uncommitted changes before switching. Destructive — pair with reflog for recovery."},
+					"task_id":        map[string]any{"type": "string", "description": "Argus task ID. Iris resolves the source repo from this."},
+					"branch":         map[string]any{"type": "string", "description": "Branch to switch to. MUST NOT begin with '-'."},
+					"force":          map[string]any{"type": "boolean", "default": false, "description": "Abort any in-progress merge/cherry-pick/rebase and discard uncommitted changes before switching. Destructive — pair with reflog for recovery."},
+					"lease_override": map[string]any{"type": "boolean", "description": "(optional, default false) Proceed even though another task holds the dogfood lease and this would change what the dogfood host serves (host on dogfood_branch moving away, or modifying dogfood_branch). Refused with the holder named otherwise. Puts a `LEASE OVERRIDE:` warning first and notifies the holder. Prefer iris_dogfood_claim."},
 				},
 				"required": []string{"task_id", "branch"},
 			},

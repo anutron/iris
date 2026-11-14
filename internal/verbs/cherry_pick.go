@@ -14,14 +14,18 @@ type CherryPickInput struct {
 	TaskID       string
 	Commit       string
 	TargetBranch string
+	// LeaseOverride proceeds even though another task holds the dogfood lease
+	// and this pick would change what dogfood serves.
+	LeaseOverride bool
 }
 
 // CherryPickResult is the structured success payload.
 type CherryPickResult struct {
-	CherryPicked bool   `json:"cherry_picked"`
-	Commit       string `json:"commit"`
-	TargetBranch string `json:"target_branch"`
-	NewSHA       string `json:"new_sha"`
+	CherryPicked bool     `json:"cherry_picked"`
+	Commit       string   `json:"commit"`
+	TargetBranch string   `json:"target_branch"`
+	NewSHA       string   `json:"new_sha"`
+	Warnings     []string `json:"warnings,omitempty"`
 }
 
 // CherryPick checks out target_branch in the resolved source repo and
@@ -62,6 +66,11 @@ func CherryPick(ctx context.Context, in CherryPickInput) (*CherryPickResult, err
 		return nil, fmt.Errorf("refusing to cherry-pick onto default branch %q (use iris:merge_to_master instead)", in.TargetBranch)
 	}
 
+	warnings, err := hostMoveGate(ctx, in.Client, resolved, in.TaskID, in.TargetBranch, true, in.LeaseOverride)
+	if err != nil {
+		return nil, err
+	}
+
 	mu := lockSourceRepo(resolved.SourceRepo)
 	defer mu.Unlock()
 
@@ -96,5 +105,6 @@ func CherryPick(ctx context.Context, in CherryPickInput) (*CherryPickResult, err
 		Commit:       in.Commit,
 		TargetBranch: in.TargetBranch,
 		NewSHA:       strings.TrimSpace(newSHA),
+		Warnings:     warnings,
 	}, nil
 }

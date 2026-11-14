@@ -124,7 +124,7 @@ func TestGHPRMerge_RejectsNonPositivePR(t *testing.T) {
 	}
 }
 
-func TestGHPRMerge_RestoresDefaultBranchWhenOnStrayBranch(t *testing.T) {
+func TestGHPRMerge_LeavesHostOnStrayBranch(t *testing.T) {
 	src, wt, _ := setupRepoWithBareAndWorktree(t, "ghmerge-restore")
 	client := stubArgus(t, src, wt)
 
@@ -151,13 +151,13 @@ func TestGHPRMerge_RestoresDefaultBranchWhenOnStrayBranch(t *testing.T) {
 		t.Fatalf("expected no warnings, got: %v", result.Warnings)
 	}
 
-	// Canonical source repo must be back on main.
+	// The host checkout must NOT be moved (it may be serving a dogfood branch).
 	branch, err := currentBranch(context.Background(), src)
 	if err != nil {
 		t.Fatalf("currentBranch: %v", err)
 	}
-	if branch != "main" {
-		t.Fatalf("expected source repo on main after merge, got %q", branch)
+	if branch != "stray-old-feature" {
+		t.Fatalf("expected source repo to stay on stray-old-feature after merge, got %q", branch)
 	}
 }
 

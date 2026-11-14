@@ -10,9 +10,10 @@ import (
 )
 
 type cherryPickInput struct {
-	TaskID       string `json:"task_id"`
-	Commit       string `json:"commit"`
-	TargetBranch string `json:"target_branch"`
+	TaskID        string `json:"task_id"`
+	Commit        string `json:"commit"`
+	TargetBranch  string `json:"target_branch"`
+	LeaseOverride bool   `json:"lease_override,omitempty"`
 }
 
 // NewCherryPickHandler returns a Handler that decodes the envelope input
@@ -36,7 +37,7 @@ func NewCherryPickHandler(client *argus.Client) Handler {
 		}
 
 		result, err := verbs.CherryPick(ctx, verbs.CherryPickInput{
-			Client: client, TaskID: in.TaskID, Commit: in.Commit, TargetBranch: in.TargetBranch,
+			Client: client, TaskID: in.TaskID, Commit: in.Commit, TargetBranch: in.TargetBranch, LeaseOverride: in.LeaseOverride,
 		})
 		if err != nil {
 			return ErrorResponse(fmt.Sprintf("iris:cherry_pick: %v", err))

@@ -87,9 +87,7 @@ func GHPRMerge(ctx context.Context, client *argus.Client, taskID string, opts GH
 		result.Warnings = append(result.Warnings, idWarning)
 	}
 
-	// After merging on GitHub, restore the canonical source repo to the default
-	// branch and pull so a subsequent iris_reload (which requires default-branch
-	// checkout) works without manual intervention.
+	// After merging on GitHub, bring the local default branch up to date.
 	defaultBranch, dbErr := DefaultBranch(ctx, resolved.SourceRepo)
 	if dbErr != nil {
 		result.Warnings = append(result.Warnings, fmt.Sprintf("post-merge: could not determine default branch: %v", dbErr))
@@ -97,22 +95,11 @@ func GHPRMerge(ctx context.Context, client *argus.Client, taskID string, opts GH
 	}
 	result.DefaultBranch = defaultBranch
 
-	current, cbErr := currentBranch(ctx, resolved.SourceRepo)
-	if cbErr != nil {
-		result.Warnings = append(result.Warnings, fmt.Sprintf("post-merge: could not read current branch: %v", cbErr))
-		return result, nil
-	}
-
-	if current != defaultBranch {
-		if _, coErr := runGit(ctx, resolved.SourceRepo, "checkout", defaultBranch); coErr != nil {
-			result.Warnings = append(result.Warnings, fmt.Sprintf("post-merge: checkout %q failed: %v", defaultBranch, coErr))
-			return result, nil
-		}
-	}
-
-	if _, pullErr := runGit(ctx, resolved.SourceRepo, "pull", "--ff-only"); pullErr != nil {
-		result.Warnings = append(result.Warnings, fmt.Sprintf("post-merge: pull --ff-only failed: %v", pullErr))
-	}
-
+	// Never move the host checkout: it may be serving a dogfood branch. Sync
+	// the local default branch without a checkout, under the source-repo lock
+	// and the git transfer timeout.
+	mu := lockSourceRepo(resolved.SourceRepo)
+	defer mu.Unlock()
+	result.Warnings = append(result.Warnings, syncDefaultBranchNoCheckout(ctx, resolved.SourceRepo, defaultBranch)...)
 	return result, nil
 }

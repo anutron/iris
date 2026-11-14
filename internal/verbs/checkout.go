@@ -17,15 +17,19 @@ type CheckoutInput struct {
 	// of any in-progress merge/cherry-pick/rebase, then `git checkout -f`.
 	// Uncommitted changes are discarded.
 	Force bool
+	// LeaseOverride proceeds even though another task holds the dogfood lease
+	// and this checkout would change what dogfood serves.
+	LeaseOverride bool
 }
 
 // CheckoutResult is the structured success payload.
 type CheckoutResult struct {
-	CheckedOut  bool   `json:"checked_out"`
-	Branch      string `json:"branch"`
-	HeadSHA     string `json:"head_sha"`
-	PriorBranch string `json:"prior_branch"`
-	PriorHead   string `json:"prior_head"`
+	CheckedOut  bool     `json:"checked_out"`
+	Branch      string   `json:"branch"`
+	HeadSHA     string   `json:"head_sha"`
+	PriorBranch string   `json:"prior_branch"`
+	PriorHead   string   `json:"prior_head"`
+	Warnings    []string `json:"warnings,omitempty"`
 }
 
 // Checkout switches the resolved source repo to branch. With Force=false,
@@ -46,6 +50,11 @@ func Checkout(ctx context.Context, in CheckoutInput) (*CheckoutResult, error) {
 	}
 
 	resolved, err := Resolve(ctx, in.Client, in.TaskID)
+	if err != nil {
+		return nil, err
+	}
+
+	warnings, err := hostMoveGate(ctx, in.Client, resolved, in.TaskID, in.Branch, false, in.LeaseOverride)
 	if err != nil {
 		return nil, err
 	}
@@ -95,5 +104,6 @@ func Checkout(ctx context.Context, in CheckoutInput) (*CheckoutResult, error) {
 		HeadSHA:     strings.TrimSpace(headSHA),
 		PriorBranch: priorBranch,
 		PriorHead:   priorHead,
+		Warnings:    warnings,
 	}, nil
 }
