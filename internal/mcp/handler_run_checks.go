@@ -78,12 +78,16 @@ func runChecks(ctx context.Context, client *argus.Client, in runChecksInput) Res
 		// failures directly.
 		var checkErr *verbs.CheckExitError
 		if errors.As(err, &checkErr) && checkErr.Result != nil {
-			return ErrorResponse(fmt.Sprintf(
+			message := fmt.Sprintf(
 				"iris:run_checks: %s exited %d\n%s",
 				checkErr.Result.Command,
 				checkErr.Result.ExitCode,
 				checkErr.Result.Output,
-			))
+			)
+			if checkErr.Result.OutputTruncated || checkErr.Result.ExitCode == -1 {
+				return ErrorResponseWithFields(message+"\n"+checkErr.Err.Error(), checkErr.Result)
+			}
+			return ErrorResponse(message)
 		}
 		return ErrorResponse(fmt.Sprintf("iris:run_checks: %v", err))
 	}

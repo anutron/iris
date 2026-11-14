@@ -119,6 +119,10 @@ Both `iris push` and `iris fetch` run under iris's own `git_transfer_timeout_sec
 
 The MCP tools `iris_push` and `iris_fetch` wait up to `wait_seconds` (default 20, max 25), then return a non-error `{run_id, status}` handle if still in progress. Status is `queued` before acquiring the source-repo lock and `running` afterward. Poll `iris_run_result(run_id)` until it returns the existing final payload or classified error. Identical in-progress requests join the same run. Handles and results are in memory, retained for one hour after completion; after a restart an unknown handle means the outcome is unknown, so verify remote state before retrying a transfer. `running` does not imply authentication is pending.
 
+Check results returned inline or through `iris_run_result` keep `{command, exit_code, output}`. For output over 64 KiB, `output` is a UTF-8-safe tail; `output_truncated`, `output_bytes`, and `log_path` identify the truncation and full log. Large RSpec logs also include recognized summary counts and a failure excerpt capped at 16 KiB (`failure_section_truncated` indicates shortening). Exit code is authoritative. Non-zero exits remain MCP errors; large failures add a second JSON content block containing the result metadata. Small success and failure responses are unchanged. Timeouts preserve output under the same policy, with exit code -1.
+
+Full check logs are stored byte-for-byte with private permissions under the host user cache's `iris/check-logs/` directory (on macOS, `~/Library/Caches/iris/check-logs/`). They survive run-result expiry and daemon restarts, and require manual deletion. The returned host path may be outside an agent's sandbox. Failure to save the full log returns an explicit error. All encoded callback responses are capped at 1 MiB; oversized responses from other tools return a clear MCP size error before Argus's 4 MiB proxy limit can truncate the JSON.
+
 ### Unattended GitHub push and fetch
 
 To opt a source repo into HTTPS token authentication, set this top-level line in its gitignored `.iris.local.toml` (before any table headers):

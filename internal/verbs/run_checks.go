@@ -2,6 +2,7 @@ package verbs
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -59,21 +60,26 @@ func ValidateCheckArgs(args []string) error {
 	return nil
 }
 
-// RunChecksResult is the structured success payload. Populated even when
-// the check exits non-zero — callers can read Output and ExitCode via
-// errors.As(*CheckExitError).
+// RunChecksResult is populated on command completion, including non-zero exit
+// and timeout. Output is bounded; LogPath preserves an oversized combined log.
 type RunChecksResult struct {
-	Command  string `json:"command"`
-	ExitCode int    `json:"exit_code"`
-	Output   string `json:"output"`
+	Command                 string        `json:"command"`
+	ExitCode                int           `json:"exit_code"`
+	Output                  string        `json:"output"`
+	OutputTruncated         bool          `json:"output_truncated,omitempty"`
+	OutputBytes             int           `json:"output_bytes,omitempty"`
+	LogPath                 string        `json:"log_path,omitempty"`
+	Summary                 *CheckSummary `json:"summary,omitempty"`
+	FailureSection          string        `json:"failure_section,omitempty"`
+	FailureSectionTruncated bool          `json:"failure_section_truncated,omitempty"`
 }
 
-// CheckExitError wraps a populated *RunChecksResult when the check command
-// ran but exited non-zero. Callers use `errors.As(err, &checkErr)` to
-// inspect ExitCode and Output without a second lookup.
+// CheckExitError wraps a populated *RunChecksResult when a command exits
+// non-zero, times out, fails to start, or its full log cannot be saved.
+// Callers use errors.As to inspect the bounded result without another lookup.
 type CheckExitError struct {
 	Result *RunChecksResult
-	Err    error // underlying *exec.ExitError or wrap of it
+	Err    error // execution or log persistence error
 }
 
 // Error implements the error interface.
@@ -81,7 +87,14 @@ func (e *CheckExitError) Error() string {
 	if e.Result == nil {
 		return fmt.Sprintf("check failed: %v", e.Err)
 	}
-	return fmt.Sprintf("check failed: %s exited %d", e.Result.Command, e.Result.ExitCode)
+	message := fmt.Sprintf("check failed: %s exited %d", e.Result.Command, e.Result.ExitCode)
+	if e.Err != nil {
+		message += ": " + e.Err.Error()
+	}
+	if e.Result.ExitCode == -1 {
+		message += "; output:\n" + e.Result.Output
+	}
+	return message
 }
 
 // Unwrap supports errors.Is/As against the underlying exit error.
@@ -98,8 +111,8 @@ func (e *CheckExitError) Unwrap() error { return e.Err }
 // On successful exit (code 0): returns (*RunChecksResult, nil).
 // On non-zero exit: returns (*RunChecksResult, *CheckExitError) — the
 // result is populated so callers see the captured output and exit code.
-// On any other failure (empty check, resolve, missing/non-executable
-// script, process couldn't start): returns (nil, error).
+// On timeout, start failure, or log persistence failure: returns the bounded
+// result with *CheckExitError. Pre-execution validation returns (nil, error).
 func RunChecks(ctx context.Context, client *argus.Client, taskID string, opts RunChecksOptions) (*RunChecksResult, error) {
 	if opts.Check == "" {
 		return nil, fmt.Errorf("check is required and must be non-empty")
@@ -156,17 +169,16 @@ func RunChecks(ctx context.Context, client *argus.Client, taskID string, opts Ru
 
 	env := append(os.Environ(), secrets.ResolveEnv(ctx, secretsBlock)...)
 	out, exitCode, runErr := runWorktreeCommand(ctx, resolved.WorktreePath, env, scriptPath, argv...)
-	if runErr != nil {
-		// The process failed to start or hit iris's ceiling. No
-		// structured result.
-		return nil, fmt.Errorf("run check %s in %s: %w; output:\n%s",
-			display, resolved.WorktreePath, runErr, strings.TrimSpace(string(out)))
-	}
-
 	result := &RunChecksResult{
 		Command:  display,
 		ExitCode: exitCode,
 		Output:   string(out),
+	}
+	if err := boundCheckOutput(result); err != nil {
+		return result, &CheckExitError{Result: result, Err: errors.Join(runErr, err)}
+	}
+	if runErr != nil {
+		return result, &CheckExitError{Result: result, Err: fmt.Errorf("run check %s in %s: %w", display, resolved.WorktreePath, runErr)}
 	}
 
 	if exitCode != 0 {
