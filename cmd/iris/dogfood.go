@@ -36,7 +36,7 @@ func newDogfoodCmd() *cobra.Command {
 		Long: `The dogfood lease serializes iris set-dogfood: one task holds it at a time
 and the rest wait in an ordered queue (FIFO by default). Agents normally call
 the iris_dogfood_* MCP tools; these subcommands drive the same verbs from a
-terminal.`,
+terminal.` + "\n\n" + verbs.DogfoodReleaseGuidance,
 	}
 	root.AddCommand(newDogfoodClaimCmd(), newDogfoodRenewCmd(), newDogfoodReleaseCmd(),
 		newDogfoodForceReleaseCmd(), newDogfoodQueueMoveCmd())
@@ -49,6 +49,7 @@ func newDogfoodClaimCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "claim",
 		Short: "Claim the dogfood lease, or join its queue",
+		Long:  "Claim the dogfood lease, or join its queue. " + verbs.DogfoodReleaseGuidance,
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			client, err := newCLIClient(cmd.Context())
@@ -75,6 +76,7 @@ func newDogfoodRenewCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "renew",
 		Short: "Answer a check-in: you still hold and use the lease",
+		Long:  "Answer a check-in: you still hold and use the lease. " + verbs.DogfoodReleaseGuidance,
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			client, err := newCLIClient(cmd.Context())

@@ -91,7 +91,11 @@ Host commands include the user's Go bin directory in PATH. Cold calls immediatel
 
 An existing holder's claim still returns `granted` even if its commit is contained; explicitly release when done. Ordinary descendant-only deploys preserve contained commits, but `--force` or an external branch rewrite can remove them. “Live” describes dogfood branch contents, not runtime health. Confirm a deployed notice with `iris_status` or another claim with the required SHA before acting; notices name the lease generation and issue time. Satisfied waiters are removed without acquiring ownership.
 
-When an `[iris] Still using dogfood for <repo>?` message appears, answer with a **tool call**, not chat: `iris_dogfood_renew` (still using it) or `iris_dogfood_release` (done). If you are quiet while someone waits, iris warns once and then releases you; a holder with no word for 30 minutes is released regardless.
+- Don't hold dogfood for a user who is away.
+- Don't hold dogfood while fixing a problem you found: call `iris_dogfood_release`, fix it, then get back in line with a new `iris_dogfood_claim`.
+- If the user is away and Iris asks for dogfood back or says someone is waiting, call `iris_dogfood_release` right away.
+
+When an `[iris] Still using dogfood for <repo>?` message appears, answer with a **tool call**, not chat: `iris_dogfood_renew` only while actively using it with the user present, or `iris_dogfood_release`. If you are quiet while someone waits, iris warns once and then releases you; a holder with no word for 30 minutes is released regardless.
 
 **Notices can arrive late.** Argus types an `[iris]` message into your session only when you are idle, so one can land after the situation changed (for example "you have the dogfood lease" after you already released it). Iris cancels notices it knows are obsolete, but every notice also ends with `[lease #N, <timestamp>]`. Before acting on any `[iris]` notice, confirm with `iris_status` (its `dogfood_lease.holder`) or the result of `iris_dogfood_claim` that it is still true. If it is stale, ignore it.
 
