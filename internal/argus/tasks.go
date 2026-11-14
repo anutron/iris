@@ -8,6 +8,8 @@ import (
 // Task is the subset of argus's task representation iris consumes.
 // Argus may return additional fields; they are ignored.
 type Task struct {
+	// Live is optional: old Argus versions omit it; false means the session stopped.
+	Live         *bool  `json:"live,omitempty"`
 	ID           string `json:"id"`
 	Name         string `json:"name"`
 	Project      string `json:"project"`

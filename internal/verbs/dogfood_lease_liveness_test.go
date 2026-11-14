@@ -9,6 +9,7 @@ import (
 
 // TestClassifyLiveness covers every row of design D5.
 func TestClassifyLiveness(t *testing.T) {
+	stopped := false
 	notFound := &argus.HTTPError{Method: "GET", Path: "/x", StatusCode: 404}
 	unavailable := &argus.HTTPError{Method: "GET", Path: "/x", StatusCode: 503}
 	live := func(busy, needs bool) *argus.Bridge { return &argus.Bridge{Live: true, Busy: busy, NeedsInput: needs} }
@@ -24,13 +25,14 @@ func TestClassifyLiveness(t *testing.T) {
 		want      LivenessClass
 	}{
 		{"task 404", nil, notFound, nil, nil, LiveDead},
+		{"task stopped without bridge", &argus.Task{ID: "t", Name: "nm", Live: &stopped}, nil, nil, argus.ErrNoBridge, LiveDead},
 		{"complete", task("complete", false), nil, live(false, false), nil, LiveDead},
 		{"archived", task("in_progress", true), nil, live(true, false), nil, LiveDead},
 		{"bridge not live", task("in_progress", false), nil, &argus.Bridge{Live: false}, nil, LiveDead},
 		{"busy", task("in_progress", false), nil, live(true, false), nil, LiveBusy},
 		{"needs input", task("in_progress", false), nil, live(false, true), nil, LiveSilent},
 		{"idle live", task("in_progress", false), nil, live(false, false), nil, LiveSilent},
-		{"busy and needs input is busy", task("in_progress", false), nil, live(true, true), nil, LiveBusy},
+		{"busy and needs input is silent", task("in_progress", false), nil, live(true, true), nil, LiveSilent},
 		{"no bridge", task("in_progress", false), nil, nil, argus.ErrNoBridge, LiveNoBridge},
 		{"no bridge but complete", task("complete", false), nil, nil, argus.ErrNoBridge, LiveDead},
 		{"task 5xx", nil, unavailable, nil, nil, LiveUnreachable},

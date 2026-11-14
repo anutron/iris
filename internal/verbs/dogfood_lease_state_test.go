@@ -623,6 +623,7 @@ func TestLease_IdleCapAppliesToBusyHolderWithWaiter(t *testing.T) {
 func TestLease_InFlightDefersReleases(t *testing.T) {
 	h := newLeaseHarness(t)
 	h.cfg.InFlightMaxSeconds = 7200 // this test is about deferral, not expiry
+	h.cfg.MaxHoldSeconds = 10800    // keep the absolute cap outside this idle-deferral scenario
 	h.claim("A", 0)
 	h.claim("B", 0)
 	h.take()

@@ -303,6 +303,7 @@ func withLease(ctx context.Context, client *argus.Client, lr *leaseRepo, fn func
 		if err := saveLease(lr.SourceRepo, st); err != nil {
 			return warnings, fmt.Errorf("persist dogfood lease: %w", err)
 		}
+		warnings = append(warnings, stampLeaseMeta(ctx, client, lr, before, st)...)
 	}
 	return warnings, nil
 }
@@ -461,16 +462,17 @@ type DogfoodClaimInput struct {
 
 // DogfoodClaimResult is the result of iris:dogfood_claim.
 type DogfoodClaimResult struct {
-	SHA           string     `json:"sha,omitempty"`
-	Status        string     `json:"status"` // granted | queued | already_deployed
-	DogfoodBranch string     `json:"dogfood_branch"`
-	Holder        *refResult `json:"holder"`
-	Position      int        `json:"position"`
-	Ahead         []LeaseRef `json:"ahead"`
-	QueueLength   int        `json:"queue_length"`
-	NextCheckinAt *time.Time `json:"next_checkin_at,omitempty"`
-	Message       string     `json:"message"`
-	Warnings      []string   `json:"warnings,omitempty"`
+	Lease         *DogfoodLeaseView `json:"dogfood_lease"`
+	SHA           string            `json:"sha,omitempty"`
+	Status        string            `json:"status"` // granted | queued | already_deployed
+	DogfoodBranch string            `json:"dogfood_branch"`
+	Holder        *refResult        `json:"holder"`
+	Position      int               `json:"position"`
+	Ahead         []LeaseRef        `json:"ahead"`
+	QueueLength   int               `json:"queue_length"`
+	NextCheckinAt *time.Time        `json:"next_checkin_at,omitempty"`
+	Message       string            `json:"message"`
+	Warnings      []string          `json:"warnings,omitempty"`
 }
 
 func leaseTargetRepo(ctx context.Context, client *argus.Client, taskID, path string) (*ResolvedRepo, *leaseRepo, error) {
@@ -513,10 +515,12 @@ func DogfoodClaim(ctx context.Context, client *argus.Client, in DogfoodClaimInpu
 	}
 
 	var out ClaimOutcome
+	var snapshot *DogfoodLeaseView
 	var warnings []string
 	claim := func(pos int) error {
 		w, err := withLease(ctx, client, lr, func(m *leaseMachine) {
 			out = m.Claim(in.TaskID, name, pos, sha)
+			snapshot = leaseStateView(m.st, m.env.Cfg)
 			sha = out.SHA // retain an inherited queued request across removal during this wait
 		})
 		warnings = append(warnings, w...)
@@ -536,7 +540,12 @@ func DogfoodClaim(ctx context.Context, client *argus.Client, in DogfoodClaimInpu
 			return nil, err
 		}
 	}
-	return claimResult(lr, in.TaskID, out, append(lr.Warnings, dedupe(warnings)...)), nil
+	res := claimResult(lr, in.TaskID, out, append(lr.Warnings, dedupe(warnings)...))
+	res.Lease = snapshot
+	if out.Granted && snapshot.Holder != nil {
+		res.Message += " Absolute expiry " + snapshot.Holder.ExpiresAt.Format(time.RFC3339) + "; renewal cannot extend it. A valid in-flight deployment may defer release."
+	}
+	return res, nil
 }
 
 // clampLeaseWait clamps wait_seconds to 0-25 so a call stays under MCP client timeouts.
@@ -601,8 +610,10 @@ func claimResult(lr *leaseRepo, taskID string, out ClaimOutcome, warnings []stri
 
 // DogfoodRenewResult is the result of iris:dogfood_renew.
 type DogfoodRenewResult struct {
-	Renewed       bool      `json:"renewed"`
-	NextCheckinAt time.Time `json:"next_checkin_at"`
+	Lease         *DogfoodLeaseView `json:"dogfood_lease"`
+	Warnings      []string          `json:"warnings,omitempty"`
+	Renewed       bool              `json:"renewed"`
+	NextCheckinAt time.Time         `json:"next_checkin_at"`
 }
 
 // DogfoodRenew is the holder's "still using it" reply. A non-holder gets a
@@ -617,16 +628,19 @@ func DogfoodRenew(ctx context.Context, client *argus.Client, taskID string) (*Do
 	}
 	var ref *LeaseRefusal
 	var next time.Time
-	if _, err := withLease(ctx, client, lr, func(m *leaseMachine) {
+	var snapshot *DogfoodLeaseView
+	warnings, err := withLease(ctx, client, lr, func(m *leaseMachine) {
 		ref = m.Renew(taskID)
 		next = m.nextCheckinAt()
-	}); err != nil {
+		snapshot = leaseStateView(m.st, m.env.Cfg)
+	})
+	if err != nil {
 		return nil, err
 	}
 	if ref != nil {
 		return nil, ref
 	}
-	return &DogfoodRenewResult{Renewed: true, NextCheckinAt: next}, nil
+	return &DogfoodRenewResult{Renewed: true, NextCheckinAt: next, Lease: snapshot, Warnings: warnings}, nil
 }
 
 // DogfoodReleaseResult is the result of iris:dogfood_release.
@@ -921,6 +935,7 @@ func noticeHolder(ctx context.Context, client *argus.Client, sourceRepo, holderI
 
 // DogfoodLeaseView is the dogfood_lease field of iris:status.
 type DogfoodLeaseView struct {
+	Message  string              `json:"message"`
 	Holder   *LeaseHolderView    `json:"holder"`
 	Queue    []LeaseQueueView    `json:"queue"`
 	Timers   LeaseTimersView     `json:"timers"`
@@ -930,6 +945,7 @@ type DogfoodLeaseView struct {
 
 // LeaseHolderView is the holder as reported by status.
 type LeaseHolderView struct {
+	ExpiresAt               time.Time  `json:"expires_at"`
 	TaskID                  string     `json:"task_id"`
 	TaskName                string     `json:"task_name"`
 	GrantedAt               time.Time  `json:"granted_at"`
@@ -942,14 +958,16 @@ type LeaseHolderView struct {
 
 // LeaseQueueView is a queued task as reported by status.
 type LeaseQueueView struct {
-	TaskID     string    `json:"task_id"`
-	TaskName   string    `json:"task_name"`
-	Position   int       `json:"position"`
-	EnqueuedAt time.Time `json:"enqueued_at"`
+	EstimatedBy *time.Time `json:"estimated_by,omitempty"`
+	TaskID      string     `json:"task_id"`
+	TaskName    string     `json:"task_name"`
+	Position    int        `json:"position"`
+	EnqueuedAt  time.Time  `json:"enqueued_at"`
 }
 
 // LeaseTimersView reports the effective timers.
 type LeaseTimersView struct {
+	MaxHoldSeconds     int        `json:"max_hold_seconds"`
 	WarmerSeconds      int        `json:"warmer_seconds"`
 	GraceSeconds       int        `json:"grace_seconds"`
 	IdleReleaseSeconds int        `json:"idle_release_seconds"`
@@ -971,7 +989,7 @@ func ReadDogfoodLeaseView(ctx context.Context, sourceRepo string) *DogfoodLeaseV
 		History:  []LeaseHistoryEntry{},
 		Warnings: []string{},
 		Timers: LeaseTimersView{
-			WarmerSeconds: timers.WarmerSeconds, GraceSeconds: timers.GraceSeconds, IdleReleaseSeconds: timers.IdleReleaseSeconds, InFlightMaxSeconds: timers.InFlightMaxSeconds,
+			WarmerSeconds: timers.WarmerSeconds, GraceSeconds: timers.GraceSeconds, IdleReleaseSeconds: timers.IdleReleaseSeconds, InFlightMaxSeconds: timers.InFlightMaxSeconds, MaxHoldSeconds: timers.MaxHoldSeconds,
 		},
 	}
 	for _, e := range verrs {
@@ -983,33 +1001,9 @@ func ReadDogfoodLeaseView(ctx context.Context, sourceRepo string) *DogfoodLeaseV
 		v.Warnings = append(v.Warnings, fmt.Sprintf("unreadable %s: %v", filepath.Base(p), err))
 		return v
 	}
-	if h := st.Holder; h != nil {
-		hv := &LeaseHolderView{
-			TaskID: h.TaskID, TaskName: h.TaskName, GrantedAt: h.GrantedAt, LastContactAt: h.LastContactAt,
-			NextCheckinAt:      h.LastContactAt.Add(time.Duration(timers.WarmerSeconds) * time.Second),
-			InFlightSetDogfood: h.InFlight > 0,
-		}
-		if !h.CheckinSentAt.IsZero() {
-			t := h.CheckinSentAt
-			hv.CheckinOutstandingSince = &t
-			if h.CheckinDeliveryState == "pending" {
-				v.Warnings = append(v.Warnings, fmt.Sprintf("the check-in to task %s is accepted by argus but not yet submitted to its session (the session is not idle); it appears when the session next goes idle", h.TaskID))
-			}
-		}
-		if !h.ReleaseAt.IsZero() {
-			t := h.ReleaseAt
-			hv.ReleaseAt = &t
-		}
-		v.Holder = hv
-		idleAt := h.LastContactAt.Add(time.Duration(timers.IdleReleaseSeconds) * time.Second)
-		v.Timers.IdleReleaseAt = &idleAt
-	}
-	for i, q := range st.Queue {
-		v.Queue = append(v.Queue, LeaseQueueView{TaskID: q.TaskID, TaskName: q.TaskName, Position: i + 1, EnqueuedAt: q.EnqueuedAt})
-	}
-	if st.History != nil {
-		v.History = st.History
-	}
+	warnings := v.Warnings
+	v = leaseStateView(st, timers)
+	v.Warnings = append(v.Warnings, warnings...)
 	d := getLeaseDiag(sourceRepo)
 	if d.liveness != "" {
 		v.Warnings = append(v.Warnings, d.liveness)

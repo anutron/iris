@@ -16,3 +16,5 @@ Most common redirects:
 - ship-and-clean-up in one call → `mcp__argus__iris_complete_task(task_id)`
 
 For the full tool map (branch/cherry-pick/tag/build/recovery verbs, decision rules, sibling-plugin composition, and worked workflows), load the `iris` skill.
+
+Dogfood testing requires a lease: claim, deploy/test, then call `iris_dogfood_release` immediately when done or the user is away. Claims and renewals include a `dogfood_lease` snapshot; `iris_status` shows `holder.expires_at`, last Iris contact, and queue estimates. The default absolute hold limit is 30 minutes; renewal cannot extend it. Valid in-flight deployments defer automatic release only within their bounded mark. Completed, archived or stopped tasks release on the next tick. Coordinators reserve the next merge window with `iris_dogfood_claim(task_id, position=1)` without SHA; if already queued with a commit, release that request first. Compose/deploy/test and release promptly.
