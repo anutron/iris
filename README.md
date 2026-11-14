@@ -321,7 +321,7 @@ Results include a `dogfood_lease` snapshot (including `holder.expires_at` when a
 
 ### `iris:set_dogfood`
 
-Atomically points the configured `dogfood_branch` at a worker-supplied SHA, persists a structured manifest, then runs the same build/restart machinery as `iris:reload` (with `--no-pull`, since the SHA is already composed).
+Lower-level verb: prefer [`iris:dogfood_deploy`](#irisdogfood_deploy) (one-step claim-gated deploy, `compose=true` to merge onto the current dogfood tip) unless you already composed a finished SHA and manifest. Atomically points the configured `dogfood_branch` at a worker-supplied SHA, persists a structured manifest, then runs the same build/restart machinery as `iris:reload` (with `--no-pull`, since the SHA is already composed).
 
 Inputs:
 

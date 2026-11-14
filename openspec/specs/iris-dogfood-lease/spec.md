@@ -730,6 +730,7 @@ The skill and snippet SHALL instruct coordinators to call iris_dogfood_claim wit
 
 - **WHEN** the Argus metadata endpoint rejects a write
 - **THEN** the lease operation succeeds and returns a warning
+
 ### Requirement: Deploy lease gate and flight lifecycle
 
 Dogfood deploy SHALL reuse the set_dogfood lease gate before any composition, ref movement, manifest write, build or restart. A non-holder SHALL receive the same actionable LeaseGateError unless lease_override is explicit. The holder SHALL be marked in flight throughout composition, build, restart and readiness; every success and failure SHALL end flight. Override SHALL warn and notify the holder without taking its lease.
@@ -743,4 +744,19 @@ Dogfood deploy SHALL reuse the set_dogfood lease gate before any composition, re
 
 - **WHEN** a deploy is waiting for readiness
 - **THEN** the holder remains in flight until readiness succeeds or fails
+
+### Requirement: Lease guidance names the one-step deploy
+
+Agent-facing lease guidance that tells a holder how to deploy SHALL name `iris_dogfood_deploy` (with `compose=true` to merge onto the current dogfood tip, and `iris_run_result` polling when a run id is returned), followed by `iris_dogfood_release`. It SHALL NOT direct callers to `iris_set_dogfood` as the deploy step; `iris_set_dogfood` SHALL remain documented as the lower-level verb for a caller who already composed a finished SHA. This change SHALL affect wording only.
+
+#### Scenario: Claim is granted
+
+- **WHEN** `iris_dogfood_claim` returns granted
+- **THEN** its message tells the caller to call `iris_dogfood_deploy`, then `iris_dogfood_release`
+- **AND** it does not tell the caller to call `iris_set_dogfood`
+
+#### Scenario: Holder receives a lease notice
+
+- **WHEN** iris sends a grant, override, host-move or recompose-skipped notice to the holder
+- **THEN** the notice names `iris_dogfood_deploy` rather than `iris_set_dogfood` as the way to deploy
 

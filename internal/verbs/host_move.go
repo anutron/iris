@@ -61,7 +61,7 @@ func hostMoveGate(ctx context.Context, client *argus.Client, resolved *ResolvedR
 		caller = taskID
 	}
 	noticeHolder(ctx, client, resolved.SourceRepo, holder.TaskID, leaseMsgOverride, fmt.Sprintf(
-		"[iris] %s moved the %s host checkout off %s with lease_override while you hold the dogfood lease. Re-check what dogfood is serving, then call iris_set_dogfood or iris_dogfood_release.",
+		"[iris] %s moved the %s host checkout off %s with lease_override while you hold the dogfood lease. Re-check what dogfood is serving, then call iris_dogfood_deploy or iris_dogfood_release.",
 		cleanText(caller), cleanText(filepath.Base(resolved.SourceRepo)), cleanText(branch)))
 	return []string{fmt.Sprintf("LEASE OVERRIDE: changed the dogfood host checkout while %s holds the dogfood lease; the holder was notified.", holderText(holder))}, nil
 }

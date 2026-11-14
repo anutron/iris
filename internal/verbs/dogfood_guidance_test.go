@@ -7,6 +7,16 @@ import (
 	"time"
 )
 
+func assertDeployGuidance(t *testing.T, message string) {
+	t.Helper()
+	if !strings.Contains(message, "iris_dogfood_deploy") {
+		t.Errorf("message must direct callers to iris_dogfood_deploy: %s", message)
+	}
+	if strings.Contains(message, "iris_set_dogfood") {
+		t.Errorf("message must not direct callers to iris_set_dogfood: %s", message)
+	}
+}
+
 func assertDogfoodReleaseGuidance(t *testing.T, message string) {
 	t.Helper()
 	for _, want := range []string{
@@ -28,6 +38,10 @@ func TestDogfoodClaim_ReleaseGuidance(t *testing.T) {
 			t.Fatalf("status = %s", result.Status)
 		}
 		assertDogfoodReleaseGuidance(t, result.Message)
+		assertDeployGuidance(t, result.Message)
+		if !strings.Contains(result.Message, "iris_run_result") || !strings.Contains(result.Message, "compose=true") {
+			t.Errorf("grant message must mention compose=true and iris_run_result: %s", result.Message)
+		}
 	}
 }
 
@@ -48,6 +62,9 @@ func TestLease_NoticesIncludeReleaseGuidance(t *testing.T) {
 				t.Fatalf("messages = %+v", tc.msgs)
 			}
 			assertDogfoodReleaseGuidance(t, tc.msgs[0].Text)
+			if tc.kind == "grant" {
+				assertDeployGuidance(t, tc.msgs[0].Text)
+			}
 		})
 	}
 }
