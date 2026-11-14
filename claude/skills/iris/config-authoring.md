@@ -35,6 +35,7 @@ but emits a warning:
 | `[build]` | shared → `.iris.toml` | **required**; how to compile the new binary |
 | `[restart]` | shared → `.iris.toml` | **required**; how to bring the new binary into service |
 | `[pre_flight]` | shared → `.iris.toml` | optional gate run before build |
+| `[dogfood_ready]` | shared → `.iris.toml` | readiness ports and/or HTTP(S) URLs after restart; timeout_seconds default 120, interval_seconds default 1 |
 | `[verify]` | shared → `.iris.toml` | optional health check after a cross-reload |
 | `[post_merge]` | shared → `.iris.toml` | optional hook run after `merge_to_master` commits |
 | `git_transfer_timeout_seconds` | shared → `.iris.toml` | how long a single `push`/`fetch` git transfer runs under iris's own deadline before giving up (default 300, non-negative) |
@@ -80,6 +81,18 @@ CGO_ENABLED = "0"
 
 `command` is **argv with no shell** — no pipes, globs, `&&`, or `$VAR`. If you need
 shell semantics, point `command` at a script (`["script/iris-build"]`).
+
+## `[dogfood_ready]` — waiting for service readiness
+
+```toml
+[dogfood_ready]
+ports = [3333, 3334, 3335]
+health_urls = ["http://localhost:3333/health"]
+timeout_seconds = 120
+interval_seconds = 1
+```
+
+All checks must pass together after restart: localhost TCP connections and HTTP 2xx (no redirect following). Ports must be 1–65535; URLs require HTTP(S), a host, and no embedded credentials. Timing values default to 120 seconds and 1 second; interval_seconds accepts fractions. A timeout reports expected versus found checks and evidence. Without probes readiness is unverified. Self-reloading Iris cannot verify after it exits and loses in-memory run handles; check externally. Use `iris_dogfood_deploy` for deployment, keeping dogfood checked out through restart and verification.
 
 ## `[restart]` — bringing the new binary into service
 

@@ -56,32 +56,34 @@ type ReloadInput struct {
 	// the call came in via MCP, "cli" for direct CLI invocation, or "self"
 	// otherwise.
 	Caller string
-	// BuildBranch, when non-empty, names a branch to check out for the
-	// build+restart so the configuration load, build, and restart act on
-	// that branch's tree rather than the currently-checked-out (default)
-	// branch. It is an internal seam — set by set_dogfood to build the
-	// composed dogfood SHA — not a new MCP/CLI input. After the build and
-	// restart, reload restores the branch that was checked out on entry.
-	// Empty (the case for every other caller) preserves the prior behavior
-	// exactly: no extra checkout, no restore.
+	// BuildBranch selects the tree for internal dogfood deployment and remains checked out.
 	BuildBranch string
+	// lockHeld is internal: SetDogfood holds the source lock through reload.
+	lockHeld      bool
+	deferSelfExit bool          // outer SetDogfood must finish lease/lock cleanup first
+	target        *ResolvedRepo // pin the target when reusing SetDogfood's source lock
+	LeaseOverride bool
 }
 
 // ReloadResult is the structured result. The same shape appears in the
 // audit log (with the timestamp and caller fields added).
 type ReloadResult struct {
-	TargetSourceRepo string   `json:"target_source_repo"`
-	Mode             string   `json:"mode"`
-	Pulled           bool     `json:"pulled"`
-	PrePullSha       string   `json:"pre_pull_sha"`
-	PostPullSha      string   `json:"post_pull_sha"`
-	PreFlightOutput  string   `json:"pre_flight_output"`
-	BuildOutput      string   `json:"build_output"`
-	RestartMechanism string   `json:"restart_mechanism"`
-	RestartOutput    string   `json:"restart_output"`
-	VerifyOutput     string   `json:"verify_output"`
-	RestartPending   bool     `json:"restart_pending"`
-	Warnings         []string `json:"warnings"`
+	restartCode      *int              // internal handoff to SetDogfood, never serialized
+	BuiltCommit      string            `json:"built_commit"`
+	ServedCommit     string            `json:"served_commit,omitempty"`
+	Readiness        *DogfoodReadiness `json:"readiness"`
+	TargetSourceRepo string            `json:"target_source_repo"`
+	Mode             string            `json:"mode"`
+	Pulled           bool              `json:"pulled"`
+	PrePullSha       string            `json:"pre_pull_sha"`
+	PostPullSha      string            `json:"post_pull_sha"`
+	PreFlightOutput  string            `json:"pre_flight_output"`
+	BuildOutput      string            `json:"build_output"`
+	RestartMechanism string            `json:"restart_mechanism"`
+	RestartOutput    string            `json:"restart_output"`
+	VerifyOutput     string            `json:"verify_output"`
+	RestartPending   bool              `json:"restart_pending"`
+	Warnings         []string          `json:"warnings"`
 }
 
 // Reload performs the full reload sequence.
@@ -98,7 +100,11 @@ func Reload(ctx context.Context, client *argus.Client, in ReloadInput) (*ReloadR
 	}
 
 	// 1. Resolve target (no side effects, no lock held)
-	target, err := ResolveTarget(ctx, client, in.TaskID, in.Path)
+	target := in.target
+	var err error
+	if target == nil {
+		target, err = ResolveTarget(ctx, client, in.TaskID, in.Path)
+	}
 	if err != nil {
 		writeAudit(AuditEntry{
 			Caller: caller, Outcome: "failure",
@@ -173,7 +179,7 @@ func Reload(ctx context.Context, client *argus.Client, in ReloadInput) (*ReloadR
 	}
 
 	// On branch?
-	currentBranch, err := currentBranch(ctx, target.SourceRepo)
+	entryBranch, err := currentBranch(ctx, target.SourceRepo)
 	if err != nil {
 		writeAudit(AuditEntry{
 			Caller: caller, TargetSourceRepo: target.SourceRepo, Mode: mode,
@@ -181,8 +187,15 @@ func Reload(ctx context.Context, client *argus.Client, in ReloadInput) (*ReloadR
 		})
 		return nil, err
 	}
-	if currentBranch != defaultBranch {
-		err := fmt.Errorf("source repo %s is on branch %q; expected default branch %q", target.SourceRepo, currentBranch, defaultBranch)
+	dogfoodBranch := config.PeekLocalDogfoodBranch(target.SourceRepo)
+	if dogfoodBranch == "" {
+		// A lenient shared peek supports legacy dogfood declarations.
+		if d, _, _, e := config.LoadIrisTomlMode(tomlPath, isSelf, config.LoadMode{TolerateUnknownFields: true}); e == nil && d != nil {
+			dogfoodBranch = d.DogfoodBranch
+		}
+	}
+	if entryBranch != defaultBranch && entryBranch != dogfoodBranch {
+		err := fmt.Errorf("source repo %s is on branch %q; expected default branch %q", target.SourceRepo, entryBranch, defaultBranch)
 		writeAudit(AuditEntry{
 			Caller: caller, TargetSourceRepo: target.SourceRepo, Mode: mode,
 			Outcome: "failure", FailureReason: err.Error(),
@@ -201,11 +214,15 @@ func Reload(ctx context.Context, client *argus.Client, in ReloadInput) (*ReloadR
 	}
 
 	// 4. Acquire lock — every subsequent step must release it before returning.
-	mu := lockSourceRepo(target.SourceRepo)
+	unlock := func() {}
+	if !in.lockHeld {
+		mu := lockSourceRepo(target.SourceRepo)
+		unlock = mu.Unlock
+	}
 	lockHeld := true
 	releaseLock := func() {
 		if lockHeld {
-			mu.Unlock()
+			unlock()
 			lockHeld = false
 		}
 	}
@@ -220,28 +237,37 @@ func Reload(ctx context.Context, client *argus.Client, in ReloadInput) (*ReloadR
 	}
 	ctx = context.WithoutCancel(ctx)
 
-	// 4a. Optional build-branch checkout. When the caller supplied a branch to
-	// build (set_dogfood building the composed dogfood SHA), check it out now —
-	// after the entry pre-flight passed and the lock is held — so the config
-	// load, build, and restart all act on that branch's tree. The entry branch
-	// is restored on every exit path: explicitly on the success path (so a
-	// restore-failure warning lands in the result) and via the deferred
-	// safety-net on the early-return error paths. A failed restore is a warning,
-	// never a rollback — by then the new binary is already deployed.
-	entryBranch := currentBranch
-	restoredBuildBranch := false
-	restoreBuildBranch := func() {
-		if in.BuildBranch == "" || restoredBuildBranch {
-			return
+	MarkRunStarted(ctx)
+	// Recheck state under the source lock; queued operations may have changed it.
+	if err := checkCleanTree(ctx, target.SourceRepo); err != nil {
+		return nil, err
+	}
+	lockedBranch, err := currentBranch(ctx, target.SourceRepo)
+	if err != nil {
+		return nil, err
+	}
+	if lockedBranch != defaultBranch && lockedBranch != dogfoodBranch {
+		return nil, fmt.Errorf("source repo changed to unrelated branch %q while waiting for reload", lockedBranch)
+	}
+	if lockedBranch == dogfoodBranch && dogfoodBranch != "" && !in.lockHeld {
+		lr, err := resolveLeaseRepo(ctx, target.SourceRepo)
+		if err != nil {
+			return nil, err
 		}
-		restoredBuildBranch = true
-		if out, rerr := runDeploymentGit(ctx, target.SourceRepo, "checkout", entryBranch); rerr != nil {
-			warnings = append(warnings, fmt.Sprintf(
-				"failed to restore branch %q after building %q (repo left on %q): %v; output:\n%s",
-				entryBranch, in.BuildBranch, in.BuildBranch, rerr, out))
+		gate, err := enterLeaseGate(ctx, client, lr, in.TaskID, in.LeaseOverride, false)
+		if err != nil {
+			return nil, err
+		}
+		defer gate.finish()
+		if gate.overrideWarning != "" {
+			warnings = append(warnings, gate.overrideWarning)
 		}
 	}
-	defer restoreBuildBranch()
+	// A composite dogfood tree is intentionally not fast-forwarded from main.
+	if lockedBranch == dogfoodBranch && dogfoodBranch != "" && !in.NoPull {
+		in.NoPull = true
+		warnings = append(warnings, "dogfood checkout: skipped default-branch pull; use iris_dogfood_deploy with compose=true to include upstream commits")
+	}
 	if in.BuildBranch != "" {
 		if out, coErr := runDeploymentGit(ctx, target.SourceRepo, "checkout", in.BuildBranch); coErr != nil {
 			err := fmt.Errorf("checkout build branch %q: %w; output:\n%s", in.BuildBranch, coErr, out)
@@ -417,12 +443,28 @@ func Reload(ctx context.Context, client *argus.Client, in ReloadInput) (*ReloadR
 		}
 	}
 
-	// Restore the entry branch before reporting success (so a restore-failure
-	// warning is captured in the result and audit entry, and the repo is back
-	// on its default branch before any self-exit is scheduled).
-	restoreBuildBranch()
+	readiness := &DogfoodReadiness{Status: "pending", Evidence: []string{}}
+	servedCommit := ""
+	if isSelf {
+		warnings = append(warnings, "self-reload: restart_pending; readiness cannot be verified in-process and iris restart discards all in-memory run handles")
+	} else {
+		var readyErr error
+		readiness, readyErr = waitDogfoodReady(ctx, doc.DogfoodReady)
+		if readiness.Ready {
+			servedCommit = postPullSha
+		}
+		if readiness.Status == "unconfigured" {
+			warnings = append(warnings, "service readiness is unverified: configure [dogfood_ready] ports and/or health_urls")
+		}
+		if readyErr != nil {
+			result := &ReloadResult{TargetSourceRepo: target.SourceRepo, Mode: mode, BuiltCommit: postPullSha, PostPullSha: postPullSha, BuildOutput: buildOutput, RestartMechanism: string(doc.Restart.Mechanism), RestartOutput: restartOutput, Readiness: readiness, Warnings: warnings}
+			writeAudit(AuditEntry{Caller: caller, TargetSourceRepo: target.SourceRepo, Mode: mode, PostPullSha: postPullSha, Outcome: "failure", FailureReason: readyErr.Error(), RestartAttempted: true, RestartSucceeded: true, Warnings: warnings})
+			return result, readyErr
+		}
+	}
 
 	result := &ReloadResult{
+		BuiltCommit: postPullSha, ServedCommit: servedCommit, Readiness: readiness,
 		TargetSourceRepo: target.SourceRepo,
 		Mode:             mode,
 		Pulled:           pulled,
@@ -460,7 +502,11 @@ func Reload(ctx context.Context, client *argus.Client, in ReloadInput) (*ReloadR
 	if isSelf && doc.Restart.Mechanism == config.MechanismExitCode {
 		code := doc.Restart.ResolvedExitCode()
 		releaseLock()
-		scheduleSelfExit(code)
+		if in.deferSelfExit {
+			result.restartCode = &code
+		} else {
+			scheduleSelfExit(code)
+		}
 	}
 	return result, nil
 }

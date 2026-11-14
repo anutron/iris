@@ -80,6 +80,7 @@ type IrisToml struct {
 	PostMerge                 *HookBlock         `toml:"post_merge"              json:"post_merge,omitempty"            kind:"shared"`
 	Secrets                   SecretsBlock       `toml:"secrets"                 json:"secrets,omitempty"                kind:"local"`
 	DogfoodLease              *DogfoodLeaseBlock `toml:"dogfood_lease"     json:"dogfood_lease,omitempty"          kind:"local"`
+	DogfoodReady              *DogfoodReadyBlock `toml:"dogfood_ready" json:"dogfood_ready,omitempty" kind:"shared"`
 }
 
 // BuildBlock declares the build step.
@@ -328,6 +329,7 @@ func (c *IrisToml) Validate(isSelf bool) []ValidationError {
 	errs = append(errs, c.validateDogfood()...)
 	errs = append(errs, c.validateGitTransfer()...)
 	errs = append(errs, c.DogfoodLease.validate()...)
+	errs = append(errs, c.DogfoodReady.validate()...)
 	if !ValidGitAuthTokenSource(c.GitAuthTokenSource) {
 		errs = append(errs, ValidationError{Field: "git_auth_token_source", Message: "expected a secret source descriptor", Hint: "use op://vault/item/field, env://NAME or keychain://service/account; empty disables token auth"})
 	}

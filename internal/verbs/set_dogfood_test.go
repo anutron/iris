@@ -202,7 +202,7 @@ mechanism = "none"
 // TestSetDogfood_BuildDeploysComposedSHA covers Bug 2: the build must run
 // against the composed dogfood SHA's tree, not the default branch's. The build
 // command records the HEAD it sees into a marker file; that HEAD must be the
-// composed SHA. Afterward the source repo is restored to the default branch.
+// composed SHA. Afterward the source repo remains on dogfood.
 func TestSetDogfood_BuildDeploysComposedSHA(t *testing.T) {
 	marker := filepath.Join(t.TempDir(), "built-head")
 	toml := `
@@ -242,9 +242,9 @@ mechanism = "none"
 	if builtSHA := strings.TrimSpace(string(built)); builtSHA != sha {
 		t.Fatalf("build ran against %q; want the composed dogfood SHA %q (default HEAD %q)", builtSHA, sha, mainHead)
 	}
-	// The source repo is restored to the default branch after the build.
-	if b := currentBranchOrFail(t, src); b != "main" {
-		t.Fatalf("source repo left on %q; want it restored to main", b)
+	// Dogfood remains checked out after the build.
+	if b := currentBranchOrFail(t, src); b != "dev" {
+		t.Fatalf("source repo left on %q; want dogfood dev", b)
 	}
 }
 
@@ -252,8 +252,8 @@ mechanism = "none"
 // bootstrap chicken-and-egg: the default branch has NO .iris.toml (it lives on
 // the dogfood SHA), and dogfood_branch is only in the source-root
 // .iris.local.toml. set_dogfood must still resolve dogfood_branch (directly
-// from the local file), point dev at the composed SHA, build it, and restore
-// the default branch.
+// from the local file), point dev at the composed SHA, build it, and leave
+// dogfood selected.
 func TestSetDogfood_BootstrapReadsDogfoodBranchWithoutSharedConfig(t *testing.T) {
 	setAuditDir(t)
 	src, wt, _ := setupRepoWithBareAndWorktree(t, "sd-bootstrap")
@@ -300,8 +300,8 @@ mechanism = "none"
 	if got := revParse(t, src, "refs/heads/dev"); got != dogfoodSHA {
 		t.Fatalf("dev branch: got %q want %q", got, dogfoodSHA)
 	}
-	if b := currentBranchOrFail(t, src); b != "main" {
-		t.Fatalf("source repo left on %q; want it restored to the default branch main", b)
+	if b := currentBranchOrFail(t, src); b != "dev" {
+		t.Fatalf("source repo left on %q; want dogfood dev", b)
 	}
 }
 
@@ -413,9 +413,7 @@ func TestSetDogfood_ManifestWriteFailureLeavesBranchUntouched(t *testing.T) {
 // in that worktree, so the ref, HEAD, and working tree all advance to the
 // composed SHA.
 //
-// (The reload that follows legitimately refuses a source repo left off its
-// default branch — a pre-existing, unrelated behavior — so this test asserts the
-// ref-move outcome, which is exactly what Fix 1 changes, not the overall call.)
+// Reload now also accepts this dogfood checkout and leaves it selected.
 func TestSetDogfood_WorktreeGuardResetsCheckedOutBranch(t *testing.T) {
 	src, wt, _, sha, client := setupDogfoodRepo(t, "sd-worktree-guard", tomlDogfoodNone)
 	g := gitRunner(t)
@@ -433,6 +431,9 @@ func TestSetDogfood_WorktreeGuardResetsCheckedOutBranch(t *testing.T) {
 		Sha:      descendant,
 		Manifest: sampleManifest(),
 	})
+	if err != nil {
+		t.Fatalf("reload from checked-out dogfood: %v", err)
+	}
 	// Fix 1: the guarded ref move falls back to `git reset --hard` in the
 	// worktree that has dev checked out. Old behavior: `git branch -f` errored
 	// and left dev unmoved.

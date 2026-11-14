@@ -59,7 +59,7 @@ Result shape:
 - **GIVEN** a source repo on its default branch whose `dev` dogfood branch is reset to a composed SHA whose tree differs from the default branch's tree
 - **WHEN** `iris:set_dogfood` runs the reload
 - **THEN** the `[build] command` executes against the `dev` branch's tree (the composed SHA), not the default branch's tree
-- **AND** after the reload completes, the source repo is checked back out on its default branch
+- **AND** after the reload completes, the source repo remains checked out on its configured dogfood branch
 
 #### Scenario: Manifest is persisted alongside the audit log
 

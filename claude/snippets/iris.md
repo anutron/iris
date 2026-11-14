@@ -13,6 +13,8 @@ Most common redirects:
 - `Bash(git push)` → `mcp__argus__iris_push(task_id)`
 - `Bash(gh pr create|view|merge|comment)` → `mcp__argus__iris_gh_pr_create|view|merge|comment(task_id, …)`
 - `Bash(git checkout master && git merge …)` → `mcp__argus__iris_merge_to_master(task_id)`
+- deploy dogfood → claim with `iris_dogfood_claim`, then `iris_dogfood_deploy(task_id, ref, compose=true)`; fetch first for `origin/main`. Iris builds/restarts on dogfood, waits for configured ports/health URLs, and leaves dogfood selected. Never manually checkout main/reload/checkout dogfood.
+- long deploy/set_dogfood/reload → poll returned `{run_id, status}` with `iris_run_result` until completion (`wait_seconds` defaults to 20, max 25). Self-reloading iris loses in-memory handles; check its replacement externally.
 - ship-and-clean-up in one call → `mcp__argus__iris_complete_task(task_id)`
 
 For the full tool map (branch/cherry-pick/tag/build/recovery verbs, decision rules, sibling-plugin composition, and worked workflows), load the `iris` skill.

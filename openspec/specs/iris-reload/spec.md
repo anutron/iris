@@ -3,7 +3,6 @@
 ## Purpose
 
 Live-upgrades an iris-managed daemon by pulling its default branch, running its declared build, and restarting it as configured in `.iris.toml`.
-
 ## Requirements
 ### Requirement: `iris:reload` verb
 
@@ -25,16 +24,16 @@ The plugin SHALL expose `iris:reload` as an MCP tool and CLI subcommand that liv
 
 Before acquiring the lock or performing any mutation (including the pull), `iris:reload` SHALL run the tree-state pre-flight checks that do not depend on `.iris.toml` content and refuse with a structured error if any fails. `.iris.toml` content refusals (missing file, malformed TOML, schema/mechanism validation) are NOT part of this requirement — they run after the pull, against the post-pull configuration (see "Configuration is loaded and validated after the pull").
 
-To choose the fetch target, `iris:reload` MAY perform a lenient pre-pull read of `.iris.toml` solely to discover a `default_branch` override; this lenient read SHALL NOT produce any refusal — on a missing, malformed, or otherwise unreadable file it yields no override and the default-branch fallback (git `origin/HEAD` → `main`) applies.
+To choose the fetch target, `iris:reload` MAY perform a lenient pre-pull read of `.iris.toml` to discover a `default_branch` override and configured dogfood branch; this lenient read SHALL NOT produce any refusal — on a missing, malformed, or otherwise unreadable file it yields no override and the default-branch fallback (git `origin/HEAD` → `main`) applies.
 
 #### Scenario: Refuses dirty working tree
 
 - **WHEN** the resolved source repo has uncommitted changes
 - **THEN** iris returns a structured error naming the dirty paths and does NOT acquire the lock or pull
 
-#### Scenario: Refuses non-default branch
+#### Scenario: Refuses unrelated branch
 
-- **WHEN** the source repo's HEAD is on a branch other than the resolved default branch
+- **WHEN** the source repo's HEAD is on a branch other than the resolved default branch or configured dogfood branch
 - **THEN** iris returns a structured error naming the current branch and the default, and does NOT acquire the lock or pull
 
 #### Scenario: Lenient pre-pull peek resolves the fetch target without refusing
@@ -42,13 +41,18 @@ To choose the fetch target, `iris:reload` MAY perform a lenient pre-pull read of
 - **WHEN** the pre-pull on-disk `.iris.toml` is missing, malformed, or contains a field the running binary does not recognise
 - **THEN** iris does NOT refuse at this step; it resolves `default_branch` from the file's override if the lenient read succeeds, otherwise falls back to git `origin/HEAD` (then `main` with a warning), and proceeds to the pull
 
+#### Scenario: Reload while dogfood is checked out
+
+- **WHEN** the configured dogfood branch is checked out
+- **THEN** reload builds, restarts and verifies that tree under the source lock, skips upstream pulls with a warning, and leaves dogfood checked out
+
 ### Requirement: Pull behavior
 
-Iris SHALL fetch and fast-forward-only merge origin/<default-branch> before invoking the build step, unless the caller passes `no_pull = true`.
+Iris SHALL fetch and fast-forward-only merge origin/<default-branch> before invoking the build step, unless the caller passes `no_pull = true` or the configured dogfood branch is checked out.
 
 #### Scenario: Default behavior pulls
 
-- **WHEN** `iris:reload` is invoked without `no_pull`
+- **WHEN** `iris:reload` is invoked on the default branch without `no_pull`
 - **THEN** iris runs `git fetch origin <default-branch>` followed by `git merge --ff-only origin/<default-branch>` and records `pulled = true` in the result
 
 #### Scenario: `no_pull` skips the pull
@@ -60,6 +64,11 @@ Iris SHALL fetch and fast-forward-only merge origin/<default-branch> before invo
 
 - **WHEN** local default branch and origin/<default-branch> have diverged (fast-forward is not possible)
 - **THEN** iris returns a structured error naming both SHAs and does NOT build
+
+#### Scenario: Dogfood preserves composite history
+
+- **WHEN** reload is invoked on the configured dogfood branch without no_pull
+- **THEN** iris skips fetch/merge with a warning and builds its current HEAD; upstream composition requires iris_dogfood_deploy
 
 ### Requirement: Build step
 
@@ -130,7 +139,7 @@ Iris SHALL classify each reload as self or cross based on whether the resolved t
 
 ### Requirement: Per-source-repo lock spans pull, build, and restart
 
-Iris SHALL hold the per-source-repo lock from immediately after pre-flight through the end of the restart step (for cross-reload) or through response flush (for self-reload, releasing before scheduling `os.Exit`).
+Iris SHALL hold the per-source-repo lock from immediately after pre-flight through restart and configured readiness verification (for cross-reload) or through response flush (for self-reload, releasing before scheduling `os.Exit`).
 
 #### Scenario: Concurrent reloads on the same source repo serialize
 
@@ -337,34 +346,12 @@ During reload pre-flight, `iris:reload` SHALL decode `.iris.toml` in a forward-c
 
 ### Requirement: Optional caller-supplied build branch
 
-`iris:reload` SHALL accept an optional caller-supplied build branch (an internal `ReloadInput` field, not a new MCP/CLI input). When empty — the case for every existing caller — reload behaves exactly as before, building and restarting against whatever branch is currently checked out. When non-empty, reload SHALL, after acquiring the per-source-repo lock and before loading `.iris.toml` and running the build, check out the named branch in the source repo, so the configuration load, build, and restart all act on that branch's tree (the composed SHA). After the build and restart steps — on every exit path, including build failure, restart failure, and the success path — reload SHALL restore the branch that was checked out when the call entered.
+`iris:reload` SHALL accept an optional caller-supplied build branch (an internal `ReloadInput` field, not a new MCP/CLI input). When empty — the case for every existing caller — reload behaves exactly as before, building and restarting against whatever branch is currently checked out. When non-empty, reload SHALL, after acquiring the per-source-repo lock and before loading `.iris.toml` and running the build, check out the named branch in the source repo, so the configuration load, build, and restart all act on that branch's tree (the composed SHA). The selected build branch SHALL remain checked out after build, restart and verification, including failure paths.
 
-This requirement does NOT relax the entry pre-flight: reload still refuses a dirty working tree and still requires HEAD to be on the resolved default branch before it acquires the lock or mutates anything. The build-branch checkout happens only after those checks pass and the lock is held.
+#### Scenario: Dogfood is the resting branch
 
-A failure to restore the entry branch SHALL be surfaced as a warning in the structured result (and audit entry) rather than swallowed; the restart itself is not rolled back (the new binary has already been deployed).
-
-#### Scenario: Empty build branch preserves existing behavior
-
-- **WHEN** `iris:reload` is invoked with no build branch (every existing caller)
-- **THEN** reload builds and restarts against the currently checked-out branch and performs no extra checkout or restore
-
-#### Scenario: Build branch is checked out for the build and restored after
-
-- **GIVEN** a source repo on its default branch with a clean working tree, and a caller-supplied build branch whose tree differs from the default branch's tree
-- **WHEN** `iris:reload` runs with that build branch
-- **THEN** reload acquires the lock, checks out the build branch, loads `.iris.toml` and runs `[build] command` against the build branch's tree, dispatches the restart, and then checks the source repo back out on the branch it entered on (the default branch)
-
-#### Scenario: Entry pre-flight still applies with a build branch
-
-- **GIVEN** a caller-supplied build branch
-- **WHEN** the source repo's working tree is dirty, or HEAD is not on the resolved default branch
-- **THEN** reload refuses at pre-flight exactly as it would without a build branch — before acquiring the lock and before any checkout
-
-#### Scenario: Restore failure surfaces a warning without rolling back the restart
-
-- **GIVEN** a reload that checked out a build branch, built, and restarted successfully
-- **WHEN** restoring the entry branch fails
-- **THEN** reload returns success for the build and restart, appends a warning naming the branch it could not restore (and the branch the repo was left on), and does NOT undo the restart
+- **WHEN** set_dogfood supplies the configured dogfood build branch
+- **THEN** reload checks it out before loading build configuration and leaves it checked out after restart
 
 ### Requirement: Clean-tree pre-flight ignores `.iris.local.toml`
 
@@ -425,4 +412,13 @@ environment and are unaffected.
 - **WHEN** `[restart] mechanism` is `exit_code`, `launchagent`, `launchdaemon`, `signal`, or `none`
 - **THEN** no secrets resolution or injection occurs for the restart step (unchanged from before
   this feature existed)
+
+### Requirement: Dogfood reload lease
+
+Reload from the configured dogfood branch SHALL enter the dogfood lease gate, including flight marking, unless invoked internally under the already gated deploy lock. A non-holder MUST explicitly use lease_override to reload dogfood. Default-branch reload SHALL retain its existing lease-free behavior.
+
+#### Scenario: Dogfood reload by a non-holder
+
+- **WHEN** a non-holder reloads a dogfood checkout without override
+- **THEN** reload refuses with the actionable LeaseGateError and performs no build or restart
 

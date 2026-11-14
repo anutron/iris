@@ -56,6 +56,7 @@ that begins with '{').` + "\n\n" + verbs.DogfoodReleaseGuidance,
 				Manifest:      m,
 				Force:         force,
 				LeaseOverride: leaseOverride,
+				Caller:        "cli",
 			})
 			if result != nil {
 				body, _ := json.MarshalIndent(result, "", "  ")

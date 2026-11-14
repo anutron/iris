@@ -1,9 +1,16 @@
 package daemon
 
 import (
+	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+
+	"github.com/anutron/iris/internal/argus"
+	"github.com/anutron/iris/internal/mcp"
 )
 
 func TestToolDefinitions_DogfoodLeaseTools(t *testing.T) {
@@ -46,5 +53,67 @@ func TestToolDefinitions_DogfoodLeaseTools(t *testing.T) {
 	req := defs["iris_dogfood_force_release"]["required"].([]any)
 	if len(req) != 1 || req[0] != "reason" {
 		t.Errorf("force_release must require reason: %v", req)
+	}
+}
+
+func TestRegistrar_DeployCatalogRoundTrip(t *testing.T) {
+	var mu sync.Mutex
+	registered := map[string]argus.MCPTool{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			var tool argus.MCPTool
+			if err := json.NewDecoder(r.Body).Decode(&tool); err != nil {
+				t.Error(err)
+				w.WriteHeader(400)
+				return
+			}
+			mu.Lock()
+			registered[tool.Name] = tool
+			mu.Unlock()
+			json.NewEncoder(w).Encode(map[string]string{"name": tool.Name, "scope": "iris"})
+			return
+		}
+		w.WriteHeader(200)
+	}))
+	defer server.Close()
+	registrar := mcp.NewRegistrar(argus.New(server.URL, "test"), "http://callback.invalid", "Bearer test", nil)
+	for _, def := range toolDefinitions() {
+		registrar.Add(def)
+	}
+	if err := registrar.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer registrar.Stop(context.Background())
+	mu.Lock()
+	defer mu.Unlock()
+	tool, ok := registered["iris_dogfood_deploy"]
+	if !ok || tool.CallbackURL != "http://callback.invalid/mcp/iris_dogfood_deploy" {
+		t.Fatalf("deploy registration=%+v", tool)
+	}
+	props := tool.InputSchema["properties"].(map[string]any)
+	if props["ref"] == nil || props["wait_seconds"] == nil {
+		t.Fatalf("deploy schema lost: %+v", tool)
+	}
+}
+
+func TestToolDefinitions_DeploymentRuns(t *testing.T) {
+	defs := map[string]map[string]any{}
+	for _, def := range toolDefinitions() {
+		defs[def.Name] = def.InputSchema
+	}
+	for _, name := range []string{"iris_dogfood_deploy", "iris_set_dogfood", "iris_reload"} {
+		if defs[name] == nil {
+			t.Fatalf("missing %s", name)
+		}
+		props := defs[name]["properties"].(map[string]any)
+		if props["wait_seconds"] == nil {
+			t.Errorf("%s missing bounded wait", name)
+		}
+	}
+	props := defs["iris_dogfood_deploy"]["properties"].(map[string]any)
+	for _, key := range []string{"ref", "compose", "force", "lease_override", "task_id"} {
+		if props[key] == nil {
+			t.Errorf("deploy missing %s", key)
+		}
 	}
 }

@@ -91,7 +91,8 @@ func Start(ctx context.Context, cfg *config.Config, log *slog.Logger) (*Daemon, 
 	mcpSrv.RegisterHandler("iris_run_build", mcp.NewRunBuildHandler(client, runs))
 	mcpSrv.RegisterHandler("iris_run_checks", mcp.NewRunChecksHandler(client, runs))
 	mcpSrv.RegisterHandler("iris_run_result", mcp.NewRunResultHandler(runs))
-	mcpSrv.RegisterHandler("iris_set_dogfood", mcp.NewSetDogfoodHandler(client))
+	mcpSrv.RegisterHandler("iris_dogfood_deploy", mcp.NewDogfoodDeployHandler(client, runs))
+	mcpSrv.RegisterHandler("iris_set_dogfood", mcp.NewSetDogfoodHandler(client, runs))
 	mcpSrv.RegisterHandler("iris_dogfood_claim", mcp.NewDogfoodClaimHandler(client))
 	mcpSrv.RegisterHandler("iris_dogfood_renew", mcp.NewDogfoodRenewHandler(client))
 	mcpSrv.RegisterHandler("iris_dogfood_release", mcp.NewDogfoodReleaseHandler(client))
@@ -106,7 +107,7 @@ func Start(ctx context.Context, cfg *config.Config, log *slog.Logger) (*Daemon, 
 	mcpSrv.RegisterHandler("iris_cherry_pick", mcp.NewCherryPickHandler(client))
 	mcpSrv.RegisterHandler("iris_checkout", mcp.NewCheckoutHandler(client))
 	mcpSrv.RegisterHandler("iris_tag", mcp.NewTagHandler(client))
-	mcpSrv.RegisterHandler("iris_reload", mcp.NewReloadHandler(client))
+	mcpSrv.RegisterHandler("iris_reload", mcp.NewReloadHandler(client, runs))
 	mcpSrv.RegisterHandler("iris_publish", mcp.NewPublishHandler(client))
 	mcpSrv.RegisterHandler("iris_validate_config", mcp.NewValidateConfigHandler(client))
 	mcpSrv.RegisterHandler("iris_ls", mcp.NewLsHandler())
@@ -396,11 +397,28 @@ func toolDefinitions() []mcp.ToolDefinition {
 			},
 		},
 		{
+			Name:        "iris_dogfood_deploy",
+			Description: "Deploy a ref to the configured dogfood branch in one step: claim the lease first, then build, restart and wait for configured ports/health URLs. Host stays on dogfood; never manually checkout main/reload/checkout dogfood. compose=true merges ref with --no-ff onto the current dogfood tip, preserving unmerged work. Direct deployment retains the commit-dropping guard (force overrides only that guard). lease_override bypasses only the lease. Slow calls return a run_id to poll with iris_run_result. Reports built_commit, served_commit after readiness, evidence and warnings. Self-reloading iris loses in-memory runs and reports restart_pending; verify externally. " + verbs.DogfoodReleaseGuidance,
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"task_id":        map[string]any{"type": "string", "description": "Argus task ID; omit for self-target (requires lease_override)."},
+					"ref":            map[string]any{"type": "string", "description": "Reachable local ref or commit to deploy. Fetch remote refs first with iris_fetch."},
+					"compose":        map[string]any{"type": "boolean", "description": "Merge ref --no-ff onto the current dogfood tip before deploying (default false). Conflicts abort without moving dogfood."},
+					"force":          map[string]any{"type": "boolean", "description": "Allow a direct deployment to drop existing dogfood commits, with a warning."},
+					"lease_override": map[string]any{"type": "boolean", "description": "Deploy without holding the lease, with warning and holder notification."},
+					"wait_seconds":   map[string]any{"type": "integer", "description": "Wait 0–25 seconds (default 20), then return a pollable run_id."},
+				},
+				"required": []string{"ref"},
+			},
+		},
+		{
 			Name:        "iris_set_dogfood",
 			Description: "Atomically point the configured dogfood branch at a worker-composed commit SHA, persist a structured manifest of what that SHA contains, and rebuild/restart the service via the existing reload machinery. Iris does NOT compose — the agent builds the SHA (cherry-pick/merge/rebase, conflict resolution) and hands iris the finished commit. REQUIRES THE DOGFOOD LEASE: call iris_dogfood_claim first (and iris_dogfood_release when done); a caller that does not hold the lease is refused with the holder, everyone ahead of it, and its own queue position (also as structured fields holder/ahead/position), unless lease_override=true. lease_override bypasses ONLY the lease and force bypasses ONLY the commit-dropping guard — neither implies the other. A holder's call counts as lease contact (resets the check-in timer) at start and finish. Refuses any repo whose .iris.toml does not declare `dogfood_branch`. Refuses a sha that is NOT a descendant of the current dogfood SHA (it would drop commits) unless force=true, which proceeds with a warning. The ref move is worktree-guarded: `git branch -f` normally, but `git reset --hard` in the worktree when the dogfood branch is checked out. Writes the manifest before moving the ref (durable-first); a reset failure leaves the manifest ahead, surfaced as drift by iris_status. Returns previous_sha (\"\" when the branch was newly created), new_sha, and the reload result. " + verbs.DogfoodReleaseGuidance,
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
+					"wait_seconds":   map[string]any{"type": "integer", "description": "Wait 0–25 seconds (default 20), then return a run_id to poll with iris_run_result. Self-reload discards in-memory handles."},
 					"task_id":        map[string]any{"type": "string", "description": "(optional) Argus task ID. Iris resolves the source repo from this; omit for self-target (iris-on-iris)."},
 					"sha":            map[string]any{"type": "string", "description": "Full commit SHA to point the dogfood branch at. MUST be reachable in the source repo's object database."},
 					"lease_override": map[string]any{"type": "boolean", "description": "(optional, default false) Deploy even though you do not hold the dogfood lease. DISTINCT from force: it relaxes only the lease gate. Puts a `LEASE OVERRIDE:` warning first in warnings and messages the current holder that its dogfood tree was replaced; the holder keeps the lease. Successful deploys satisfy queued commit requests they contain. A call with no task_id (CLI / iris-on-iris) can never hold the lease and so needs this. Prefer iris_dogfood_claim."},
@@ -547,10 +565,12 @@ func toolDefinitions() []mcp.ToolDefinition {
 		},
 		{
 			Name:        "iris_reload",
-			Description: "Live-upgrade an iris-managed daemon. Pulls the default branch, runs the project-declared build, then dispatches to the project-declared restart mechanism in `.iris.toml`. Self-vs-cross detection is automatic. task_id and path are mutually exclusive; both omitted targets iris itself.",
+			Description: "Live-upgrade an iris-managed daemon. Pulls the default branch, runs the project-declared build, then dispatches to the project-declared restart mechanism in `.iris.toml`. On the configured dogfood branch, preserves the checkout and skips default-branch pulls; requires its lease. Use iris_dogfood_deploy for ref deployment. Slow calls return run_id handles; self-reload loses these in-memory handles. Self-vs-cross detection is automatic. task_id and path are mutually exclusive; both omitted targets iris itself.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
+					"lease_override":  map[string]any{"type": "boolean", "description": "Override the lease gate when reloading the configured dogfood checkout."},
+					"wait_seconds":    map[string]any{"type": "integer", "description": "Wait 0–25 seconds (default 20), then return a run_id to poll with iris_run_result. Self-reload discards in-memory handles."},
 					"task_id":         map[string]any{"type": "string", "description": "(optional) Argus task ID. Iris resolves the source repo from this. Omit for self-target."},
 					"path":            map[string]any{"type": "string", "description": "(optional) Absolute filesystem path to a source repo. Omit for self-target."},
 					"no_pull":         map[string]any{"type": "boolean", "description": "Skip the git fetch + ff-merge and build from current HEAD (default false)."},

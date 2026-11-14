@@ -37,6 +37,7 @@ func TestFieldKind_ExpectedShared(t *testing.T) {
 	shared := []string{
 		"schema_version",
 		"default_branch",
+		"dogfood_ready",
 		"build",
 		"restart",
 		"pre_flight",
@@ -108,6 +109,7 @@ func TestSharedFields_MatchesExpectedSet(t *testing.T) {
 	want := []string{
 		"build",
 		"default_branch",
+		"dogfood_ready",
 		"git_transfer_timeout_seconds",
 		"post_merge",
 		"pre_flight",
