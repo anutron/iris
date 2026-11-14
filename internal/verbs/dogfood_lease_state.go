@@ -26,6 +26,7 @@ const (
 	leaseMsgReleased  = "released"
 	leaseMsgOverride  = "override"
 	leaseMsgRecompose = "recompose_skipped"
+	leaseMsgDeployed  = "deployed"
 )
 
 // LeaseHolder is the current holder.
@@ -57,6 +58,7 @@ type LeaseHolder struct {
 
 // LeaseEntry is a queued task.
 type LeaseEntry struct {
+	SHA        string    `json:"sha,omitempty"`
 	TaskID     string    `json:"task_id"`
 	TaskName   string    `json:"task_name"`
 	EnqueuedAt time.Time `json:"enqueued_at"`
@@ -64,6 +66,7 @@ type LeaseEntry struct {
 
 // LeaseNotice is a posted notice that argus may still hold pending.
 type LeaseNotice struct {
+	SHA        string    `json:"sha,omitempty"`
 	TaskID     string    `json:"task_id"`
 	DeliveryID string    `json:"delivery_id"`
 	Kind       string    `json:"kind"`
@@ -127,6 +130,7 @@ type LeaseEnv struct {
 	RepoSlug      string
 	DogfoodBranch string
 	Live          func(taskID string) Liveness
+	Contains      func(sha string) (bool, error)
 }
 
 // LeaseRefusal explains why a caller does not hold the lease.
@@ -166,12 +170,14 @@ func refList(refs []LeaseRef) string {
 
 // ClaimOutcome is the result of Claim.
 type ClaimOutcome struct {
-	Granted       bool
-	Position      int
-	Holder        LeaseRef
-	Ahead         []LeaseRef
-	QueueLength   int
-	NextCheckinAt time.Time
+	AlreadyDeployed bool
+	SHA             string
+	Granted         bool
+	Position        int
+	Holder          LeaseRef
+	Ahead           []LeaseRef
+	QueueLength     int
+	NextCheckinAt   time.Time
 }
 
 // ReleaseOutcome is the result of Release.
@@ -428,21 +434,39 @@ func (m *leaseMachine) queued(id, name string, pos int) ClaimOutcome {
 
 // Claim implements iris:dogfood_claim's state change. position is 1-based; 0
 // means append.
-func (m *leaseMachine) Claim(id, name string, position int) ClaimOutcome {
-	// Claiming again supersedes earlier "you were released / overridden" notices.
-	m.cancelNotices(id, leaseMsgReleased, leaseMsgOverride, leaseMsgRecompose)
-	if m.st.Holder == nil {
-		m.grant(id, name)
-		return m.granted()
+func (m *leaseMachine) Claim(id, name string, position int, requested ...string) (out ClaimOutcome) {
+	sha := ""
+	if len(requested) > 0 {
+		sha = requested[0]
 	}
-	if m.st.Holder.TaskID == id {
+	if i := m.queueIndex(id); i >= 0 && sha == "" {
+		sha = m.st.Queue[i].SHA
+	}
+	defer func() { out.SHA = sha }()
+	// Claiming again supersedes earlier "you were released / overridden" notices.
+	m.cancelNotices(id, leaseMsgReleased, leaseMsgOverride, leaseMsgRecompose, leaseMsgDeployed)
+	if m.st.Holder != nil && m.st.Holder.TaskID == id {
 		if name != "" {
 			m.st.Holder.TaskName = name
 		}
 		m.contact()
 		return m.granted()
 	}
+	if m.contains(sha) {
+		if i := m.queueIndex(id); i >= 0 {
+			m.st.Queue = append(m.st.Queue[:i:i], m.st.Queue[i+1:]...)
+			m.history("satisfied", id, sha)
+			m.clearEmptyQueueWarning()
+		}
+		m.cancelNotices(id)
+		return ClaimOutcome{AlreadyDeployed: true, Holder: m.holderRef(), Ahead: []LeaseRef{}, QueueLength: len(m.st.Queue)}
+	}
+	if m.st.Holder == nil {
+		m.grant(id, name)
+		return m.granted()
+	}
 	if i := m.queueIndex(id); i >= 0 {
+		m.st.Queue[i].SHA = sha
 		if name != "" {
 			m.st.Queue[i].TaskName = name
 		}
@@ -465,7 +489,7 @@ func (m *leaseMachine) Claim(id, name string, position int) ClaimOutcome {
 		}
 	}
 	// A release above may have granted someone else; the caller still queues.
-	e := LeaseEntry{TaskID: id, TaskName: name, EnqueuedAt: m.env.Now}
+	e := LeaseEntry{TaskID: id, TaskName: name, EnqueuedAt: m.env.Now, SHA: sha}
 	pos := len(m.st.Queue) + 1
 	if position > 0 && position < pos {
 		pos = position
@@ -533,6 +557,7 @@ func (m *leaseMachine) Renew(id string) *LeaseRefusal {
 
 // Release implements iris:dogfood_release.
 func (m *leaseMachine) Release(id string) ReleaseOutcome {
+	m.cancelNotices(id)
 	if m.st.Holder != nil && m.st.Holder.TaskID == id {
 		m.release("released by holder", true)
 		out := ReleaseOutcome{Released: true, Was: "holder"}
@@ -545,6 +570,7 @@ func (m *leaseMachine) Release(id string) ReleaseOutcome {
 		m.st.Queue = append(m.st.Queue[:i:i], m.st.Queue[i+1:]...)
 		m.cancelNotices(id)
 		m.history("leave", id, "left the queue")
+		m.clearEmptyQueueWarning()
 		return ReleaseOutcome{Released: true, Was: "queued"}
 	}
 	return ReleaseOutcome{Was: "none"}
@@ -718,6 +744,7 @@ func (m *leaseMachine) release(reason string, voluntary bool) {
 
 // grantNext pops queue entries until one is not dead and grants it.
 func (m *leaseMachine) grantNext() {
+	m.ReconcileQueue()
 	for len(m.st.Queue) > 0 {
 		e := m.st.Queue[0]
 		m.st.Queue = m.st.Queue[1:]
@@ -734,6 +761,58 @@ func (m *leaseMachine) grantNext() {
 		m.grant(e.TaskID, name)
 		return
 	}
+}
+
+func (m *leaseMachine) contains(sha string) bool {
+	if sha == "" || m.env.Contains == nil {
+		return false
+	}
+	ok, err := m.env.Contains(sha)
+	return err == nil && ok
+}
+
+// ReconcileQueue satisfies every proven contained request, without changing
+// deployment ownership or the order of the remaining waiters.
+func (m *leaseMachine) ReconcileQueue() {
+	kept := make([]LeaseEntry, 0, len(m.st.Queue))
+	for _, e := range m.st.Queue {
+		if !m.contains(e.SHA) {
+			kept = append(kept, e)
+			continue
+		}
+		m.cancelNotices(e.TaskID)
+		m.history("satisfied", e.TaskID, e.SHA)
+		m.notify(e.TaskID, leaseMsgDeployed, fmt.Sprintf("[iris] Your commit %s is now live on %s for %s; no lease is needed. Confirm with iris_status. --force or an external branch rewrite can remove it.", cleanText(e.SHA), cleanText(m.env.DogfoodBranch), cleanText(m.env.RepoName)), leaseMaxDeadline)
+		m.st.Notices[len(m.st.Notices)-1].SHA = e.SHA
+	}
+	m.st.Queue = kept
+	m.clearEmptyQueueWarning()
+}
+
+// CancelInvalidDeployments withdraws unsubmitted success notices after a
+// branch rewrite. Unknown containment must never cancel a valid notice.
+func (m *leaseMachine) CancelInvalidDeployments() {
+	for _, n := range append([]LeaseNotice(nil), m.st.Notices...) {
+		if n.Kind != leaseMsgDeployed || n.SHA == "" || m.env.Contains == nil {
+			continue
+		}
+		ok, err := m.env.Contains(n.SHA)
+		if err == nil && !ok {
+			m.fx.Cancels = append(m.fx.Cancels, LeaseCancel{TaskID: n.TaskID, DeliveryID: n.DeliveryID})
+			m.forgetNotice(n.DeliveryID)
+		}
+	}
+}
+
+func (m *leaseMachine) clearEmptyQueueWarning() {
+	h := m.st.Holder
+	if len(m.st.Queue) != 0 || h == nil || h.FinalWarningAt.IsZero() && h.ReleaseAt.IsZero() {
+		return
+	}
+	m.cancelNotices(h.TaskID, leaseMsgFinal, leaseMsgCheckin)
+	h.FinalWarningAt, h.ReleaseAt = time.Time{}, time.Time{}
+	h.PendingDeliveries = nil
+	h.CheckinDeliveryState = ""
 }
 
 // Tick evaluates the timers (D3 steps 2-5, 8). Callers hold the lease mutex.

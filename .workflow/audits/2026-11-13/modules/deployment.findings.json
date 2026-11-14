@@ -1,0 +1,14 @@
+{
+  "scope": "affected production files and callers for coalesce-dogfood-claims (9f9ca06..HEAD plus current review fixes)",
+  "branch_summary": {
+    "enumerated": 202,
+    "total": 90,
+    "covered": 80,
+    "uncovered_behavioral": 0,
+    "uncovered_implementation": 10,
+    "excluded_unchanged": 112,
+    "contradictions": 0,
+    "unimplemented_promises": 0
+  },
+  "findings": []
+}

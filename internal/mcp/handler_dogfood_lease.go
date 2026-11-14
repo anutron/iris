@@ -45,6 +45,7 @@ func decodeInput(verb string, input json.RawMessage, into any) *Response {
 }
 
 type dogfoodClaimInput struct {
+	SHA         string `json:"sha,omitempty"`
 	TaskID      string `json:"task_id"`
 	WaitSeconds int    `json:"wait_seconds,omitempty"`
 	Position    int    `json:"position,omitempty"`
@@ -57,7 +58,7 @@ func NewDogfoodClaimHandler(client *argus.Client) Handler {
 		if r := decodeInput("iris:dogfood_claim", input, &in); r != nil {
 			return *r
 		}
-		res, err := verbs.DogfoodClaim(ctx, client, verbs.DogfoodClaimInput{TaskID: in.TaskID, WaitSeconds: in.WaitSeconds, Position: in.Position})
+		res, err := verbs.DogfoodClaim(ctx, client, verbs.DogfoodClaimInput{TaskID: in.TaskID, SHA: in.SHA, WaitSeconds: in.WaitSeconds, Position: in.Position})
 		if err != nil {
 			return leaseErr("iris:dogfood_claim", err)
 		}

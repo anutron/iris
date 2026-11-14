@@ -1,0 +1,376 @@
+{
+  "scope": "affected production files and callers for coalesce-dogfood-claims (9f9ca06..HEAD plus current review fixes)",
+  "pre_archive": "coalesce-dogfood-claims",
+  "code_to_spec": {
+    "cmd/iris/dogfood.go": [
+      {
+        "spec": "openspec/changes/coalesce-dogfood-claims/specs/iris-dogfood-lease/spec.md",
+        "capability": "iris-dogfood-lease",
+        "sections": [
+          "`iris:dogfood_claim` verb"
+        ],
+        "source": "pending"
+      },
+      {
+        "spec": "openspec/specs/iris-dogfood-lease/spec.md",
+        "capability": "iris-dogfood-lease",
+        "sections": [
+          "`iris:dogfood_renew` verb"
+        ],
+        "source": "base"
+      },
+      {
+        "spec": "openspec/specs/iris-dogfood-lease/spec.md",
+        "capability": "iris-dogfood-lease",
+        "sections": [
+          "`iris:dogfood_release` verb"
+        ],
+        "source": "base"
+      },
+      {
+        "spec": "openspec/specs/iris-dogfood-lease/spec.md",
+        "capability": "iris-dogfood-lease",
+        "sections": [
+          "`iris:dogfood_force_release` verb"
+        ],
+        "source": "base"
+      },
+      {
+        "spec": "openspec/specs/iris-dogfood-lease/spec.md",
+        "capability": "iris-dogfood-lease",
+        "sections": [
+          "`iris:dogfood_queue_move` verb"
+        ],
+        "source": "base"
+      }
+    ],
+    "internal/daemon/run.go": [
+      {
+        "spec": "openspec/changes/coalesce-dogfood-claims/specs/iris-dogfood-lease/spec.md",
+        "capability": "iris-dogfood-lease",
+        "sections": [
+          "`iris:dogfood_claim` verb"
+        ],
+        "source": "pending"
+      }
+    ],
+    "internal/mcp/handler_dogfood_lease.go": [
+      {
+        "spec": "openspec/changes/coalesce-dogfood-claims/specs/iris-dogfood-lease/spec.md",
+        "capability": "iris-dogfood-lease",
+        "sections": [
+          "`iris:dogfood_claim` verb"
+        ],
+        "source": "pending"
+      }
+    ],
+    "internal/mcp/handler_set_dogfood.go": [
+      {
+        "spec": "openspec/specs/iris-set-dogfood/spec.md",
+        "capability": "iris-set-dogfood",
+        "sections": [
+          "`iris:set_dogfood` verb"
+        ],
+        "source": "base"
+      }
+    ],
+    "internal/verbs/dogfood_lease.go": [
+      {
+        "spec": "openspec/changes/coalesce-dogfood-claims/specs/iris-dogfood-lease/spec.md",
+        "capability": "iris-dogfood-lease",
+        "sections": [
+          "Lease state persists across iris restarts"
+        ],
+        "source": "pending"
+      },
+      {
+        "spec": "openspec/specs/iris-dogfood-lease/spec.md",
+        "capability": "iris-dogfood-lease",
+        "sections": [
+          "Configurable lease timers"
+        ],
+        "source": "base"
+      },
+      {
+        "spec": "openspec/changes/coalesce-dogfood-claims/specs/iris-dogfood-lease/spec.md",
+        "capability": "iris-dogfood-lease",
+        "sections": [
+          "Iris messages agents through argus pane delivery"
+        ],
+        "source": "pending"
+      },
+      {
+        "spec": "openspec/specs/iris-dogfood-lease/spec.md",
+        "capability": "iris-dogfood-lease",
+        "sections": [
+          "Warmer check-ins and contact"
+        ],
+        "source": "base"
+      },
+      {
+        "spec": "openspec/changes/coalesce-dogfood-claims/specs/iris-dogfood-lease/spec.md",
+        "capability": "iris-dogfood-lease",
+        "sections": [
+          "`iris:dogfood_claim` verb"
+        ],
+        "source": "pending"
+      },
+      {
+        "spec": "openspec/specs/iris-dogfood-lease/spec.md",
+        "capability": "iris-dogfood-lease",
+        "sections": [
+          "`iris:dogfood_renew` verb"
+        ],
+        "source": "base"
+      },
+      {
+        "spec": "openspec/specs/iris-dogfood-lease/spec.md",
+        "capability": "iris-dogfood-lease",
+        "sections": [
+          "`iris:dogfood_release` verb"
+        ],
+        "source": "base"
+      },
+      {
+        "spec": "openspec/specs/iris-dogfood-lease/spec.md",
+        "capability": "iris-dogfood-lease",
+        "sections": [
+          "`iris:dogfood_force_release` verb"
+        ],
+        "source": "base"
+      },
+      {
+        "spec": "openspec/specs/iris-dogfood-lease/spec.md",
+        "capability": "iris-dogfood-lease",
+        "sections": [
+          "`iris:dogfood_queue_move` verb"
+        ],
+        "source": "base"
+      },
+      {
+        "spec": "openspec/changes/coalesce-dogfood-claims/specs/iris-set-dogfood/spec.md",
+        "capability": "iris-set-dogfood",
+        "sections": [
+          "Dogfood lease gate"
+        ],
+        "source": "pending"
+      },
+      {
+        "spec": "openspec/specs/iris-dogfood-lease/spec.md",
+        "capability": "iris-dogfood-lease",
+        "sections": [
+          "Notice delivery state is recorded"
+        ],
+        "source": "base"
+      }
+    ],
+    "internal/verbs/dogfood_lease_content.go": [
+      {
+        "spec": "openspec/changes/coalesce-dogfood-claims/specs/iris-dogfood-lease/spec.md",
+        "capability": "iris-dogfood-lease",
+        "sections": [
+          "`iris:dogfood_claim` verb"
+        ],
+        "source": "pending"
+      }
+    ],
+    "internal/verbs/dogfood_lease_state.go": [
+      {
+        "spec": "openspec/changes/coalesce-dogfood-claims/specs/iris-dogfood-lease/spec.md",
+        "capability": "iris-dogfood-lease",
+        "sections": [
+          "Lease state persists across iris restarts"
+        ],
+        "source": "pending"
+      },
+      {
+        "spec": "openspec/specs/iris-dogfood-lease/spec.md",
+        "capability": "iris-dogfood-lease",
+        "sections": [
+          "`iris:dogfood_renew` verb"
+        ],
+        "source": "base"
+      },
+      {
+        "spec": "openspec/changes/coalesce-dogfood-claims/specs/iris-dogfood-lease/spec.md",
+        "capability": "iris-dogfood-lease",
+        "sections": [
+          "Obsolete lease notices are cancelled"
+        ],
+        "source": "pending"
+      },
+      {
+        "spec": "openspec/specs/iris-dogfood-lease/spec.md",
+        "capability": "iris-dogfood-lease",
+        "sections": [
+          "Stale in-flight marks expire"
+        ],
+        "source": "base"
+      },
+      {
+        "spec": "openspec/changes/coalesce-dogfood-claims/specs/iris-dogfood-lease/spec.md",
+        "capability": "iris-dogfood-lease",
+        "sections": [
+          "Iris messages agents through argus pane delivery"
+        ],
+        "source": "pending"
+      },
+      {
+        "spec": "openspec/changes/coalesce-dogfood-claims/specs/iris-dogfood-lease/spec.md",
+        "capability": "iris-dogfood-lease",
+        "sections": [
+          "`iris:dogfood_claim` verb"
+        ],
+        "source": "pending"
+      },
+      {
+        "spec": "openspec/specs/iris-dogfood-lease/spec.md",
+        "capability": "iris-dogfood-lease",
+        "sections": [
+          "Warmer check-ins and contact"
+        ],
+        "source": "base"
+      },
+      {
+        "spec": "openspec/specs/iris-dogfood-lease/spec.md",
+        "capability": "iris-dogfood-lease",
+        "sections": [
+          "`iris:dogfood_queue_move` verb"
+        ],
+        "source": "base"
+      },
+      {
+        "spec": "openspec/specs/iris-dogfood-lease/spec.md",
+        "capability": "iris-dogfood-lease",
+        "sections": [
+          "`iris:dogfood_release` verb"
+        ],
+        "source": "base"
+      },
+      {
+        "spec": "openspec/specs/iris-dogfood-lease/spec.md",
+        "capability": "iris-dogfood-lease",
+        "sections": [
+          "`iris:dogfood_force_release` verb"
+        ],
+        "source": "base"
+      },
+      {
+        "spec": "openspec/changes/coalesce-dogfood-claims/specs/iris-dogfood-lease/spec.md",
+        "capability": "iris-dogfood-lease",
+        "sections": [
+          "Contained queued commits are satisfied without lease handoff"
+        ],
+        "source": "pending"
+      }
+    ],
+    "internal/verbs/set_dogfood.go": [
+      {
+        "spec": "openspec/specs/iris-set-dogfood/spec.md",
+        "capability": "iris-set-dogfood",
+        "sections": [
+          "`iris:set_dogfood` verb"
+        ],
+        "source": "base"
+      },
+      {
+        "spec": "openspec/changes/coalesce-dogfood-claims/specs/iris-dogfood-lease/spec.md",
+        "capability": "iris-dogfood-lease",
+        "sections": [
+          "Contained queued commits are satisfied without lease handoff"
+        ],
+        "source": "pending"
+      }
+    ],
+    "internal/verbs/ship_feature.go": [
+      {
+        "spec": "openspec/changes/coalesce-dogfood-claims/specs/iris-dogfood-lease/spec.md",
+        "capability": "iris-dogfood-lease",
+        "sections": [
+          "Contained queued commits are satisfied without lease handoff"
+        ],
+        "source": "pending"
+      }
+    ]
+  },
+  "spec_to_code": {
+    "openspec/changes/coalesce-dogfood-claims/specs/iris-dogfood-lease/spec.md": {
+      "`iris:dogfood_claim` verb": [
+        "cmd/iris/dogfood.go",
+        "internal/daemon/run.go",
+        "internal/mcp/handler_dogfood_lease.go",
+        "internal/verbs/dogfood_lease.go",
+        "internal/verbs/dogfood_lease_content.go",
+        "internal/verbs/dogfood_lease_state.go"
+      ],
+      "Lease state persists across iris restarts": [
+        "internal/verbs/dogfood_lease.go",
+        "internal/verbs/dogfood_lease_state.go"
+      ],
+      "Iris messages agents through argus pane delivery": [
+        "internal/verbs/dogfood_lease.go",
+        "internal/verbs/dogfood_lease_state.go"
+      ],
+      "Obsolete lease notices are cancelled": [
+        "internal/verbs/dogfood_lease_state.go"
+      ],
+      "Contained queued commits are satisfied without lease handoff": [
+        "internal/verbs/dogfood_lease_state.go",
+        "internal/verbs/set_dogfood.go",
+        "internal/verbs/ship_feature.go"
+      ]
+    },
+    "openspec/specs/iris-dogfood-lease/spec.md": {
+      "`iris:dogfood_renew` verb": [
+        "cmd/iris/dogfood.go",
+        "internal/verbs/dogfood_lease.go",
+        "internal/verbs/dogfood_lease_state.go"
+      ],
+      "`iris:dogfood_release` verb": [
+        "cmd/iris/dogfood.go",
+        "internal/verbs/dogfood_lease.go",
+        "internal/verbs/dogfood_lease_state.go"
+      ],
+      "`iris:dogfood_force_release` verb": [
+        "cmd/iris/dogfood.go",
+        "internal/verbs/dogfood_lease.go",
+        "internal/verbs/dogfood_lease_state.go"
+      ],
+      "`iris:dogfood_queue_move` verb": [
+        "cmd/iris/dogfood.go",
+        "internal/verbs/dogfood_lease.go",
+        "internal/verbs/dogfood_lease_state.go"
+      ],
+      "Configurable lease timers": [
+        "internal/verbs/dogfood_lease.go"
+      ],
+      "Warmer check-ins and contact": [
+        "internal/verbs/dogfood_lease.go",
+        "internal/verbs/dogfood_lease_state.go"
+      ],
+      "Notice delivery state is recorded": [
+        "internal/verbs/dogfood_lease.go"
+      ],
+      "Stale in-flight marks expire": [
+        "internal/verbs/dogfood_lease_state.go"
+      ]
+    },
+    "openspec/specs/iris-set-dogfood/spec.md": {
+      "`iris:set_dogfood` verb": [
+        "internal/mcp/handler_set_dogfood.go",
+        "internal/verbs/set_dogfood.go"
+      ]
+    },
+    "openspec/changes/coalesce-dogfood-claims/specs/iris-set-dogfood/spec.md": {
+      "Dogfood lease gate": [
+        "internal/verbs/dogfood_lease.go"
+      ]
+    }
+  },
+  "unmapped_code": [],
+  "unmapped_spec_sections": [],
+  "notes": [
+    "Pending MODIFIED sections supersede matching base requirements; base and pending are not contradictory states to implement simultaneously.",
+    "Only affected behavior and callers are audited. No commit_sha is recorded."
+  ]
+}

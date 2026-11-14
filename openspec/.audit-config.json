@@ -1,0 +1,107 @@
+{
+  "version": 1,
+  "modules": [
+    {
+      "name": "cmd",
+      "paths": [
+        "cmd/"
+      ],
+      "specs": [
+        "specs/iris-dogfood-lease/spec.md"
+      ]
+    },
+    {
+      "name": "internal-config",
+      "paths": [
+        "internal/config/"
+      ],
+      "specs": [
+        "specs/iris-set-local-config/spec.md",
+        "specs/iris-validate-config/spec.md"
+      ]
+    },
+    {
+      "name": "internal-argus",
+      "paths": [
+        "internal/argus/"
+      ],
+      "specs": []
+    },
+    {
+      "name": "internal-mcp",
+      "paths": [
+        "internal/mcp/"
+      ],
+      "specs": [
+        "specs/iris-dogfood-lease/spec.md"
+      ]
+    },
+    {
+      "name": "internal-verbs",
+      "paths": [
+        "internal/verbs/"
+      ],
+      "specs": [
+        "specs/iris-dogfood-lease/spec.md",
+        "specs/iris-set-dogfood/spec.md"
+      ]
+    },
+    {
+      "name": "scripts",
+      "paths": [
+        "scripts/"
+      ],
+      "specs": []
+    },
+    {
+      "name": "internal-daemon",
+      "paths": [
+        "internal/daemon/"
+      ],
+      "specs": [
+        "specs/iris-dogfood-lease/spec.md"
+      ]
+    },
+    {
+      "name": "internal-secrets",
+      "paths": [
+        "internal/secrets/"
+      ],
+      "specs": [
+        "specs/secrets-resolution/spec.md"
+      ]
+    },
+    {
+      "name": "internal-hostexec",
+      "paths": [
+        "internal/hostexec/"
+      ],
+      "specs": [
+        "specs/iris-host-bridge/spec.md"
+      ]
+    }
+  ],
+  "extensions": [
+    "go"
+  ],
+  "excludes": [
+    "**/node_modules/**",
+    "**/dist/**",
+    "**/.next/**",
+    "**/build/**",
+    "**/vendor/**",
+    "**/coverage/**",
+    "**/*.bundle.js",
+    "**/*.min.js"
+  ],
+  "pitfalls": [
+    "Scoped pre-archive audit: pending MODIFIED requirements supersede the matching base requirement; containment means branch ancestry, not runtime health. CLI and daemon share persisted lease locking."
+  ],
+  "test_suites": [
+    {
+      "dir": ".",
+      "command": "cd . && go test ./..."
+    }
+  ],
+  "mapping_cache": {}
+}

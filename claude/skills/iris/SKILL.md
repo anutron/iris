@@ -84,9 +84,11 @@ Host commands include the user's Go bin directory in PATH. Cold calls immediatel
 
 `iris_set_dogfood` replaces the running dogfood build, so only one task may do it at a time. Take turns through the lease:
 
-1. `iris_dogfood_claim(task_id)` — returns `granted`, or `queued` with the `holder` (argus task name), your `position`, and `ahead` (everyone in front of you). When queued, iris types a `[iris]` message into your session when it is your turn; call `iris_dogfood_claim` again to poll, or pass `wait_seconds` (max 25) to long-poll. `position` cuts in line (never affects the holder).
+1. `iris_dogfood_claim(task_id, sha="<commit you need live>")` — pass your required commit, or a host ref such as `main` (resolved once to a full SHA). Returns `already_deployed` if dogfood already contains it: no lease is granted or needed, so continue without deploying or releasing another task's lease. Otherwise returns `granted`, or `queued` with the `holder`, `position`, and `ahead`. Iris messages queued tasks when granted or when a deployment satisfies their commit; call claim again to poll, or use `wait_seconds` (max 25). Omitted `sha` retains a queued request; claims that never specify SHA keep task-only behavior. CLI: `iris dogfood claim --task <id> --sha <commit>`. `position` cuts in line (never affects the holder).
 2. `iris_set_dogfood(task_id, ...)` — refused with the holder, `ahead` and `position` (also as structured fields) unless you hold the lease.
 3. `iris_dogfood_release(task_id)` — when you are done, so the next task gets it.
+
+An existing holder's claim still returns `granted` even if its commit is contained; explicitly release when done. Ordinary descendant-only deploys preserve contained commits, but `--force` or an external branch rewrite can remove them. “Live” describes dogfood branch contents, not runtime health. Confirm a deployed notice with `iris_status` or another claim with the required SHA before acting; notices name the lease generation and issue time. Satisfied waiters are removed without acquiring ownership.
 
 When an `[iris] Still using dogfood for <repo>?` message appears, answer with a **tool call**, not chat: `iris_dogfood_renew` (still using it) or `iris_dogfood_release` (done). If you are quiet while someone waits, iris warns once and then releases you; a holder with no word for 30 minutes is released regardless.
 

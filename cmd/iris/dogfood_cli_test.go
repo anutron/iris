@@ -80,6 +80,22 @@ func TestDogfoodCLI_ClaimRequiresTask(t *testing.T) {
 	}
 }
 
+func TestDogfoodCLI_ClaimSHA(t *testing.T) {
+	stubClient(t, false)
+	orig := dogfoodClaimVerb
+	t.Cleanup(func() { dogfoodClaimVerb = orig })
+	dogfoodClaimVerb = func(ctx context.Context, c *argus.Client, in verbs.DogfoodClaimInput) (*verbs.DogfoodClaimResult, error) {
+		if in.SHA != "main" {
+			t.Fatalf("SHA=%q", in.SHA)
+		}
+		return &verbs.DogfoodClaimResult{Status: "already_deployed", SHA: "resolved"}, nil
+	}
+	out, err := runCLI(t, "dogfood", "claim", "--task", "B", "--sha", "main")
+	if err != nil || !strings.Contains(out, `"already_deployed"`) || !strings.Contains(out, `"sha": "resolved"`) {
+		t.Fatalf("out=%s err=%v", out, err)
+	}
+}
+
 func TestDogfoodCLI_RenewAndReleasePassTask(t *testing.T) {
 	stubClient(t, false)
 	origRenew, origRel := dogfoodRenewVerb, dogfoodReleaseVerb

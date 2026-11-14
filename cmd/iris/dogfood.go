@@ -44,7 +44,7 @@ terminal.`,
 }
 
 func newDogfoodClaimCmd() *cobra.Command {
-	var taskID string
+	var taskID, sha string
 	var wait, position int
 	cmd := &cobra.Command{
 		Use:   "claim",
@@ -55,7 +55,7 @@ func newDogfoodClaimCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("argus client required for dogfood claim: %w", err)
 			}
-			res, err := dogfoodClaimVerb(cmd.Context(), client, verbs.DogfoodClaimInput{TaskID: taskID, WaitSeconds: wait, Position: position})
+			res, err := dogfoodClaimVerb(cmd.Context(), client, verbs.DogfoodClaimInput{TaskID: taskID, SHA: sha, WaitSeconds: wait, Position: position})
 			if err != nil {
 				return err
 			}
@@ -63,6 +63,7 @@ func newDogfoodClaimCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&taskID, "task", "", "argus task ID claiming the lease (required)")
+	cmd.Flags().StringVar(&sha, "sha", "", "commit or host ref needed live; skip the lease if already contained")
 	cmd.Flags().IntVar(&wait, "wait", 0, "seconds to wait for a grant (0-25)")
 	cmd.Flags().IntVar(&position, "position", 0, "cut in line at this 1-based queue position (default: append)")
 	_ = cmd.MarkFlagRequired("task")

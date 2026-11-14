@@ -224,6 +224,11 @@ func SetDogfood(ctx context.Context, client *argus.Client, taskID string, opts S
 
 	// 8. Release the lock before reload (Reload re-acquires the same mutex).
 	releaseLock()
+	// A moved branch may obsolete pending success notices even if reload fails.
+	leaseWarnings, leaseErr := withLease(ctx, client, lr, func(m *leaseMachine) { m.CancelInvalidDeployments() })
+	if leaseErr != nil {
+		leaseWarnings = append(leaseWarnings, "cancel obsolete deployed notices: "+leaseErr.Error())
+	}
 
 	// 9. Rebuild + restart via the existing reload sequence. NoPull: the
 	// origin-first model keeps the default branch read-only (it moves only via
@@ -255,11 +260,17 @@ func SetDogfood(ctx context.Context, client *argus.Client, taskID string, opts S
 		warnings = append(warnings, forceWarning)
 	}
 	warnings = append(warnings, overlayWarnings...)
+	warnings = append(warnings, leaseWarnings...)
 	if reload != nil && len(reload.Warnings) > 0 {
 		warnings = append(warnings, reload.Warnings...)
 	}
 
 	gate.notifyOverridden(taskNameOf(target), newSHA)
+	w, reconcileErr := withLease(ctx, client, lr, func(m *leaseMachine) { m.ReconcileQueue() })
+	warnings = append(warnings, w...)
+	if reconcileErr != nil {
+		warnings = append(warnings, "reconcile dogfood queue: "+reconcileErr.Error())
+	}
 
 	return &SetDogfoodResult{
 		Set:           true,
