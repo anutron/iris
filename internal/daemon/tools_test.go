@@ -31,7 +31,7 @@ func TestToolDefinitions_DogfoodLeaseTools(t *testing.T) {
 		t.Fatalf("set_dogfood schema must have both lease_override and force: %v", props)
 	}
 	claim := defs["iris_dogfood_claim"]["properties"].(map[string]any)
-	for _, k := range []string{"task_id", "wait_seconds", "position"} {
+	for _, k := range []string{"task_id", "sha", "wait_seconds", "position"} {
 		if claim[k] == nil {
 			t.Errorf("claim schema missing %s", k)
 		}

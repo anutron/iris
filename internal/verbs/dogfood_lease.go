@@ -280,13 +280,15 @@ func withLease(ctx context.Context, client *argus.Client, lr *leaseRepo, fn func
 		})
 		return lv
 	}
+	var gitWarnings []string
 	m := newLeaseMachine(st, LeaseEnv{
 		Now: time.Now().UTC(), Cfg: lr.Timers, RepoName: lr.Name, RepoSlug: lr.Slug,
-		DogfoodBranch: lr.Branch, Live: live,
+		DogfoodBranch: lr.Branch, Live: live, Contains: leaseContainment(ctx, lr, &gitWarnings),
 	})
 	fn(m)
 
 	warnings := deliverLeaseEffects(ctx, client, lr, m)
+	warnings = append(warnings, gitWarnings...)
 
 	after, _ := marshalLease(st)
 	if string(before) != string(after) || !leaseFileExists(lr.SourceRepo) && (st.Holder != nil || len(st.Queue) > 0) {
@@ -443,6 +445,7 @@ type refResult struct {
 
 // DogfoodClaimInput is the input for iris:dogfood_claim.
 type DogfoodClaimInput struct {
+	SHA         string
 	TaskID      string
 	WaitSeconds int
 	Position    int
@@ -450,7 +453,8 @@ type DogfoodClaimInput struct {
 
 // DogfoodClaimResult is the result of iris:dogfood_claim.
 type DogfoodClaimResult struct {
-	Status        string     `json:"status"` // granted | queued
+	SHA           string     `json:"sha,omitempty"`
+	Status        string     `json:"status"` // granted | queued | already_deployed
 	DogfoodBranch string     `json:"dogfood_branch"`
 	Holder        *refResult `json:"holder"`
 	Position      int        `json:"position"`
@@ -495,11 +499,18 @@ func DogfoodClaim(ctx context.Context, client *argus.Client, in DogfoodClaimInpu
 	}
 	wait := clampLeaseWait(in.WaitSeconds)
 	name := taskNameOf(target)
+	sha, err := resolveClaimSHA(ctx, lr.SourceRepo, in.SHA)
+	if err != nil {
+		return nil, err
+	}
 
 	var out ClaimOutcome
 	var warnings []string
 	claim := func(pos int) error {
-		w, err := withLease(ctx, client, lr, func(m *leaseMachine) { out = m.Claim(in.TaskID, name, pos) })
+		w, err := withLease(ctx, client, lr, func(m *leaseMachine) {
+			out = m.Claim(in.TaskID, name, pos, sha)
+			sha = out.SHA // retain an inherited queued request across removal during this wait
+		})
 		warnings = append(warnings, w...)
 		return err
 	}
@@ -507,7 +518,7 @@ func DogfoodClaim(ctx context.Context, client *argus.Client, in DogfoodClaimInpu
 		return nil, err
 	}
 	deadline := time.Now().Add(time.Duration(wait) * time.Second)
-	for !out.Granted && wait > 0 && time.Now().Before(deadline) {
+	for !out.Granted && !out.AlreadyDeployed && wait > 0 && time.Now().Before(deadline) {
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
@@ -545,6 +556,7 @@ func dedupe(in []string) []string {
 
 func claimResult(lr *leaseRepo, taskID string, out ClaimOutcome, warnings []string) *DogfoodClaimResult {
 	r := &DogfoodClaimResult{
+		SHA:           out.SHA,
 		DogfoodBranch: lr.Branch,
 		Position:      out.Position,
 		Ahead:         out.Ahead,
@@ -557,7 +569,10 @@ func claimResult(lr *leaseRepo, taskID string, out ClaimOutcome, warnings []stri
 	if out.Holder.TaskID != "" {
 		r.Holder = &refResult{TaskID: out.Holder.TaskID, TaskName: out.Holder.TaskName}
 	}
-	if out.Granted {
+	if out.AlreadyDeployed {
+		r.Status = "already_deployed"
+		r.Message = fmt.Sprintf("Your commit %s is live on %s for %s; no lease is needed. --force or an external branch rewrite can remove it. Confirm branch contents with iris_status.", cleanText(out.SHA), cleanText(lr.Branch), cleanText(lr.Name))
+	} else if out.Granted {
 		r.Status = "granted"
 		r.Position = 0
 		t := out.NextCheckinAt
@@ -570,7 +585,7 @@ func claimResult(lr *leaseRepo, taskID string, out ClaimOutcome, warnings []stri
 		if r.Holder != nil {
 			holder = fmt.Sprintf("%s (%s)", r.Holder.TaskName, r.Holder.TaskID)
 		}
-		r.Message = fmt.Sprintf("The dogfood lease for %s is busy: held by %s. You are at position %d. Iris will message you when the lease is granted; call iris_dogfood_claim again to poll.",
+		r.Message = fmt.Sprintf("The dogfood lease for %s is busy: held by %s. You are at position %d. Iris will message you when the lease is granted or your commit is deployed; call iris_dogfood_claim again to poll.",
 			lr.Name, holder, out.Position)
 	}
 	return r

@@ -3,6 +3,9 @@ package mcp
 import (
 	"encoding/json"
 	"errors"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -72,5 +75,38 @@ func TestDogfoodHandlers_RequireTaskID(t *testing.T) {
 		if !resp.IsError || !strings.Contains(resp.Content[0].Text, "task_id is required") {
 			t.Errorf("%s: resp = %+v", name, resp)
 		}
+	}
+}
+
+func TestDogfoodClaimInput_OptionalSHA(t *testing.T) {
+	var in dogfoodClaimInput
+	if r := decodeInput("iris:dogfood_claim", json.RawMessage(`{"task_id":"B","sha":"main"}`), &in); r != nil || in.SHA != "main" {
+		t.Fatalf("input=%+v response=%+v", in, r)
+	}
+	resp := NewDogfoodClaimHandler(nil).Handle(t.Context(), json.RawMessage(`{"task_id":"B","sha":123}`))
+	if !resp.IsError || !strings.Contains(resp.Content[0].Text, "invalid input") {
+		t.Fatalf("invalid SHA type accepted: %+v", resp)
+	}
+}
+
+func TestDogfoodClaimHandler_ContainedSHA(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	client, src, _, sha := transferFixture(t)
+	if err := os.WriteFile(filepath.Join(src, ".iris.toml"), []byte("schema_version = 1\ndogfood_branch = \"dev\"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command("git", "-C", src, "branch", "dev", sha).CombinedOutput(); err != nil {
+		t.Fatalf("branch: %v %s", err, out)
+	}
+	resp := NewDogfoodClaimHandler(client).Handle(t.Context(), json.RawMessage(`{"task_id":"T","sha":"`+sha+`"}`))
+	if resp.IsError {
+		t.Fatal(resp)
+	}
+	var result verbs.DogfoodClaimResult
+	if err := json.Unmarshal([]byte(resp.Content[0].Text), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "already_deployed" || result.SHA != sha || result.Holder != nil || result.NextCheckinAt != nil {
+		t.Fatalf("result=%+v", result)
 	}
 }
