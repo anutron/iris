@@ -258,3 +258,7 @@ Things to keep straight:
 - **Forgetting to gitignore `.iris.local.toml`.** It is per-developer; never commit it.
 - **Editing without validating.** Run `iris_validate_config` after every change; for
   local fields, prefer `iris_set_local_config` so per-field rules are enforced for you.
+
+## Dogfood lease timers
+
+Put `[dogfood_lease]` in `.iris.local.toml` (the entire block is local-kind). Positive integer defaults in seconds are `warmer_seconds = 600`, `grace_seconds = 30`, `idle_release_seconds = 1800`, `in_flight_max_seconds = 900`, and `max_hold_seconds = 3600`. Grace must be less than warmer, and warmer at most idle release. Absolute max hold is measured from the grant and is never extended by renewals or restart; a valid in-flight mark defers release until completion or its bounded expiry. `iris_validate_config` reports invalid fields and all resolved defaults.

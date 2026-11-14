@@ -17,7 +17,7 @@ mechanism = "none"
 func TestDogfoodLeaseTimers_Defaults(t *testing.T) {
 	var c IrisToml
 	got := c.DogfoodLeaseTimers()
-	if got.WarmerSeconds != 600 || got.GraceSeconds != 30 || got.IdleReleaseSeconds != 1800 || got.InFlightMaxSeconds != 900 {
+	if got.WarmerSeconds != 600 || got.GraceSeconds != 30 || got.IdleReleaseSeconds != 1800 || got.InFlightMaxSeconds != 900 || got.MaxHoldSeconds != 3600 {
 		t.Fatalf("defaults = %+v, want 600/30/1800", got)
 	}
 }
@@ -45,6 +45,9 @@ func TestValidate_DogfoodLease(t *testing.T) {
 		{"negative warmer", &DogfoodLeaseBlock{WarmerSeconds: ip(-1)}, "dogfood_lease.warmer_seconds", "positive"},
 		{"zero in-flight cap", &DogfoodLeaseBlock{InFlightMaxSeconds: ip(0)}, "dogfood_lease.in_flight_max_seconds", "positive"},
 		{"in-flight cap ok", &DogfoodLeaseBlock{InFlightMaxSeconds: ip(60)}, "", ""},
+		{"zero max hold", &DogfoodLeaseBlock{MaxHoldSeconds: ip(0)}, "dogfood_lease.max_hold_seconds", "positive"},
+		{"negative max hold", &DogfoodLeaseBlock{MaxHoldSeconds: ip(-1)}, "dogfood_lease.max_hold_seconds", "positive"},
+		{"max hold valid", &DogfoodLeaseBlock{MaxHoldSeconds: ip(100)}, "", ""},
 		{"zero idle", &DogfoodLeaseBlock{IdleReleaseSeconds: ip(0)}, "dogfood_lease.idle_release_seconds", "positive"},
 		{"grace == warmer", &DogfoodLeaseBlock{WarmerSeconds: ip(30)}, "dogfood_lease.grace_seconds", "grace_seconds (30) must be less than warmer_seconds (30)"},
 		{"warmer > idle", &DogfoodLeaseBlock{WarmerSeconds: ip(2000)}, "dogfood_lease.warmer_seconds", "warmer_seconds (2000) must be less than or equal to idle_release_seconds (1800)"},

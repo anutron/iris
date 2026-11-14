@@ -19,6 +19,8 @@ import (
 // fakeLeaseArgus is an argus stand-in with per-task name/status/bridge state,
 // notify capture, and failure injection.
 type fakeLeaseArgus struct {
+	meta        map[string]string
+	metaHTTP    int
 	mu          sync.Mutex
 	tasks       map[string]*fakeLeaseTask
 	notifies    []fakeNotify
@@ -33,6 +35,7 @@ type fakeLeaseArgus struct {
 }
 
 type fakeLeaseTask struct {
+	Live     *bool
 	Name     string
 	Status   string
 	Archived bool
@@ -96,10 +99,26 @@ func (f *fakeLeaseArgus) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch {
+	case len(parts) == 2 && parts[1] == "meta" && r.Method == "PUT":
+		if f.metaHTTP != 0 {
+			http.Error(w, "metadata unavailable", f.metaHTTP)
+			return
+		}
+		var body struct{ Namespace, Key, Value string }
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if body.Namespace != "iris" || !strings.HasPrefix(body.Key, "dogfood_lease_") {
+			http.Error(w, "bad metadata", 400)
+			return
+		}
+		if f.meta == nil {
+			f.meta = map[string]string{}
+		}
+		f.meta[id] = body.Value
+		w.WriteHeader(http.StatusNoContent)
 	case len(parts) == 1:
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"id": id, "name": tk.Name, "project": "iris-test", "status": tk.Status,
-			"archived": tk.Archived, "worktree_path": f.worktree,
+			"archived": tk.Archived, "worktree_path": f.worktree, "live": tk.Live,
 		})
 	case len(parts) == 2 && parts[1] == "bridge":
 		switch tk.Bridge {

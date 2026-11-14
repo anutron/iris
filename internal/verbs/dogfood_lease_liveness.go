@@ -35,7 +35,7 @@ func classifyLiveness(task *argus.Task, taskErr error, bridge *argus.Bridge, bri
 	lv := Liveness{}
 	if task != nil {
 		lv.TaskName = task.Name
-		if task.Status == "complete" || task.Archived {
+		if task.Status == "complete" || task.Archived || task.Live != nil && !*task.Live {
 			lv.Class = LiveDead
 			return lv
 		}
@@ -54,6 +54,8 @@ func classifyLiveness(task *argus.Task, taskErr error, bridge *argus.Bridge, bri
 		lv.Class = LiveNoBridge
 	case !bridge.Live:
 		lv.Class = LiveDead
+	case bridge.NeedsInput:
+		lv.Class = LiveSilent
 	case bridge.Busy:
 		lv.Class = LiveBusy
 	default: // needs_input, or simply quiet: normal silence rules

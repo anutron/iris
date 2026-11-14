@@ -14,12 +14,14 @@ const (
 	DefaultLeaseGraceSeconds       = 30
 	DefaultLeaseIdleReleaseSeconds = 1800
 	DefaultLeaseInFlightMaxSeconds = 900
+	DefaultLeaseMaxHoldSeconds     = 3600
 )
 
 // DogfoodLeaseBlock is the optional `[dogfood_lease]` block. Each key is a
 // pointer so "absent" (use the default) is distinguishable from an explicit
 // zero (invalid).
 type DogfoodLeaseBlock struct {
+	MaxHoldSeconds     *int `toml:"max_hold_seconds" json:"max_hold_seconds,omitempty"`
 	WarmerSeconds      *int `toml:"warmer_seconds"       json:"warmer_seconds,omitempty"`
 	GraceSeconds       *int `toml:"grace_seconds"        json:"grace_seconds,omitempty"`
 	IdleReleaseSeconds *int `toml:"idle_release_seconds" json:"idle_release_seconds,omitempty"`
@@ -30,16 +32,18 @@ type DogfoodLeaseBlock struct {
 
 // DogfoodLeaseTimers is the effective timer set after defaults are applied.
 type DogfoodLeaseTimers struct {
+	MaxHoldSeconds     int `json:"max_hold_seconds"`
 	WarmerSeconds      int `json:"warmer_seconds"`
 	GraceSeconds       int `json:"grace_seconds"`
 	IdleReleaseSeconds int `json:"idle_release_seconds"`
 	InFlightMaxSeconds int `json:"in_flight_max_seconds"`
 }
 
-// DefaultDogfoodLeaseTimers returns the built-in defaults (600/30/1800).
+// DefaultDogfoodLeaseTimers returns the built-in timer defaults.
 func DefaultDogfoodLeaseTimers() DogfoodLeaseTimers {
 	return DogfoodLeaseTimers{
 		WarmerSeconds:      DefaultLeaseWarmerSeconds,
+		MaxHoldSeconds:     DefaultLeaseMaxHoldSeconds,
 		GraceSeconds:       DefaultLeaseGraceSeconds,
 		IdleReleaseSeconds: DefaultLeaseIdleReleaseSeconds,
 		InFlightMaxSeconds: DefaultLeaseInFlightMaxSeconds,
@@ -57,6 +61,9 @@ func (b *DogfoodLeaseBlock) timers() DogfoodLeaseTimers {
 	t := DefaultDogfoodLeaseTimers()
 	if b == nil {
 		return t
+	}
+	if b.MaxHoldSeconds != nil {
+		t.MaxHoldSeconds = *b.MaxHoldSeconds
 	}
 	if b.WarmerSeconds != nil {
 		t.WarmerSeconds = *b.WarmerSeconds
@@ -86,8 +93,9 @@ func ValidDogfoodLeaseTimers(b *DogfoodLeaseBlock) (DogfoodLeaseTimers, []Valida
 // EffectiveBlock returns a block with every key populated from t, used by
 // validate_config to report resolved values.
 func (t DogfoodLeaseTimers) EffectiveBlock() *DogfoodLeaseBlock {
+	h := t.MaxHoldSeconds
 	w, g, i, f := t.WarmerSeconds, t.GraceSeconds, t.IdleReleaseSeconds, t.InFlightMaxSeconds
-	return &DogfoodLeaseBlock{WarmerSeconds: &w, GraceSeconds: &g, IdleReleaseSeconds: &i, InFlightMaxSeconds: &f}
+	return &DogfoodLeaseBlock{MaxHoldSeconds: &h, WarmerSeconds: &w, GraceSeconds: &g, IdleReleaseSeconds: &i, InFlightMaxSeconds: &f}
 }
 
 func (b *DogfoodLeaseBlock) validate() []ValidationError {
@@ -104,6 +112,7 @@ func (b *DogfoodLeaseBlock) validate() []ValidationError {
 			})
 		}
 	}
+	positive("max_hold_seconds", b.MaxHoldSeconds)
 	positive("warmer_seconds", b.WarmerSeconds)
 	positive("grace_seconds", b.GraceSeconds)
 	positive("idle_release_seconds", b.IdleReleaseSeconds)

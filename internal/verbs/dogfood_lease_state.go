@@ -197,6 +197,7 @@ func newLeaseMachine(st *LeaseState, env LeaseEnv) *leaseMachine {
 	m := &leaseMachine{st: st, env: env}
 	m.pruneNotices()
 	m.expireStaleFlight()
+	m.expireHold()
 	return m
 }
 
@@ -233,6 +234,25 @@ func (m *leaseMachine) expireStaleFlight() {
 	}
 	h.InFlight, h.InFlightSince = 0, time.Time{}
 	m.history("inflight_expired", h.TaskID, fmt.Sprintf("deploy mark older than %s cleared", fmtLeaseDur(m.env.Cfg.InFlightMaxSeconds)))
+}
+
+// expiresAt is fixed to the grant, independent of holder contact.
+func (m *leaseMachine) expiresAt() time.Time {
+	if m.st.Holder == nil {
+		return time.Time{}
+	}
+	seconds := m.env.Cfg.MaxHoldSeconds
+	if seconds <= 0 {
+		seconds = config.DefaultLeaseMaxHoldSeconds
+	}
+	return m.st.Holder.GrantedAt.Add(m.cfgDur(seconds))
+}
+
+// expireHold preserves only valid flight protection; renewal cannot extend it.
+func (m *leaseMachine) expireHold() {
+	if h := m.st.Holder; h != nil && h.InFlight == 0 && !m.env.Now.Before(m.expiresAt()) {
+		m.release("absolute hold deadline reached; requeue with iris_dogfood_claim", false)
+	}
 }
 
 // cancelNotices cancels (and forgets) this task's tracked notices, optionally
@@ -547,6 +567,7 @@ func (m *leaseMachine) QueueMove(id string, position int) ([]LeaseRef, error) {
 
 // Renew is the holder's "still using it" reply. A non-nil result is a refusal.
 func (m *leaseMachine) Renew(id string) *LeaseRefusal {
+	m.expireHold()
 	if m.st.Holder == nil || m.st.Holder.TaskID != id {
 		return m.Refusal(id)
 	}
@@ -591,6 +612,7 @@ func (m *leaseMachine) ForceRelease(reason string) (bool, string) {
 // BeginFlight marks a holder's set_dogfood call as running and counts as
 // contact. Returns false when id is not the holder.
 func (m *leaseMachine) BeginFlight(id string) bool {
+	m.expireHold()
 	if m.st.Holder == nil || m.st.Holder.TaskID != id {
 		return false
 	}
@@ -614,6 +636,7 @@ func (m *leaseMachine) EndFlight(id string) {
 		m.st.Holder.InFlightSince = time.Time{}
 	}
 	m.contact()
+	m.expireHold()
 }
 
 // Touch records contact from id when it is the holder (e.g. a recompose by
@@ -721,8 +744,8 @@ func (m *leaseMachine) grant(id, name string) {
 	m.st.Holder = &LeaseHolder{TaskID: id, TaskName: name, GrantedAt: m.env.Now, LastContactAt: m.env.Now}
 	m.history("grant", id, "")
 	m.notify(id, leaseMsgGrant, fmt.Sprintf(
-		"[iris] You have the dogfood lease for %s (branch %s). %s timer is running — any iris_set_dogfood / iris_dogfood_renew call resets it. Call iris_dogfood_release when you're done. "+DogfoodReleaseGuidance,
-		cleanText(m.env.RepoName), cleanText(m.env.DogfoodBranch), fmtLeaseDur(m.env.Cfg.WarmerSeconds)), leaseMaxDeadline)
+		"[iris] You have the dogfood lease for %s (branch %s). %s timer is running — any iris_set_dogfood / iris_dogfood_renew call resets it. Call iris_dogfood_release when you're done. Absolute expiry %s (renewal cannot extend it; a valid deployment may defer release). "+DogfoodReleaseGuidance,
+		cleanText(m.env.RepoName), cleanText(m.env.DogfoodBranch), fmtLeaseDur(m.env.Cfg.WarmerSeconds), m.expiresAt().Format(time.RFC3339)), leaseMaxDeadline)
 }
 
 // release ends the current hold and grants the next live queued task.
@@ -817,6 +840,8 @@ func (m *leaseMachine) clearEmptyQueueWarning() {
 
 // Tick evaluates the timers (D3 steps 2-5, 8). Callers hold the lease mutex.
 func (m *leaseMachine) Tick() {
+	m.expireStaleFlight()
+	m.expireHold()
 	h := m.st.Holder
 	if h == nil {
 		if len(m.st.Queue) > 0 { // invariant repair: waiters never sit on a free lease
@@ -825,6 +850,12 @@ func (m *leaseMachine) Tick() {
 		return
 	}
 	if h.InFlight > 0 {
+		return
+	}
+	lv := m.env.Live(h.TaskID)
+	m.noteName(h.TaskID, lv)
+	if lv.Class == LiveDead {
+		m.release("task is no longer running", false)
 		return
 	}
 	now := m.env.Now
