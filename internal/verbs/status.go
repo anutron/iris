@@ -2,6 +2,7 @@ package verbs
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/anutron/iris/internal/argus"
@@ -16,9 +17,14 @@ type StatusInput struct {
 
 // StatusResult is the structured result.
 type StatusResult struct {
-	SourceRepo       string           `json:"source_repo"`
-	HeadSha          string           `json:"head_sha"`
-	Branch           string           `json:"branch"`
+	SourceRepo string `json:"source_repo"`
+	HeadSha    string `json:"head_sha"`
+	Branch     string `json:"branch"`
+	// DogfoodBranch is the configured dogfood_branch ("" when none).
+	// HostOffDogfood is true when it is set and the host is on a different
+	// named branch.
+	DogfoodBranch    string           `json:"dogfood_branch"`
+	HostOffDogfood   bool             `json:"host_off_dogfood"`
 	DefaultBranch    string           `json:"default_branch"`
 	OriginDefaultSha string           `json:"origin_default_sha"`
 	WorkingTreeClean bool             `json:"working_tree_clean"`
@@ -158,7 +164,21 @@ func Status(ctx context.Context, client *argus.Client, in StatusInput) (*StatusR
 		}
 	}
 
+	dogfoodBranch := ""
+	if cfg != nil {
+		dogfoodBranch = cfg.DogfoodBranch
+	}
+	if dogfoodBranch == "" {
+		dogfoodBranch, _, _, _ = resolveDogfoodConfig(ctx, target.SourceRepo)
+	}
+	hostOff := dogfoodBranch != "" && branch != "" && branch != dogfoodBranch
+	if hostOff {
+		warnings = append(warnings, fmt.Sprintf("host checkout is on %q but dogfood_branch is %q; dogfood is not serving the dogfood branch", branch, dogfoodBranch))
+	}
+
 	return &StatusResult{
+		DogfoodBranch:    dogfoodBranch,
+		HostOffDogfood:   hostOff,
 		SourceRepo:       target.SourceRepo,
 		HeadSha:          headSha,
 		Branch:           branch,

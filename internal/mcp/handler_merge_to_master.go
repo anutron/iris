@@ -11,10 +11,11 @@ import (
 
 // mergeToMasterInput is the wire shape of the MCP tool input.
 type mergeToMasterInput struct {
-	TaskID  string `json:"task_id"`
-	NoFF    *bool  `json:"no_ff,omitempty"`
-	Message string `json:"message,omitempty"`
-	DryRun  bool   `json:"dry_run,omitempty"`
+	TaskID        string `json:"task_id"`
+	NoFF          *bool  `json:"no_ff,omitempty"`
+	Message       string `json:"message,omitempty"`
+	DryRun        bool   `json:"dry_run,omitempty"`
+	LeaseOverride bool   `json:"lease_override,omitempty"`
 }
 
 // NewMergeToMasterHandler returns a Handler that decodes the envelope
@@ -31,7 +32,7 @@ func NewMergeToMasterHandler(client *argus.Client) Handler {
 			return ErrorResponse("iris:merge_to_master: task_id is required")
 		}
 
-		opts := verbs.MergeOptions{NoFF: true, Message: in.Message, DryRun: in.DryRun}
+		opts := verbs.MergeOptions{NoFF: true, Message: in.Message, DryRun: in.DryRun, LeaseOverride: in.LeaseOverride}
 		if in.NoFF != nil {
 			opts.NoFF = *in.NoFF
 		}

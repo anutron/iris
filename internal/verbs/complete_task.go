@@ -86,6 +86,12 @@ func CompleteTask(ctx context.Context, client *argus.Client, taskID string, opts
 	// merge, push default branch, delete remote task branch. This
 	// guarantees no other iris verb mutates the source repo between our
 	// sub-steps.
+	// The merge checks out the default branch; refuse (no override here) when
+	// that would change what a leased dogfood host serves.
+	if _, err := hostMoveGate(ctx, client, resolved, taskID, defaultBranch, false, false); err != nil {
+		return result, err
+	}
+
 	mu := lockSourceRepo(resolved.SourceRepo)
 	mergeResult, err := mergeToMasterLocked(ctx, resolved, defaultBranch, MergeOptions{NoFF: strategy == "no_ff"})
 	if err != nil {

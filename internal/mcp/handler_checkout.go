@@ -10,9 +10,10 @@ import (
 )
 
 type checkoutInput struct {
-	TaskID string `json:"task_id"`
-	Branch string `json:"branch"`
-	Force  bool   `json:"force,omitempty"`
+	TaskID        string `json:"task_id"`
+	Branch        string `json:"branch"`
+	Force         bool   `json:"force,omitempty"`
+	LeaseOverride bool   `json:"lease_override,omitempty"`
 }
 
 // NewCheckoutHandler returns a Handler that decodes the envelope input
@@ -33,7 +34,7 @@ func NewCheckoutHandler(client *argus.Client) Handler {
 		}
 
 		result, err := verbs.Checkout(ctx, verbs.CheckoutInput{
-			Client: client, TaskID: in.TaskID, Branch: in.Branch, Force: in.Force,
+			Client: client, TaskID: in.TaskID, Branch: in.Branch, Force: in.Force, LeaseOverride: in.LeaseOverride,
 		})
 		if err != nil {
 			return ErrorResponse(fmt.Sprintf("iris:checkout: %v", err))
