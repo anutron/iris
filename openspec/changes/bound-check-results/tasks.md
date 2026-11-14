@@ -11,4 +11,6 @@
 ## 3. Verify and deliver
 
 - [x] 3.1 Run regression tests, the full race-enabled suite, vet, and strict OpenSpec validation.
-- [ ] 3.2 Review the diff, push, open a PR for Aaron, and check CI without merging or deploying.
+- [x] 3.2 Review the diff, push, open a PR for Aaron, and check CI without merging or deploying.
+
+PR: https://github.com/anutron/iris/pull/25 (no CI checks configured).
