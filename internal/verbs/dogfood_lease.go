@@ -594,7 +594,7 @@ func claimResult(lr *leaseRepo, taskID string, out ClaimOutcome, warnings []stri
 		r.Position = 0
 		t := out.NextCheckinAt
 		r.NextCheckinAt = &t
-		r.Message = fmt.Sprintf("You hold the dogfood lease for %s (branch %s). Call iris_set_dogfood, then iris_dogfood_release when you're done. A check-in is due at %s; answer it with iris_dogfood_renew. "+DogfoodReleaseGuidance,
+		r.Message = fmt.Sprintf("You hold the dogfood lease for %s (branch %s). Call iris_dogfood_deploy (compose=true merges your ref onto the current dogfood tip; poll iris_run_result if it returns a run id), then iris_dogfood_release when you're done. A check-in is due at %s; answer it with iris_dogfood_renew. "+DogfoodReleaseGuidance,
 			lr.Name, lr.Branch, t.Format(time.RFC3339))
 	} else {
 		r.Status = "queued"
@@ -896,7 +896,7 @@ func (g *leaseGate) notifyOverridden(callerName, sha string) {
 	if caller == "" {
 		caller = "a caller with no task"
 	}
-	text := fmt.Sprintf("[iris] %s deployed to dogfood for %s with lease_override while you hold the lease; the running tree is now %s. Call iris_set_dogfood again to redeploy your build, or iris_dogfood_release if you are done.", cleanText(caller), cleanText(g.lr.Name), cleanText(sha))
+	text := fmt.Sprintf("[iris] %s deployed to dogfood for %s with lease_override while you hold the lease; the running tree is now %s. Call iris_dogfood_deploy again to redeploy your build, or iris_dogfood_release if you are done.", cleanText(caller), cleanText(g.lr.Name), cleanText(sha))
 	_, _ = withLease(g.ctx, g.client, g.lr, func(m *leaseMachine) {
 		if m.st.Holder != nil && m.st.Holder.TaskID == g.override.TaskID {
 			m.Notice(g.override.TaskID, leaseMsgOverride, text)

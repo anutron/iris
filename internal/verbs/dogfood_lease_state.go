@@ -744,7 +744,7 @@ func (m *leaseMachine) grant(id, name string) {
 	m.st.Holder = &LeaseHolder{TaskID: id, TaskName: name, GrantedAt: m.env.Now, LastContactAt: m.env.Now}
 	m.history("grant", id, "")
 	m.notify(id, leaseMsgGrant, fmt.Sprintf(
-		"[iris] You have the dogfood lease for %s (branch %s). %s timer is running — any iris_set_dogfood / iris_dogfood_renew call resets it. Call iris_dogfood_release when you're done. Absolute expiry %s (renewal cannot extend it; a valid deployment may defer release). "+DogfoodReleaseGuidance,
+		"[iris] You have the dogfood lease for %s (branch %s). %s timer is running — any iris_dogfood_deploy / iris_dogfood_renew call resets it. Deploy with iris_dogfood_deploy (compose=true merges your ref onto the current dogfood tip; poll iris_run_result if it returns a run id). Call iris_dogfood_release when you're done. Absolute expiry %s (renewal cannot extend it; a valid deployment may defer release). "+DogfoodReleaseGuidance,
 		cleanText(m.env.RepoName), cleanText(m.env.DogfoodBranch), fmtLeaseDur(m.env.Cfg.WarmerSeconds), m.expiresAt().Format(time.RFC3339)), leaseMaxDeadline)
 }
 
