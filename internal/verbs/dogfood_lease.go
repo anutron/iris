@@ -156,7 +156,7 @@ func lockLease(sourceRepo string) func() {
 
 // ---- per-repo in-memory diagnostics (liveness / delivery errors) ----------
 
-type leaseDiag struct{ liveness, delivery string }
+type leaseDiag struct{ liveness, delivery, containment string }
 
 var (
 	leaseDiagMu sync.Mutex
@@ -281,14 +281,22 @@ func withLease(ctx context.Context, client *argus.Client, lr *leaseRepo, fn func
 		return lv
 	}
 	var gitWarnings []string
+	checkedContent := false
+	contains := leaseContainment(ctx, lr, &gitWarnings)
 	m := newLeaseMachine(st, LeaseEnv{
 		Now: time.Now().UTC(), Cfg: lr.Timers, RepoName: lr.Name, RepoSlug: lr.Slug,
-		DogfoodBranch: lr.Branch, Live: live, Contains: leaseContainment(ctx, lr, &gitWarnings),
+		DogfoodBranch: lr.Branch, Live: live, Contains: func(sha string) (bool, error) {
+			checkedContent = true
+			return contains(sha)
+		},
 	})
 	fn(m)
 
 	warnings := deliverLeaseEffects(ctx, client, lr, m)
 	warnings = append(warnings, gitWarnings...)
+	if checkedContent {
+		setLeaseDiag(lr.SourceRepo, func(d *leaseDiag) { d.containment = strings.Join(dedupe(gitWarnings), "; ") })
+	}
 
 	after, _ := marshalLease(st)
 	if string(before) != string(after) || !leaseFileExists(lr.SourceRepo) && (st.Holder != nil || len(st.Queue) > 0) {
@@ -623,9 +631,10 @@ func DogfoodRenew(ctx context.Context, client *argus.Client, taskID string) (*Do
 
 // DogfoodReleaseResult is the result of iris:dogfood_release.
 type DogfoodReleaseResult struct {
-	Released  bool   `json:"released"`
-	Was       string `json:"was"`
-	GrantedTo string `json:"granted_to,omitempty"`
+	Warnings  []string `json:"warnings,omitempty"`
+	Released  bool     `json:"released"`
+	Was       string   `json:"was"`
+	GrantedTo string   `json:"granted_to,omitempty"`
 }
 
 // DogfoodRelease releases the lease or leaves the queue.
@@ -638,10 +647,11 @@ func DogfoodRelease(ctx context.Context, client *argus.Client, taskID string) (*
 		return nil, err
 	}
 	var out ReleaseOutcome
-	if _, err := withLease(ctx, client, lr, func(m *leaseMachine) { out = m.Release(taskID) }); err != nil {
+	warnings, err := withLease(ctx, client, lr, func(m *leaseMachine) { out = m.Release(taskID) })
+	if err != nil {
 		return nil, err
 	}
-	return &DogfoodReleaseResult{Released: out.Released, Was: out.Was, GrantedTo: out.GrantedTo}, nil
+	return &DogfoodReleaseResult{Released: out.Released, Was: out.Was, GrantedTo: out.GrantedTo, Warnings: dedupe(append(lr.Warnings, warnings...))}, nil
 }
 
 // DogfoodForceReleaseInput is the input for iris:dogfood_force_release.
@@ -1006,6 +1016,9 @@ func ReadDogfoodLeaseView(ctx context.Context, sourceRepo string) *DogfoodLeaseV
 	}
 	if d.delivery != "" {
 		v.Warnings = append(v.Warnings, d.delivery)
+	}
+	if d.containment != "" {
+		v.Warnings = append(v.Warnings, d.containment)
 	}
 	return v
 }

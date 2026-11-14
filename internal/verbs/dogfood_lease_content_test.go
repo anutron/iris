@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -36,6 +37,158 @@ func TestLeaseContent_ContainmentBeforeGrantAndHolderContact(t *testing.T) {
 		} else if h.st.Holder != nil {
 			t.Fatal("unneeded lease granted")
 		}
+	}
+}
+
+func TestDogfoodContent_QueuedRefIsPinnedAcrossPolls(t *testing.T) {
+	src, _, sha, _, c := leaseFixture(t, "content-pin")
+	src = canonicalize(src)
+	g := gitRunner(t)
+	g(src, "branch", "wanted", sha)
+	claim(t, c, "A", 0)
+	next := strings.TrimSpace(g(src, "commit-tree", sha+"^{tree}", "-p", sha, "-m", "next"))
+	result := make(chan *DogfoodClaimResult, 1)
+	errs := make(chan error, 1)
+	go func() {
+		r, err := DogfoodClaim(t.Context(), c, DogfoodClaimInput{TaskID: "B", SHA: "wanted", WaitSeconds: 4})
+		result <- r
+		errs <- err
+	}()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		unlock := lockLease(src)
+		st, err := loadLease(src)
+		unlock()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(st.Queue) == 1 && st.Queue[0].SHA == sha {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("named request did not queue")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	g(src, "branch", "-f", "wanted", next)
+	poll, err := DogfoodClaim(t.Context(), c, DogfoodClaimInput{TaskID: "B"})
+	if err != nil || poll.SHA != sha || poll.Status != "queued" {
+		t.Fatalf("poll=%+v err=%v", poll, err)
+	}
+	if _, err := SetDogfood(t.Context(), c, "A", SetDogfoodOpts{Sha: sha, Manifest: sampleManifest()}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case r := <-result:
+		if err := <-errs; err != nil || r.Status != "already_deployed" || r.SHA != sha {
+			t.Fatalf("result=%+v err=%v", r, err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("waiting ref was re-resolved instead of pinned")
+	}
+}
+
+func TestDogfoodContent_OverrideCancelsOldNoticeBeforeSatisfaction(t *testing.T) {
+	src, _, sha, f, c := leaseFixture(t, "content-notice-order")
+	src = canonicalize(src)
+	claim(t, c, "A", 0)
+	if _, err := DogfoodClaim(t.Context(), c, DogfoodClaimInput{TaskID: "B", SHA: sha}); err != nil {
+		t.Fatal(err)
+	}
+	_, lr, err := leaseTargetRepo(t.Context(), c, "A", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := withLease(t.Context(), c, lr, func(m *leaseMachine) { m.Notice("B", leaseMsgOverride, "old notice") }); err != nil {
+		t.Fatal(err)
+	}
+	old := f.notifiesTo("B")[0].DeliveryID
+	if _, err := SetDogfood(t.Context(), c, "D", SetDogfoodOpts{Sha: sha, Manifest: sampleManifest(), LeaseOverride: true}); err != nil {
+		t.Fatal(err)
+	}
+	ns := f.notifiesTo("B")
+	if len(ns) != 2 {
+		t.Fatalf("notices=%+v", ns)
+	}
+	cancelIndex, postIndex := -1, -1
+	f.with(func() {
+		for i, e := range f.events {
+			if e == "cancel B/"+old {
+				cancelIndex = i
+			}
+			if e == "post B/"+ns[1].DeliveryID {
+				postIndex = i
+			}
+		}
+	})
+	if cancelIndex < 0 || postIndex <= cancelIndex {
+		t.Fatalf("cancel=%d post=%d", cancelIndex, postIndex)
+	}
+	st, err := loadLease(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Holder.TaskID != "A" || len(st.Queue) != 0 {
+		t.Fatalf("state=%+v", st)
+	}
+	found := false
+	for _, n := range st.Notices {
+		if n.TaskID == "B" {
+			if n.Kind != leaseMsgDeployed || n.SHA != sha || n.DeliveryID != ns[1].DeliveryID {
+				t.Fatalf("notice=%+v", n)
+			}
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("replacement notice not persisted")
+	}
+	if _, err := DogfoodRenew(t.Context(), c, "A"); err != nil {
+		t.Fatal(err)
+	}
+	f.with(func() {
+		for _, e := range f.cancels {
+			if e == "B/"+ns[1].DeliveryID {
+				t.Error("unrelated holder contact cancelled deployed notice")
+			}
+		}
+	})
+	if r, err := DogfoodClaim(t.Context(), c, DogfoodClaimInput{TaskID: "B", SHA: sha}); err != nil || r.Status != "already_deployed" {
+		t.Fatalf("reclaim=%+v %v", r, err)
+	}
+	st, err = loadLease(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range st.Notices {
+		if n.TaskID == "B" {
+			t.Fatal("reclaim retained deployed notice")
+		}
+	}
+}
+
+func TestDogfoodContent_ReconcileFailureDoesNotFailSuccessfulDeploy(t *testing.T) {
+	src, wt, _, _, c := leaseFixture(t, "content-warning")
+	src = canonicalize(src)
+	g := gitRunner(t)
+	path, err := leasePath(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := tomlDogfoodNone + fmt.Sprintf("\n[verify]\ncommand = [\"sh\", \"-c\", %q]\n", "printf broken > '"+path+"'")
+	if err := os.WriteFile(filepath.Join(wt, ".iris.toml"), []byte(body), 0600); err != nil {
+		t.Fatal(err)
+	}
+	g(wt, "add", ".iris.toml")
+	g(wt, "commit", "-m", "inject post-reload lease failure")
+	sha := strings.TrimSpace(g(wt, "rev-parse", "HEAD"))
+	claim(t, c, "A", 0)
+	if _, err := DogfoodClaim(t.Context(), c, DogfoodClaimInput{TaskID: "B", SHA: sha}); err != nil {
+		t.Fatal(err)
+	}
+	res, err := SetDogfood(t.Context(), c, "A", SetDogfoodOpts{Sha: sha, Manifest: sampleManifest()})
+	if err != nil || !res.Set || res.Reload == nil || !strings.Contains(strings.Join(res.Warnings, " "), "reconcile dogfood queue") {
+		t.Fatalf("result=%+v err=%v", res, err)
 	}
 }
 
@@ -206,6 +359,14 @@ func TestDogfoodContent_OperationalGitErrorRetainsQueue(t *testing.T) {
 	st, err := loadLease(src)
 	if err != nil || len(st.Queue) != 1 {
 		t.Fatalf("state=%+v err=%v", st, err)
+	}
+	res, err := DogfoodRelease(t.Context(), c, "A")
+	if err != nil || len(res.Warnings) == 0 {
+		t.Fatalf("handoff lost warning: %+v %v", res, err)
+	}
+	view := ReadDogfoodLeaseView(t.Context(), src)
+	if view == nil || !strings.Contains(strings.Join(view.Warnings, " "), "containment") {
+		t.Fatalf("status lost Git diagnostic: %+v", view)
 	}
 }
 

@@ -20,6 +20,7 @@ None.
 ### Modified capabilities
 
 - `iris-dogfood-lease`: Commit-aware claims, queue satisfaction after deployment and before handoff, persisted requested commits, and cancellable deployment notices.
+- `iris-set-dogfood`: Align the override lease-gate wording with the approved queue satisfaction behavior.
 
 ## Impact
 
