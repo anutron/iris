@@ -22,6 +22,9 @@ import (
 
 // SetDogfoodOpts captures the typed arguments for SetDogfood.
 type SetDogfoodOpts struct {
+	// compose is used by DogfoodDeploy; Ref resolution and merging stay under the source lock.
+	compose bool
+	Caller  string
 	// Sha is the full commit SHA to point the dogfood branch at. Must be
 	// reachable in the source repo's object database.
 	Sha string
@@ -48,13 +51,14 @@ type SetDogfoodOpts struct {
 // SetDogfoodResult is the structured success payload, mirrored to MCP/CLI as
 // pretty-printed JSON.
 type SetDogfoodResult struct {
-	Set           bool          `json:"set"`
-	DogfoodBranch string        `json:"dogfood_branch"`
-	PreviousSHA   string        `json:"previous_sha"`
-	NewSHA        string        `json:"new_sha"`
-	Reload        *ReloadResult `json:"reload,omitempty"`
-	Warnings      []string      `json:"warnings"`
-	Message       string        `json:"message"`
+	DogfoodLease  *DogfoodLeaseView `json:"dogfood_lease,omitempty"`
+	Set           bool              `json:"set"`
+	DogfoodBranch string            `json:"dogfood_branch"`
+	PreviousSHA   string            `json:"previous_sha"`
+	NewSHA        string            `json:"new_sha"`
+	Reload        *ReloadResult     `json:"reload,omitempty"`
+	Warnings      []string          `json:"warnings"`
+	Message       string            `json:"message"`
 }
 
 // SetDogfood atomically hard-resets the configured dogfood branch to opts.Sha,
@@ -67,10 +71,23 @@ type SetDogfoodResult struct {
 //   - The manifest is written BEFORE the branch reset (durable-first). If the
 //     write fails, no git mutation occurs. If the reset then fails, the manifest
 //     is "ahead" of the branch — visible as drift on the next iris:status.
-//   - The per-source-repo lock is held across the manifest write + branch reset
-//     so concurrent set_dogfood calls serialize. It is released before the
-//     reload, which re-acquires the same lock (the mutex is not reentrant).
+//   - The per-source-repo lock spans composition, manifest write, branch reset,
+//     reload and readiness so concurrent deploys cannot change the served tree.
 func SetDogfood(ctx context.Context, client *argus.Client, taskID string, opts SetDogfoodOpts) (*SetDogfoodResult, error) {
+	result, err := setDogfood(ctx, client, taskID, opts)
+	if result != nil && result.Reload != nil {
+		result.DogfoodLease = ReadDogfoodLeaseView(context.WithoutCancel(ctx), result.Reload.TargetSourceRepo)
+	}
+	// All deferred lock, scratch-branch and lease cleanup has finished before
+	// scheduling a daemon exit. Otherwise a slow lease reconciliation can be
+	// interrupted by the 100ms exit timer, leaving a persisted flight behind.
+	if result != nil && result.Reload != nil && result.Reload.restartCode != nil {
+		scheduleSelfExit(*result.Reload.restartCode)
+	}
+	return result, err
+}
+
+func setDogfood(ctx context.Context, client *argus.Client, taskID string, opts SetDogfoodOpts) (*SetDogfoodResult, error) {
 	if opts.Sha == "" {
 		return nil, fmt.Errorf("sha is required")
 	}
@@ -94,6 +111,9 @@ func SetDogfood(ctx context.Context, client *argus.Client, taskID string, opts S
 	// which is overlay-aware). A missing .iris.toml is treated the same as a
 	// merged config that doesn't declare the field.
 	isSelf, _ := isSelfTarget(ctx, target.SourceRepo)
+	if isSelf && opts.Caller == "cli" {
+		return nil, ErrCLISelfReloadUnsupported
+	}
 	overlay, err := config.LoadOverlay(target.SourceRepo, isSelf)
 	if err != nil {
 		return nil, err
@@ -132,6 +152,9 @@ func SetDogfood(ctx context.Context, client *argus.Client, taskID string, opts S
 		return nil, fmt.Errorf("sha %q is not reachable in %s", opts.Sha, target.SourceRepo)
 	}
 	newSHA := strings.TrimSpace(out)
+	if opts.Manifest.Base.SHA == "" {
+		opts.Manifest.Base.SHA = newSHA
+	}
 
 	// 3b. Dogfood lease gate: after config + reachability, before the ancestry
 	// check, any git mutation, the manifest write or the reload — so a refusal
@@ -147,7 +170,7 @@ func SetDogfood(ctx context.Context, client *argus.Client, taskID string, opts S
 	}
 	defer gate.finish()
 
-	// 4. Acquire the source-repo lock for the atomic manifest-write + reset.
+	// 4. Hold the source lock through ref movement, build, restart and readiness.
 	mu := lockSourceRepo(target.SourceRepo)
 	lockHeld := true
 	releaseLock := func() {
@@ -158,10 +181,56 @@ func SetDogfood(ctx context.Context, client *argus.Client, taskID string, opts S
 	}
 	defer releaseLock()
 
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	ctx = context.WithoutCancel(ctx)
+	MarkRunStarted(ctx)
+	if err := checkCleanTree(ctx, target.SourceRepo); err != nil {
+		return nil, err
+	}
+	// Refuse a dogfood branch checked out in another worktree: deployments must
+	// operate on the host, never reset a worker's tree.
+	if at, err := worktreeForBranch(ctx, target.SourceRepo, dogfoodBranch); err != nil {
+		return nil, err
+	} else if at != "" && canonicalize(at) != canonicalize(target.SourceRepo) {
+		return nil, fmt.Errorf("dogfood branch %s is checked out in another worktree: %s", dogfoodBranch, at)
+	}
 	// 5. Prior dogfood-branch SHA ("" if the branch doesn't exist yet).
 	previousSHA := ""
 	if prev, err := runGit(ctx, target.SourceRepo, "rev-parse", "--verify", "--quiet", "refs/heads/"+dogfoodBranch); err == nil {
 		previousSHA = strings.TrimSpace(prev)
+	}
+	stateDir, err := SourceRepoStateDir(target.SourceRepo)
+	if err != nil {
+		return nil, fmt.Errorf("resolve state dir: %w", err)
+	}
+
+	if opts.compose {
+		base := previousSHA
+		if base == "" {
+			base, err = runDeploymentGit(ctx, target.SourceRepo, "rev-parse", "HEAD")
+			if err != nil {
+				return nil, err
+			}
+			base = strings.TrimSpace(base)
+		}
+		prior, err := ReadManifest(stateDir)
+		if err != nil {
+			return nil, fmt.Errorf("read composition manifest: %w", err)
+		}
+		composed, cleanup, err := composeDogfood(ctx, target.SourceRepo, base, newSHA)
+		if err != nil {
+			return nil, err
+		}
+		defer cleanup()
+		opts.Manifest = &DogfoodManifest{Base: ManifestBase{Ref: dogfoodBranch, SHA: base}, Note: "Composed onto existing dogfood tip"}
+		if prior != nil {
+			opts.Manifest.Base = prior.Base
+			opts.Manifest.Layered = append([]LayeredEntry(nil), prior.Layered...)
+		}
+		opts.Manifest.Layered = append(opts.Manifest.Layered, LayeredEntry{Name: opts.Sha, SHA: newSHA, Applied: "merge"})
+		newSHA = composed
 	}
 
 	// 5b. Ancestry safety. When the dogfood branch already exists and newSHA is
@@ -186,10 +255,6 @@ func SetDogfood(ctx context.Context, client *argus.Client, taskID string, opts S
 	}
 
 	// 6. Persist the manifest FIRST (durable-first). On failure, no git mutation.
-	stateDir, err := SourceRepoStateDir(target.SourceRepo)
-	if err != nil {
-		return nil, fmt.Errorf("resolve state dir: %w", err)
-	}
 	if err := WriteManifest(stateDir, opts.Manifest); err != nil {
 		return nil, fmt.Errorf("persist manifest: %w", err)
 	}
@@ -223,36 +288,21 @@ func SetDogfood(ctx context.Context, client *argus.Client, taskID string, opts S
 		}
 	}
 
-	// 8. Release the lock before reload (Reload re-acquires the same mutex).
-	releaseLock()
+	// Select the resting branch before loading the build configuration or
+	// restarting. In particular, never bounce on main and switch afterwards.
+	if out, err := runDeploymentGit(ctx, target.SourceRepo, "checkout", dogfoodBranch); err != nil {
+		return nil, fmt.Errorf("checkout dogfood %s: %w; %s", dogfoodBranch, err, out)
+	}
+
+	// 8. Keep the lock through reload to prevent a concurrent deploy changing
+	// the checkout between branch movement and restart.
 	// A moved branch may obsolete pending success notices even if reload fails.
 	leaseWarnings, leaseErr := withLease(ctx, client, lr, func(m *leaseMachine) { m.CancelInvalidDeployments() })
 	if leaseErr != nil {
 		leaseWarnings = append(leaseWarnings, "cancel obsolete deployed notices: "+leaseErr.Error())
 	}
 
-	// 9. Rebuild + restart via the existing reload sequence. NoPull: the
-	// origin-first model keeps the default branch read-only (it moves only via
-	// explicit iris:fetch); set_dogfood builds the SHA we just composed rather
-	// than pulling new upstream work as a side effect. BuildBranch: reload
-	// checks out the dogfood branch for the build+restart (so the composed SHA
-	// is what gets built and deployed) and restores the default branch after.
-	caller := taskID
-	if caller == "" {
-		caller = "self"
-	}
-	reload, err := Reload(ctx, client, ReloadInput{
-		TaskID:      taskID,
-		NoPull:      true,
-		Caller:      caller,
-		BuildBranch: dogfoodBranch,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("reload after set_dogfood: %w", err)
-	}
-
-	// Surface the forced commit-drop warning prominently (first), ahead of
-	// overlay taxonomy and reload warnings.
+	gate.notifyOverridden(taskNameOf(target), newSHA)
 	warnings := []string{}
 	if gate.overrideWarning != "" {
 		warnings = append(warnings, gate.overrideWarning)
@@ -262,11 +312,35 @@ func SetDogfood(ctx context.Context, client *argus.Client, taskID string, opts S
 	}
 	warnings = append(warnings, overlayWarnings...)
 	warnings = append(warnings, leaseWarnings...)
-	if reload != nil && len(reload.Warnings) > 0 {
+
+	// 9. Rebuild + restart via the existing reload sequence. NoPull: the
+	// origin-first model keeps the default branch read-only (it moves only via
+	// explicit iris:fetch); set_dogfood builds the SHA we just composed rather
+	// than pulling new upstream work as a side effect. BuildBranch: reload
+	// selects dogfood for the build+restart and leaves it selected afterward.
+	caller := taskID
+	if opts.Caller != "" {
+		caller = opts.Caller
+	}
+	if caller == "" {
+		caller = "self"
+	}
+	reload, err := Reload(ctx, client, ReloadInput{
+		TaskID:        taskID,
+		NoPull:        true,
+		Caller:        caller,
+		BuildBranch:   dogfoodBranch,
+		lockHeld:      true,
+		deferSelfExit: true,
+		target:        target,
+	})
+	if reload != nil {
 		warnings = append(warnings, reload.Warnings...)
 	}
+	if err != nil {
+		return &SetDogfoodResult{Set: true, DogfoodBranch: dogfoodBranch, PreviousSHA: previousSHA, NewSHA: newSHA, Reload: reload, Warnings: warnings}, fmt.Errorf("reload after set_dogfood: %w", err)
+	}
 
-	gate.notifyOverridden(taskNameOf(target), newSHA)
 	w, reconcileErr := withLease(ctx, client, lr, func(m *leaseMachine) { m.ReconcileQueue() })
 	warnings = append(warnings, w...)
 	if reconcileErr != nil {

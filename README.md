@@ -8,7 +8,7 @@ Greek-pantheon naming continues from [argus](https://github.com/drn/argus) and [
 
 ## Status
 
-The full verb set has shipped and archived: host-side git/gh operations (`merge_to_master`, `merge_to_branch`, `push`, `gh_pr_*`, `branch_*`, `cherry_pick`, `checkout`, `fetch`, `tag`, `complete_task`), build and check runners (`run_build`, `run_checks`, polled with `run_result` when they outlast a call), daemon self-management (`reload`, `publish`, `validate_config`, `ls`, `status`), and the dogfood/ship workflow (`set_dogfood`, `ship_feature`, `set_local_config`). Each verb's base spec lives under [`openspec/specs/`](./openspec/specs/); the change folders that introduced them are archived under [`openspec/changes/archive/`](./openspec/changes/archive/).
+The full verb set has shipped and archived: host-side git/gh operations (`merge_to_master`, `merge_to_branch`, `push`, `gh_pr_*`, `branch_*`, `cherry_pick`, `checkout`, `fetch`, `tag`, `complete_task`), build and check runners (`run_build`, `run_checks`, polled with `run_result` when they outlast a call), daemon self-management (`reload`, `publish`, `validate_config`, `ls`, `status`), and the dogfood/ship workflow (`dogfood_deploy`, `set_dogfood`, `ship_feature`, `set_local_config`). Each verb's base spec lives under [`openspec/specs/`](./openspec/specs/); the change folders that introduced them are archived under [`openspec/changes/archive/`](./openspec/changes/archive/).
 
 Read [`SKETCH.md`](./SKETCH.md) for the full design context. In-flight work lives in the active change folders under [`openspec/changes/`](./openspec/changes/).
 
@@ -87,6 +87,8 @@ iris checkout <task-id> <branch> [--force]
                                    Switch the source repo to a branch. --force aborts in-progress merge/cherry-pick/rebase and discards uncommitted changes first (recovery path).
 iris tag <task-id> --tag <name> [--message "..."]
                                    Create an annotated tag at origin/<default-branch> and push it to origin.
+iris dogfood-deploy --ref <ref> [--compose] [--task <id>]
+                                   Build/restart on dogfood, wait for readiness, and leave dogfood checked out. Requires its lease.
 iris set-dogfood --sha <sha> --manifest <path|json> [--task <id>]
                                    Hard-reset .iris.toml's dogfood_branch to <sha>, record the manifest, then rebuild + restart. Refuses repos without dogfood_branch.
 iris ship-feature --branch <name> --via pr|pr-auto [--title T] [--body B] [--merge-method squash|merge|rebase]
@@ -201,13 +203,13 @@ Optional:
 
 ### The five verbs
 
-- **`iris:reload`** — Pre-flight refusals (clean tree, on default branch, parsed `.iris.toml`, allowlist for cross-reload), per-source-repo lock, optional `[pre_flight]`, `git fetch && git merge --ff-only`, build, restart, optional `[verify]`. Returns a structured result and appends one line to the audit log.
+- **`iris:reload`** — Pre-flight refusals (clean tree, on default or configured dogfood branch, parsed `.iris.toml`, allowlist for cross-reload), per-source-repo lock, optional `[pre_flight]`, `git fetch && git merge --ff-only`, build, restart, optional `[verify]`. Returns a structured result and appends one line to the audit log.
 - **`iris:publish`** — From an argus worktree, update the source repo's currently-checked-out branch to the worktree's HEAD, then rebuild and restart via the same `.iris.toml`. Default is ff-only; pass `--reset` for a hard reset (atomic ref + working tree). `--push` also pushes the target branch to origin (refuses the default branch, same as `iris:push`). v1.2 constraint: the target branch must equal the source repo's current branch.
 - **`iris:validate_config`** — Parse and cross-validate without any side effects (no pull, build, restart, audit). Used by CI and by Claude when authoring a config.
 - **`iris:ls`** — Reads the audit log and projects managed systems iris has touched recently (reloads and publishes both appear).
 - **`iris:status`** — For one managed system: the resolved `.iris.toml`, current HEAD, default branch, origin SHA, working-tree-clean state, and the most recent reload/publish outcome.
 
-Publish and reload continue independently of caller cancellation once the locked host mutation sequence starts. Builds, restart commands, hooks, and git steps retain Iris-owned timeouts. If your MCP wait times out, use `iris_status` for the target and inspect `last_reload`: match its `caller`, `timestamp`, and `post_pull_sha` to your operation. `restart_attempted` means restart dispatch was entered; `restart_succeeded` means it returned successfully. These flags describe dispatch, including a configured no-op, rather than service health; reload verification failures retain a successful restart flag, and self-reload still uses `restart_pending` for its scheduled exit. Historical audit records lack these flags and decode as false. While an operation is running, status can still show the previous terminal result; an old result does not confirm completion. The append-only history is at `~/.iris/reload-history.jsonl` (best-effort; write errors are logged). This survives a caller disconnect, but not termination of the Iris process itself.
+Publish and reload continue independently of caller cancellation once the locked host mutation sequence starts. Builds, restart commands, hooks, and git steps retain Iris-owned timeouts. Deploy, set_dogfood and reload return a `{run_id, status}` handle after `wait_seconds` (default 20, clamped to 0–25); poll `iris_run_result` until it returns the final result. Identical active requests join the same run. Self-reloading iris destroys these in-memory handles: its result reports `restart_pending` and readiness must be checked externally. For operations without run handles, use `iris_status` for the target and inspect `last_reload`: match its `caller`, `timestamp`, and `post_pull_sha` to your operation. `restart_attempted` means restart dispatch was entered; `restart_succeeded` means it returned successfully. These flags describe dispatch, including a configured no-op, rather than service health; reload verification failures retain a successful restart flag, and self-reload still uses `restart_pending` for its scheduled exit. Historical audit records lack these flags and decode as false. While an operation is running, status can still show the previous terminal result; an old result does not confirm completion. The append-only history is at `~/.iris/reload-history.jsonl` (best-effort; write errors are logged). This survives a caller disconnect, but not termination of the Iris process itself.
 
 ### Audit log
 
@@ -287,13 +289,35 @@ iris merge-to-branch <task-id> integration/big-feature v1.2.0-rc --dry-run
 
 ## Dogfood and ship
 
-Two opt-in verbs cover the recurring "run a composed dev build locally" and "land a finished feature" motions. Both refuse any repo whose `.iris.toml` does not declare `dogfood_branch`.
+The opt-in dogfood and ship verbs cover the recurring "run a composed dev build locally" and "land a finished feature" motions. Both refuse any repo whose `.iris.toml` does not declare `dogfood_branch`.
 
 ### Origin-first invariant
 
 Local `main` (the `default_branch`) is **read-only relative to `origin`** — it only moves via `iris:fetch`, never by being pushed. `iris:push`'s default-branch refusal is unchanged; there is no direct-push-to-main path. The dogfood branch is the mutable surface, and it lives at a distinct ref (hence `dogfood_branch != default_branch`). This keeps argus's fork-from-local-main behavior reproducible and eliminates the "unpushed main commits" failure mode.
 
-The division of labor is **iris is dumb, the agent is smart**: iris never composes branches. The agent builds the rollup (cherry-pick / merge / rebase, conflict resolution and all) somewhere it can write, then hands iris a finished SHA plus a manifest describing what's in it.
+Use `iris_dogfood_deploy` for everyday deployments. Agents resolve merge conflicts; Iris can perform a simple `--no-ff` composition onto the existing dogfood tip.
+
+### `iris:dogfood_deploy`
+
+Claim the dogfood lease, then call `iris_dogfood_deploy(task_id, ref, compose=true)` to merge a reachable ref or commit onto the current dogfood tip and deploy it. For example, fetch first and deploy `ref="origin/main", compose=true` to add upstream changes while preserving unmerged work. Omit `compose` for an already composed descendant ref; `force=true` explicitly permits dropping commits. `lease_override=true` overrides only lease ownership and warns/notifies the holder.
+
+The source lock spans composition, branch movement, build, restart and readiness. Conflicts are aborted on a scratch branch without moving dogfood. The host remains on dogfood throughout build, restart and verification, and stays there afterward. Never perform a manual checkout-main → reload → checkout-dogfood sequence: a restart on main can build or serve the wrong assets. `iris_set_dogfood` also now leaves dogfood selected, and `iris_reload` accepts a dogfood checkout, checks its lease, and skips the default-branch pull with a warning. Projects without dogfood retain their default-branch reload behavior.
+
+CLI: `iris dogfood-deploy --task <id> --ref origin/main --compose`. CLI operations remain synchronous and self-reload through the CLI is refused.
+
+Declare service readiness in the shared `.iris.toml`:
+
+```toml
+[dogfood_ready]
+ports = [3333, 3334, 3335]
+health_urls = ["http://localhost:3333/health"]
+timeout_seconds = 120
+interval_seconds = 1
+```
+
+Ports must be in 1–65535 and URLs must use HTTP(S) with a host and no credentials. Timing values default to 120 seconds and 1 second; interval_seconds also accepts fractions. All configured checks must pass in the same polling pass: TCP connects to localhost and health requests return 2xx (redirects are not followed). A timeout fails with expected versus found checks and the latest evidence, without rolling back the deployed tree. `iris_validate_config` validates this shared section; per-developer overlays cannot override it.
+
+Results include a `dogfood_lease` snapshot (including `holder.expires_at` when available), `new_sha` and `reload.built_commit`, `reload.served_commit`, `reload.readiness` and warnings. A served commit means that commit was built/restarted and the configured probes passed; TCP/HTTP probes do not independently attest process identity. With no readiness configuration, readiness is `unconfigured`, served_commit is absent, and a warning says runtime readiness is unverified. Self-reload reports `restart_pending` and pending readiness because exiting Iris cannot verify its own replacement. Pollable runs live only in memory and disappear on Iris restart.
 
 ### `iris:set_dogfood`
 
@@ -320,7 +344,7 @@ Behavior and safety:
 
 - The manifest is written **before** the branch reset (durable-first). If the write fails, no git mutation occurs; if the reset then fails, the manifest is "ahead" of the branch and `iris:status` reports the drift.
 - **Ancestry safety:** when the dogfood branch already exists, iris refuses a `sha` that is not a descendant of the current dogfood SHA (`previous_sha`) — deploying it would silently drop every commit reachable from `previous_sha` but not `sha`. The error names the dropped-commit count and `previous_sha`. Pass `force=true` to deploy anyway; the result then carries a prominent warning naming the same count and SHA.
-- The branch is created if it does not yet exist (`previous_sha: ""`). Otherwise it is force-moved — via `git branch -f` when the dogfood branch is not checked out in any worktree, or via `git reset --hard` in that worktree when it **is** checked out (git refuses to `branch -f` a branch that's currently checked out; this worktree-guard keeps the ref, HEAD, index, and tree in agreement on a live dogfood host instead of erroring).
+- The branch is created if it does not yet exist (`previous_sha: ""`). Otherwise it is force-moved — via `git branch -f` when the dogfood branch is not checked out in any worktree, or via `git reset --hard` in the source host checkout when it **is** checked out; a dogfood branch checked out in another worktree is refused (git refuses to `branch -f` a branch that's currently checked out; this worktree-guard keeps the ref, HEAD, index, and tree in agreement on a live dogfood host instead of erroring).
 - iris does NOT validate that `manifest.layered[i].sha` is reachable from `sha` — the manifest is for communication, not verification.
 
 The structured result includes `set`, `dogfood_branch`, `previous_sha`, `new_sha`, the embedded `reload` result, `warnings`, and a `message` with release guidance. The manifest persists as `dogfood-manifest.json` in the same per-source-repo state directory as the audit log, overwritten on each call.

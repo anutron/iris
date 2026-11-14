@@ -12,6 +12,7 @@ import (
 func newReloadCmd() *cobra.Command {
 	var noPull bool
 	var timeoutSeconds int
+	var leaseOverride bool
 	cmd := &cobra.Command{
 		Use:   "reload [target]",
 		Short: "Live-upgrade an iris-managed daemon",
@@ -45,6 +46,7 @@ Target can be:
 				NoPull:         noPull,
 				TimeoutSeconds: timeoutSeconds,
 				Caller:         "cli",
+				LeaseOverride:  leaseOverride,
 			})
 			if result != nil {
 				body, _ := json.MarshalIndent(result, "", "  ")
@@ -55,5 +57,6 @@ Target can be:
 	}
 	cmd.Flags().BoolVar(&noPull, "no-pull", false, "skip the git fetch/ff-merge and build from current HEAD")
 	cmd.Flags().IntVar(&timeoutSeconds, "timeout", 0, "(optional) per-step timeout override in seconds")
+	cmd.Flags().BoolVar(&leaseOverride, "lease-override", false, "override the lease gate when reloading dogfood")
 	return cmd
 }

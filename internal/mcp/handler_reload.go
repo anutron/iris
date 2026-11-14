@@ -10,6 +10,8 @@ import (
 )
 
 type reloadInput struct {
+	WaitSeconds    *int   `json:"wait_seconds,omitempty"`
+	LeaseOverride  bool   `json:"lease_override,omitempty"`
 	TaskID         string `json:"task_id,omitempty"`
 	Path           string `json:"path,omitempty"`
 	NoPull         bool   `json:"no_pull,omitempty"`
@@ -19,7 +21,7 @@ type reloadInput struct {
 // NewReloadHandler returns a Handler for iris_reload. Self-vs-cross
 // detection happens inside verbs.Reload; the handler is a thin envelope
 // translator.
-func NewReloadHandler(client *argus.Client) Handler {
+func NewReloadHandler(client *argus.Client, runs *RunRegistry) Handler {
 	return HandlerFunc(func(ctx context.Context, input json.RawMessage) Response {
 		var in reloadInput
 		if len(input) > 0 {
@@ -34,21 +36,16 @@ func NewReloadHandler(client *argus.Client) Handler {
 				caller = "self"
 			}
 		}
-		result, err := verbs.Reload(ctx, client, verbs.ReloadInput{
-			TaskID:         in.TaskID,
-			Path:           in.Path,
-			NoPull:         in.NoPull,
-			TimeoutSeconds: in.TimeoutSeconds,
-			Caller:         caller,
+		args := in
+		args.WaitSeconds = nil
+		key, _ := json.Marshal(struct {
+			Args   reloadInput
+			Caller string
+		}{args, caller})
+		return deploymentRun(ctx, client, runs, "iris_reload", in.TaskID, in.Path, string(key), in.WaitSeconds, func(ctx context.Context) Response {
+			result, err := verbs.Reload(ctx, client, verbs.ReloadInput{TaskID: in.TaskID, Path: in.Path, NoPull: in.NoPull, TimeoutSeconds: in.TimeoutSeconds, Caller: caller, LeaseOverride: in.LeaseOverride})
+			return deploymentResponse("iris:reload", result, err)
 		})
-		if err != nil {
-			return ErrorResponse(fmt.Sprintf("iris:reload: %v", err))
-		}
-		body, err := json.MarshalIndent(result, "", "  ")
-		if err != nil {
-			return ErrorResponse(fmt.Sprintf("iris:reload: encode result: %v", err))
-		}
-		return TextResponse(string(body))
 	})
 }
 
