@@ -32,7 +32,7 @@ const DefaultHookTimeoutSeconds = 60
 
 // DefaultExecTimeoutSeconds is the default for the `exec` restart mechanism's
 // `timeout_seconds`.
-const DefaultExecTimeoutSeconds = 30
+const DefaultExecTimeoutSeconds = 180
 
 // DefaultVerifyTimeoutSeconds is the default for the `[verify]` hook.
 const DefaultVerifyTimeoutSeconds = 30

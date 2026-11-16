@@ -778,9 +778,27 @@ func runArgv(ctx context.Context, timeout time.Duration, extraEnv []string, name
 	// spawns helpers). Mirrors runBuildBlock and runHook.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
-	var buf bytes.Buffer
-	cmd.Stdout = &buf
-	cmd.Stderr = &buf
+	// Capture output into a temp FILE, not a pipe. With a non-*os.File writer
+	// os/exec makes a pipe plus a copying goroutine, and cmd.Wait blocks until
+	// EVERY holder of the write end closes it — including a disowned/backgrounded
+	// grandchild (e.g. a restart script that relaunches a dev server and exits).
+	// A file has no such coupling: Wait returns as soon as the direct child exits.
+	f, ferr := os.CreateTemp("", "iris-argv-*.log")
+	if ferr != nil {
+		return "", ferr
+	}
+	defer os.Remove(f.Name())
+	defer f.Close()
+	cmd.Stdout = f
+	cmd.Stderr = f
+
+	read := func() string {
+		data, _ := os.ReadFile(f.Name())
+		if len(data) > maxArgvOutput {
+			data = append([]byte("...[truncated]...\n"), data[len(data)-maxArgvOutput:]...)
+		}
+		return string(data)
+	}
 
 	if err := cmd.Start(); err != nil {
 		return "", err
@@ -789,13 +807,20 @@ func runArgv(ctx context.Context, timeout time.Duration, extraEnv []string, name
 	go func() { done <- cmd.Wait() }()
 	select {
 	case err := <-done:
-		return buf.String(), err
+		return read(), err
 	case <-ctx.Done():
 		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 		<-done
-		return buf.String(), ctx.Err()
+		out := read()
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) && timeout > 0 {
+			return out, fmt.Errorf("timed out after %s (raise [restart] timeout_seconds if the command legitimately needs longer): %w", timeout, ctx.Err())
+		}
+		return out, ctx.Err()
 	}
 }
+
+// maxArgvOutput caps the captured output returned to callers (tail kept).
+const maxArgvOutput = 64 << 10
 
 // scheduleSelfExit fires os.Exit(code) from a deferred goroutine so the
 // MCP handler returns first and the kernel has time to ACK the response.

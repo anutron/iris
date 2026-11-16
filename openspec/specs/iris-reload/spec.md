@@ -116,12 +116,17 @@ Iris SHALL dispatch to the configured `[restart] mechanism`. v1 supports six mec
 #### Scenario: exec runs the configured argv
 
 - **WHEN** `mechanism = "exec"` with `command = ["systemctl", "--user", "restart", "foo"]`
-- **THEN** iris runs the argv (no shell), captures stdout+stderr into `restart_output`, and enforces `timeout_seconds` (default 30)
+- **THEN** iris runs the argv (no shell), captures stdout+stderr into `restart_output` without using pipes that a detached child could hold open, and enforces `timeout_seconds` (default 180)
 
 #### Scenario: none is a no-op
 
 - **WHEN** `mechanism = "none"`
 - **THEN** iris records `restart_output = ""` and skips any restart action
+
+#### Scenario: exec timeout reports deadline and partial output
+
+- **WHEN** an exec restart exceeds its timeout
+- **THEN** iris kills the command's process group, returns promptly even if a descendant holds stdout open, and the error names the deadline and includes the output captured so far
 
 ### Requirement: Self-vs-cross detection
 
